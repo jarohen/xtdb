@@ -10,7 +10,8 @@
   (:import java.io.Closeable))
 
 (def default-options
-  {:crux.node/topology 'crux.kafka/topology})
+  {:crux.node/topology 'crux.standalone/topology
+   :crux.standalone/event-log-dir "event-log"})
 
 (def cli-options
   [["-p" "--properties-file PROPERTIES_FILE" "Properties file to load Crux options from"
@@ -51,6 +52,7 @@
 
 (defn start-node-from-command-line [args]
   (cio/install-uncaught-exception-handler!)
+
   (let [{:keys [options errors summary]} (cli/parse-opts args cli-options)
         {:keys [server-port properties-file extra-edn-options]} options
         options (merge default-options
