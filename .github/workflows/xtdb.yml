@@ -1,0 +1,85 @@
+name: XTDB
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions/setup-java@v2
+        with:
+          java-version: 8
+          distribution: adopt
+
+      - uses: DeLaGuardo/setup-clojure@3.5
+        with:
+          cli: 1.10.1.693
+          lein: latest
+
+      - uses: actions/cache@v2
+        env:
+          cache-name: cache-m2
+        with:
+          path: ~/.m2/repository
+          key: ${{ env.cache-name }}-v2-${{ hashFiles('**/project.clj') }}
+          restore-keys: |
+            ${{ env.cache-name }}-v2
+            ${{ env.cache-name }}
+
+      - name: lein install
+        run: ./lein-sub -s core install
+
+      - name: lein check
+        run: ./lein-sub -s core check
+
+      - name: lein test
+        run: ./lein-sub -s core test
+
+      - name: lein nvd
+        run: lein with-profile +nvd nvd check
+
+      - name: upload NVD report
+        uses: actions/upload-artifact@v2
+        with:
+          name: nvd-report.html
+          path: ./target/nvd/dependency-check-report.html
+
+      - name: Remove XTDB from ~/.m2
+        run: rm -rf ~/.m2/repository/com/xtdb
+
+  deploy-bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions/setup-java@v2
+        with:
+          java-version: 8
+          distribution: adopt
+
+      - uses: DeLaGuardo/setup-clojure@3.5
+        with:
+          cli: 1.10.1.693
+          lein: latest
+
+      - uses: actions/cache@v2
+        env:
+          cache-name: cache-m2
+        with:
+          path: ~/.m2/repository
+          key: ${{ env.cache-name }}-v2-${{ hashFiles('**/project.clj') }}
+          restore-keys: |
+            ${{ env.cache-name }}-v2
+            ${{ env.cache-name }}
+
+      - name: lein install
+        run: ./lein-sub -s core install
+
+      - name: uberjar
+        working-directory: ./bench
+        run: lein uberjar
