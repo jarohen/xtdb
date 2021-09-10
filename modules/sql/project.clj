@@ -17,17 +17,24 @@
                  [org.apache.calcite/calcite-core "1.22.0" :exclusions [com.google.code.findbugs/jsr305]]
                  [org.apache.calcite.avatica/avatica-server "1.16.0"]
 
+                 ;; CVEs
+                 [net.minidev/json-smart "2.4.7" :scope "runtime"] ; CVE-2021-27568
+                 [org.apache.httpcomponents/httpclient "4.5.13" :scope "runtime"] ; CVE-2020-13956
+                 [commons-io "2.11.0" :scope "runtime"] ; CVE-2021-29425
+                 [org.yaml/snakeyaml "1.29" :scope "runtime"] ; CVE-2017-18640
+
                  ;; dependency conflict resolution:
+                 [commons-codec "1.15"]
                  [commons-logging "1.2"]
-                 [org.eclipse.jetty/jetty-server "9.4.36.v20210114"]
-                 [org.eclipse.jetty/jetty-util "9.4.36.v20210114"]
-                 [org.eclipse.jetty/jetty-security "9.4.36.v20210114"]
-                 [org.eclipse.jetty/jetty-http "9.4.36.v20210114"]
+                 [org.eclipse.jetty/jetty-server "9.4.43.v20210629"]
+                 [org.eclipse.jetty/jetty-util "9.4.43.v20210629"]
+                 [org.eclipse.jetty/jetty-security "9.4.43.v20210629"]
+                 [org.eclipse.jetty/jetty-http "9.4.43.v20210629"]
                  [com.google.protobuf/protobuf-java "3.13.0"]
-                 [org.apache.commons/commons-lang3 "3.9"]
-                 [com.fasterxml.jackson.core/jackson-core "2.12.2"]
-                 [com.fasterxml.jackson.core/jackson-annotations "2.12.2"]
-                 [com.fasterxml.jackson.core/jackson-databind "2.12.2"]
+                 [org.apache.commons/commons-lang3 "3.11"]
+                 [com.fasterxml.jackson.core/jackson-core "2.12.5"]
+                 [com.fasterxml.jackson.core/jackson-annotations "2.12.5"]
+                 [com.fasterxml.jackson.core/jackson-databind "2.12.5"]
                  [com.google.guava/guava "30.1.1-jre"]]
 
   :profiles {:dev {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]}
