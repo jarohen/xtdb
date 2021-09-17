@@ -129,7 +129,7 @@ jobs:
       - checkout
       - attach_workspace:
           at: ~/
-      - run: lein with-profile +nvd nvd check
+      - run: lein with-profile +nvd run -m nvd.task.check "" $(lein with-profile -user,-dev,-provided classpath)
       - store_artifacts:
           path: "~/crux/target/nvd/dependency-check-report.html"
           destination: "nvd-report.html"
