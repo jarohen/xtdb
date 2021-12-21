@@ -147,7 +147,10 @@
     (let [conn (jdbc/get-connection pool)
           stmt (jdbc/prepare conn
                              ["SELECT EVENT_OFFSET, TX_TIME, V, TOPIC FROM tx_events WHERE TOPIC = 'txs' and EVENT_OFFSET > ? ORDER BY EVENT_OFFSET"
-                              (or after-tx-id 0)])
+                              (or after-tx-id 0)]
+                             {:fetch-size 100
+                              :concurrency :read-only
+                              :result-type :forward-only})
           rs (.executeQuery stmt)]
       (xio/->cursor #(run! xio/try-close [rs stmt conn])
                     (->> (resultset-seq rs)
