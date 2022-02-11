@@ -16,4 +16,5 @@
                  [org.apache.kafka/kafka-clients "3.1.0"]
                  [com.cognitect/transit-clj "1.0.329" :exclusions [org.msgpack/msgpack]]]
 
-  :profiles {:dev {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]}})
+  :profiles {:dev {:jvm-opts ["-Dlogback.configurationFile=../../resources/logback-test.xml"]
+                   :dependencies [[ch.qos.logback/logback-classic "1.2.3"]]}})
