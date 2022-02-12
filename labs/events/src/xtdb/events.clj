@@ -13,12 +13,12 @@
            (org.apache.kafka.common.serialization Deserializer Serializer)))
 
 (defprotocol CommandRepository
-  (-submit-handler [cmd-repo cmd-type handler])
+  (-submit-cmd-handler [cmd-repo cmd-type handler])
   (->cmd-handler [cmd-repo cmd-id])
   (latest-cmd-handler-id [cmd-repo cmd-type]))
 
 (defprotocol EventNode
-  (submit-handler [node cmd-type handler])
+  (submit-cmd-handler [node cmd-type handler])
   (submit-cmd [node cmd-type cmd])
   (submit-evt [node evt-type evt]))
 
@@ -139,7 +139,7 @@
 
           (reify
             CommandRepository
-            (-submit-handler [_ cmd-type cmd-handler]
+            (-submit-cmd-handler [_ cmd-type cmd-handler]
               (let [[fut callback] (fut+callback)]
                 (.send producer
                        (ProducerRecord. cmd-topic-name cmd-type
@@ -181,8 +181,8 @@
                 fut))]
       (reify
         EventNode
-        (submit-handler [_ cmd-type handler]
-          (-submit-handler cmd-repo cmd-type handler))
+        (submit-cmd-handler [_ cmd-type handler]
+          (-submit-cmd-handler cmd-repo cmd-type handler))
 
         (submit-cmd [_ cmd-type cmd]
           (if-let [handler-id (latest-cmd-handler-id cmd-repo cmd-type)]
@@ -200,9 +200,10 @@
   (with-open [cmd-repo (->cmd-repo {:cmd-topic-name "_cmds"})
               node (->node {:cmd-repo cmd-repo} {:topic-name "my-stream"})]
     #_
-    (submit-handler node :create-user! '(fn [{:keys [name]}]
-                                          [[:user-created {:user-id (java.util.UUID/randomUUID)
-                                                           :name name}]]))
+    (submit-cmd-handler node :create-user!
+                        '(fn [{:keys [name]}]
+                           [[:user-created {:user-id (java.util.UUID/randomUUID)
+                                            :name name}]]))
     #_
     (submit-evt node :user-created {:user-id (UUID/randomUUID)
                                     :name "James"})
