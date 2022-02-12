@@ -1,5 +1,6 @@
 (ns xtdb.events
-  (:require [cognitect.transit :as transit])
+  (:require [cognitect.transit :as transit]
+            [xtdb.api :as xt])
   (:import (java.io ByteArrayInputStream ByteArrayOutputStream)
            (java.lang AutoCloseable)
            (java.time Duration)
@@ -17,8 +18,13 @@
   (->cmd-handler [cmd-repo cmd-id])
   (latest-cmd-handler-id [cmd-repo cmd-type]))
 
+(defprotocol ProjectionManager
+  (-submit-projection [projection-mgr projection-id evt-types projection])
+  )
+
 (defprotocol EventNode
   (submit-cmd-handler [node cmd-type handler])
+  (submit-projection [node projection-id evt-types projection])
   (submit-cmd [node cmd-type cmd])
   (submit-evt [node evt-type evt]))
 
@@ -164,13 +170,39 @@
         (.close producer)
         (throw e)))))
 
+(def projection-topic-opts
+  {:partitions 1
+   :replication-factor 1
+   ;; TODO some kind of compaction + deletion lag
+   :topic-properties {"cleanup.policy" "compact"}})
+
+(defn- ->projection-mgr ^java.lang.AutoCloseable [{:keys [projection-topic-name]}]
+  (with-open [admin-client (AdminClient/create broker-opts)]
+    (ensure-topics-created admin-client (->new-topic projection-topic-name projection-topic-opts)))
+
+  (let [producer (->producer)]
+    (reify
+      ProjectionManager
+      (-submit-projection [_ projection-id evt-types projection]
+        (let [[fut callback] (fut+callback)]
+          (.send producer
+                 (ProducerRecord. projection-topic-name projection-id
+                                  {:evt-types (set evt-types)
+                                   :projection projection})
+                 callback)
+          fut))
+
+      AutoCloseable
+      (close [_]
+        (.close producer)))))
+
 (def topic-opts
   {:partitions 1
    :replication-factor 1
    ;; we likely want some kind of deletion here, to clear up in case of accidents
    :topic-properties {"retention.ms" (str -1)}})
 
-(defn ->node ^java.lang.AutoCloseable [{:keys [cmd-repo]} {:keys [topic-name]}]
+(defn ->node ^java.lang.AutoCloseable [{:keys [cmd-repo projection-mgr]} {:keys [topic-name]}]
   (with-open [admin-client (AdminClient/create ^Map broker-opts)]
     (ensure-topics-created admin-client (->new-topic topic-name topic-opts)))
 
@@ -184,21 +216,30 @@
         (submit-cmd-handler [_ cmd-type handler]
           (-submit-cmd-handler cmd-repo cmd-type handler))
 
+        (submit-projection [_ projection-id evt-types projection]
+          (-submit-projection projection-mgr projection-id evt-types projection))
+
         (submit-cmd [_ cmd-type cmd]
           (if-let [handler-id (latest-cmd-handler-id cmd-repo cmd-type)]
-            (submit-msg [:cmd cmd-type handler-id cmd])
+            (submit-msg [:command cmd-type handler-id cmd])
             (throw (UnsupportedOperationException. "can't find command handler"))))
 
         (submit-evt [_ evt-type evt]
-          (submit-msg [:evt evt-type evt]))
+          (submit-msg [:event evt-type evt]))
 
         AutoCloseable
         (close [_]
           (.close producer))))))
 
+;; commands need some kind of state storage - what should this be?
+
 (comment
   (with-open [cmd-repo (->cmd-repo {:cmd-topic-name "_cmds"})
-              node (->node {:cmd-repo cmd-repo} {:topic-name "my-stream"})]
+              projection-mgr (->projection-mgr {:projection-topic-name "_projections"})
+              node (->node {:cmd-repo cmd-repo
+                            :projection-mgr projection-mgr}
+                           {:topic-name "my-stream"})]
+
     #_
     (submit-cmd-handler node :create-user!
                         '(fn [{:keys [name]}]
@@ -212,4 +253,11 @@
     (latest-cmd-handler-id cmd-repo :create-user!)
 
     #_
-    (submit-cmd node :create-user! {:name "James"})))
+    (submit-cmd node :create-user! {:name "James"})
+
+    #_
+    (submit-projection node :users #{:user-created}
+                       '(fn [evt-type evt]
+                          (case evt-type
+                            :user-created (let [{:keys [user-id name]}]
+                                            [[::xt/put {:xt/id user-id, :user/name name}]]))))))
