@@ -26,16 +26,29 @@
                                     {:xt/id :petr :name "Petr" :last-name "Petrov"}]))
 
   (t/testing "Can query value by single field"
-    (t/is (= #{["Ivan"]} (xt/q (xt/db *api*) '{:find [name]
-                                               :where [[e :name "Ivan"]
-                                                       [e :name name]]})))
-    (t/is (= #{["Petr"]} (xt/q (xt/db *api*) '{:find [name]
-                                               :where [[e :name "Petr"]
-                                                       [e :name name]]}))))
+    (t/is (= #{["Ivan"]} (xt/q (xt/db *api*)
+                               '{:find [name]
+                                 :where [[e :name "Ivan"]
+                                         [e :name name]]})))
+
+    (t/is (= #{["Ivan"]} (xt/q (xt/db *api*)
+                               '{:find [name]
+                                 :where [($ [name {:name "Ivan"}])]})))
+
+    (t/is (= #{["Petr"]} (xt/q (xt/db *api*)
+                               '{:find [name]
+                                 :where [[e :name "Petr"]
+                                         [e :name name]]})))
+
+    (t/is (= #{["Petr"]} (xt/q (xt/db *api*)
+                               '{:find [name]
+                                 :where [($ [name {:name "Petr"}])]}))))
 
   (t/testing "Can query entity by single field"
     (t/is (= #{[:ivan]} (xt/q (xt/db *api*) '{:find [e]
                                               :where [[e :name "Ivan"]]})))
+    (t/is (= #{[:ivan]} (xt/q (xt/db *api*) '{:find [e]
+                                              :where [($ {:xt/id e, :name "Ivan"})]})))
     (t/is (= #{[:petr]} (xt/q (xt/db *api*) '{:find [e]
                                               :where [[e :name "Petr"]]}))))
 
@@ -44,29 +57,42 @@
                                                         :where [[e :name name]
                                                                 [e :last-name last-name]
                                                                 [e :name "Ivan"]
-                                                                [e :last-name "Ivanov"]]}))))
+                                                                [e :last-name "Ivanov"]]})))
+
+    (t/is (= #{["Ivan" "Ivanov"]} (xt/q (xt/db *api*) '{:find [name last-name]
+                                                        :where [($ [name last-name {:name "Ivan", :last-name "Ivanov"}])]}))))
 
   (t/testing "Negate query based on subsequent non-matching clause"
     (t/is (= #{} (xt/q (xt/db *api*) '{:find [e]
                                        :where [[e :name "Ivan"]
-                                               [e :last-name "Ivanov-does-not-match"]]}))))
+                                               [e :last-name "Ivanov-does-not-match"]]})))
+    (t/is (= #{} (xt/q (xt/db *api*) '{:find [e]
+                                       :where [($ [{:xt/id e, :name "Ivan", :last-name "Ivanov-does-not-match"}])]}))))
 
   (t/testing "Can query for multiple results"
     (t/is (= #{["Ivan"] ["Petr"]}
-             (xt/q (xt/db *api*) '{:find [name] :where [[e :name name]]}))))
+             (xt/q (xt/db *api*) '{:find [name] :where [[e :name name]]})))
 
+    (t/is (= #{["Ivan"] ["Petr"]}
+             (xt/q (xt/db *api*) '{:find [name] :where [($ [name])]}))))
 
   (fix/transact! *api* (fix/people [{:xt/id :smith :name "Smith" :last-name "Smith"}]))
   (t/testing "Can query across fields for same value"
     (t/is (= #{[:smith]}
              (xt/q (xt/db *api*) '{:find [p1] :where [[p1 :name name]
-                                                      [p1 :last-name name]]}))))
+                                                      [p1 :last-name name]]})))
+
+    (t/is (= #{[:smith]}
+             (xt/q (xt/db *api*) '{:find [p1] :where [($ [{:xt/id p1, :last-name name} name])]}))))
 
   (t/testing "Can query across fields for same value when value is passed in"
     (t/is (= #{[:smith]}
              (xt/q (xt/db *api*) '{:find [p1] :where [[p1 :name name]
                                                       [p1 :last-name name]
-                                                      [p1 :name "Smith"]]})))))
+                                                      [p1 :name "Smith"]]})))
+
+    (t/is (= #{[:smith]}
+             (xt/q (xt/db *api*) '{:find [p1] :where [($ [{:xt/id p1, :name "Smith", :last-name name} name])]})))))
 
 (t/deftest test-returning-maps
   (fix/transact! *api* (fix/people [{:xt/id :ivan :name "Ivan" :last-name "Ivanov"}
@@ -80,6 +106,13 @@
                      :keys [user/name user/last-name]
                      :where [[e :name ?name]
                              [e :last-name ?last-name]]})))
+
+    (t/is (= #{{:user/name "Ivan", :user/last-name "Ivanov"}
+               {:user/name "Petr", :user/last-name "Petrov"}}
+             (xt/q (xt/db *api*)
+                   '{:find [name last-name]
+                     :keys [user/name user/last-name]
+                     :where [($ [name last-name])]})))
 
     (t/is (= #{{'user/name "Ivan", 'user/last-name "Ivanov"}
                {'user/name "Petr", 'user/last-name "Petrov"}}
@@ -117,21 +150,37 @@
                                                         :args [{:name "Ivan"}]})))
       (t/is (= #{[(:xt/id petr)]} (xt/q (xt/db *api*) '{:find [e]
                                                         :where [[e :name name]]
+                                                        :args [{:name "Petr"}]})))
+
+      (t/is (= #{[(:xt/id petr)]} (xt/q (xt/db *api*) '{:find [e]
+                                                        :where [($ [{:xt/id e} name])]
                                                         :args [{:name "Petr"}]}))))
 
     (t/testing "Can query entity by entity position"
-      (t/is (= #{["Ivan"]
-                 ["Petr"]} (xt/q (xt/db *api*) {:find '[name]
-                                                :where '[[e :name name]]
-                                                :args [{:e (:xt/id ivan)}
-                                                       {:e (:xt/id petr)}]})))
+      (t/is (= #{["Ivan"] ["Petr"]}
+               (xt/q (xt/db *api*) {:find '[name]
+                                    :where '[[e :name name]]
+                                    :args [{:e (:xt/id ivan)}
+                                           {:e (:xt/id petr)}]})))
 
-      (t/is (= #{["Ivan" "Ivanov"]
-                 ["Petr" "Petrov"]} (xt/q (xt/db *api*) {:find '[name last-name]
-                                                         :where '[[e :name name]
-                                                                  [e :last-name last-name]]
-                                                         :args [{:e (:xt/id ivan)}
-                                                                {:e (:xt/id petr)}]}))))
+      (t/is (= #{["Ivan"] ["Petr"]}
+               (xt/q (xt/db *api*) {:find '[name]
+                                    :where '[($ [{:xt/id e} name])]
+                                    :args [{:e (:xt/id ivan)}
+                                           {:e (:xt/id petr)}]})))
+
+      (t/is (= #{["Ivan" "Ivanov"] ["Petr" "Petrov"]}
+               (xt/q (xt/db *api*) {:find '[name last-name]
+                                    :where '[[e :name name]
+                                             [e :last-name last-name]]
+                                    :args [{:e (:xt/id ivan)}
+                                           {:e (:xt/id petr)}]})))
+
+      (t/is (= #{["Ivan" "Ivanov"] ["Petr" "Petrov"]}
+               (xt/q (xt/db *api*) {:find '[name last-name]
+                                    :where '[($ [{:xt/id e} name last-name])]
+                                    :args [{:e (:xt/id ivan)}
+                                           {:e (:xt/id petr)}]}))))
 
     (t/testing "Can match on both entity and value position"
       (t/is (= #{["Ivan"]} (xt/q (xt/db *api*) {:find '[name]
@@ -142,21 +191,29 @@
       (t/is (= #{} (xt/q (xt/db *api*) {:find '[name]
                                         :where '[[e :name name]]
                                         :args [{:e (:xt/id ivan)
+                                                :name "Petr"}]})))
+
+      (t/is (= #{} (xt/q (xt/db *api*) {:find '[name]
+                                        :where '[($ [{:xt/id e} name])]
+                                        :args [{:e (:xt/id ivan)
                                                 :name "Petr"}]}))))
 
     (t/testing "Can query entity by single field with several arguments"
-      (t/is (= #{[(:xt/id ivan)]
-                 [(:xt/id petr)]} (xt/q (xt/db *api*) '{:find [e]
-                                                        :where [[e :name name]]
-                                                        :args [{:name "Ivan"}
-                                                               {:name "Petr"}]}))))
+      (t/is (= #{[(:xt/id ivan)] [(:xt/id petr)]}
+               (xt/q (xt/db *api*) '{:find [e]
+                                     :where [[e :name name]]
+                                     :args [{:name "Ivan"} {:name "Petr"}]}))))
 
     (t/testing "Can query entity by single field with literals"
       (t/is (= #{[(:xt/id ivan)]} (xt/q (xt/db *api*) '{:find [e]
                                                         :where [[e :name name]
                                                                 [e :last-name "Ivanov"]]
-                                                        :args [{:name "Ivan"}
-                                                               {:name "Petr"}]})))
+                                                        :args [{:name "Ivan"} {:name "Petr"}]})))
+
+      (t/is (= #{[(:xt/id ivan)]}
+               (xt/q (xt/db *api*) '{:find [e]
+                                     :where [($ [{:xt/id e, :last-name "Ivanov"}])]
+                                     :args [{:name "Ivan"} {:name "Petr"}]})))
 
       (t/is (= #{["Ivan"]} (xt/q (xt/db *api*) {:find '[name]
                                                 :where '[[e :name name]
@@ -243,6 +300,12 @@
                                         :where [[e :name name]]}
                                       "Ivan")))
 
+    (t/is (= #{[(:xt/id ivan)]} (xt/q (xt/db *api*)
+                                      '{:find [e]
+                                        :in [$ name]
+                                        :where [($ {:xt/id e, :name name})]}
+                                      "Ivan")))
+
     (t/testing "the db var is optional"
       (t/is (= #{[(:xt/id ivan)]} (xt/q (xt/db *api*)
                                         '{:find [e]
@@ -255,6 +318,12 @@
                                         :in [$ name last-name]
                                         :where [[e :name name]
                                                 [e :last-name last-name]]}
+                                      "Ivan" "Ivanov")))
+
+    (t/is (= #{[(:xt/id ivan)]} (xt/q (xt/db *api*)
+                                      '{:find [e]
+                                        :in [$ name last-name]
+                                        :where [($ [{:xt/id e} name last-name])]}
                                       "Ivan" "Ivanov")))
 
     (t/is (= #{[(:xt/id ivan)]} (xt/q (xt/db *api*)
@@ -316,9 +385,14 @@
                                     {:name "Jane" :sex :female}]))
 
   (t/testing "Can query by single field"
-    (t/is (= #{["Ivan"] ["Petr"]} (xt/q (xt/db *api*) '{:find [name]
-                                                        :where [[e :name name]
-                                                                [e :sex :male]]})))
+    (t/is (= #{["Ivan"] ["Petr"]}
+             (xt/q (xt/db *api*) '{:find [name]
+                                   :where [[e :name name]
+                                           [e :sex :male]]})))
+    (t/is (= #{["Ivan"] ["Petr"]}
+             (xt/q (xt/db *api*) '{:find [name]
+                                   :where [($ [{:xt/id e, :sex :male} name])]})))
+
     (t/is (= #{["Doris"] ["Jane"]} (xt/q (xt/db *api*) '{:find [name]
                                                          :where [[e :name name]
                                                                  [e :sex :female]]})))))
@@ -347,12 +421,18 @@
   (t/testing "Five people, a cartesian product - joining without unification"
     (t/is (= 25 (count (xt/q (xt/db *api*) '{:find [p1 p2]
                                              :where [[p1 :name]
-                                                     [p2 :name]]})))))
+                                                     [p2 :name]]}))))
+    (t/is (= 25 (count (xt/q (xt/db *api*) '{:find [p1 p2]
+                                             :where [($ [{:xt/id p1, :name n1}])
+                                                     ($ [{:xt/id p2, :name n2}])]})))))
 
   (t/testing "A single first result, joined to all possible subsequent results in next term"
     (t/is (= 5 (count (xt/q (xt/db *api*) '{:find [p1 p2]
                                             :where [[p1 :name "Ivan"]
-                                                    [p2 :name]]})))))
+                                                    [p2 :name]]}))))
+    (t/is (= 5 (count (xt/q (xt/db *api*) '{:find [p1 p2]
+                                            :where [($ [{:xt/id p1, :name "Ivan"}])
+                                                    ($ [{:xt/id p2, :name n2}])]})))))
 
   (t/testing "A single first result, with no subsequent results in next term"
     (t/is (= 0 (count (xt/q (xt/db *api*) '{:find [p1]
@@ -4386,3 +4466,37 @@
     (with-open [node (xt/start-node {})]
       (t/is (thrown? IllegalArgumentException (bad-q node)))
       (t/is (thrown? IllegalArgumentException (bad-q node))))))
+
+(t/deftest test-match-syntax
+  (fix/submit+await-tx [[::xt/put {:xt/id :foo, :v 0}]
+                        [::xt/put {:xt/id :bar, :v 1, :a 0}]
+                        [::xt/put {:xt/id :baz, :v 2, :a 1, :b 2}]])
+
+  (t/is (= #{[:bar 1] [:baz 2]}
+           (xt/q (xt/db *api*)
+                 '{:find [id v]
+                   :where [($ [{:xt/id id} v a])]})))
+
+  (t/is (= #{[:bar 1]}
+           (xt/q (xt/db *api*)
+                 '{:find [id v]
+                   :where [($ [{:xt/id id, :v 1} v])]})))
+
+  (t/is (= #{[:bar 0] [:baz 1]}
+           (xt/q (xt/db *api*)
+                 '{:find [id a]
+                   :where [($ [{:xt/id id, :v #{1 2}} a])]})))
+
+  (t/is (= #{[1 0] [2 1]}
+           (xt/q (xt/db *api*)
+                 '{:find [v a]
+                   :where [($ [v a])]}))
+        "no xt/id")
+
+  (t/is (= #{[1 0] [2 1]}
+           (xt/q (xt/db *api*)
+                 '{:find [v a]
+                   :where [($ [{:xt/id id1} {:xt/id id2}])
+                           [id1 :v v]
+                           [id2 :a a]]}))
+        "multiple xt/ids"))
