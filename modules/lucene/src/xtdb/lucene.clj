@@ -20,7 +20,7 @@
            org.apache.lucene.queries.function.FunctionScoreQuery
            org.apache.lucene.queryparser.classic.QueryParser
            [org.apache.lucene.search BooleanClause$Occur BooleanQuery$Builder DoubleValuesSource IndexSearcher Query ScoreDoc SearcherManager TermQuery TopDocs]
-           [org.apache.lucene.store ByteBuffersDirectory FSDirectory IOContext]
+           [org.apache.lucene.store ByteBuffersDirectory FSDirectory IOContext SimpleFSLockFactory]
            xtdb.query.VarBinding))
 
 (defrecord LuceneNode [directory analyzer index-writer searcher-manager indexer
@@ -361,7 +361,7 @@
     :as opts}]
   (some-> checkpointer (cp/try-restore (.toFile db-dir) "lucene-8"))
   (let [directory (if db-dir
-                    (FSDirectory/open db-dir)
+                    (FSDirectory/open db-dir SimpleFSLockFactory/INSTANCE)
                     (ByteBuffersDirectory.))
         index-writer (->index-writer {:directory directory, :analyzer analyzer,
                                       :index-deletion-policy (SnapshotDeletionPolicy. (KeepOnlyLastCommitDeletionPolicy.))})
