@@ -5,22 +5,21 @@
             [xtdb.rewrite :refer [zmatch]]
             [xtdb.types :as types]
             [xtdb.util :as util]
-            [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw])
   (:import (clojure.lang Keyword MapEntry)
            (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
            (java.time Clock Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime ZoneOffset ZonedDateTime)
            (java.util Arrays Date List Map UUID)
-           [java.util.function IntPredicate]
+           [java.util.function IntConsumer IntPredicate]
            (java.util.regex Pattern)
            (java.util.stream IntStream)
-           (org.apache.arrow.vector PeriodDuration ValueVector)
+           (org.apache.arrow.vector PeriodDuration)
            (org.apache.commons.codec.binary Hex)
            (xtdb.operator IProjectionSpec IRelationSelector)
            (xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth)
            (xtdb.util StringUtil)
-           (xtdb.vector IListValueReader IValueReader IVectorPosition IVectorReader RelationReader)
+           (xtdb.vector IListValueReader IValueReader IVectorPosition IVectorReader IVectorWriter RelationReader)
            xtdb.vector.ValueBox))
 
 (set! *unchecked-math* :warn-on-boxed)
@@ -1440,7 +1439,7 @@
     [:union inner-types]
     (let [writer-syms (->> inner-types
                            (into {} (map (juxt identity (fn [_] (gensym 'out-writer))))))]
-      {:writer-bindings (into [out-writer-sym `(vw/->writer ~out-vec-sym)]
+      {:writer-bindings (into []
                               (mapcat (fn [[value-type writer-sym]]
                                         [writer-sym `(.legWriter ~out-writer-sym ~(types/->arrow-type value-type))]))
                               writer-syms)
@@ -1448,7 +1447,7 @@
        :write-value-out! (fn [value-type code]
                            (write-value-code value-type (get writer-syms value-type) code))})
 
-    {:writer-bindings [out-writer-sym `(vw/->writer ~out-vec-sym)]
+    {:writer-bindings []
      :write-value-out! (fn [value-type code]
                          (write-value-code value-type out-writer-sym code))}))
 
@@ -1470,13 +1469,13 @@
           {:!projection-fn (delay
                              (-> `(fn [~(-> rel-sym (with-tag RelationReader))
                                        ~(-> params-sym (with-tag RelationReader))
-                                       ~(-> out-vec-sym (with-tag ValueVector))]
+                                       ~(-> out-writer-sym (with-tag IVectorWriter))]
                                     (let [~@(batch-bindings emitted-expr)
-                                          ~@writer-bindings
-                                          row-count# (.rowCount ~rel-sym)]
-                                      (dotimes [~idx-sym row-count#]
-                                        ~(continue (fn [t c]
-                                                     (write-value-out! t c))))))
+                                          ~@writer-bindings]
+                                      (reify IntConsumer
+                                        (~'accept [_# ~idx-sym]
+                                         ~(continue (fn [t c]
+                                                      (write-value-out! t c)))))))
 
                                  #_(doto clojure.pprint/pprint) ; <<no-commit>>
                                  #_(->> (binding [*print-meta* true]))
@@ -1525,9 +1524,13 @@
             (doto out-vec
               (.setInitialCapacity row-count)
               (.allocateNew))
-            (@!projection-fn in-rel params out-vec)
-            (.setValueCount out-vec row-count)
-            (vr/vec->reader out-vec)))))))
+
+            (let [out-wtr (vw/->writer out-vec)
+                  ^IntConsumer idx-consumer (@!projection-fn in-rel params out-wtr)]
+              (dotimes [idx (.rowCount in-rel)]
+                (.accept idx-consumer idx))
+
+              (vw/vec-wtr->rdr out-wtr))))))))
 
 (def ^:private emit-selection
   "NOTE: we macroexpand inside the memoize on the assumption that
