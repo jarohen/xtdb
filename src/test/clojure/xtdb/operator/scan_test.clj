@@ -532,7 +532,7 @@
   (let [before-uuid #uuid "00000000-0000-0000-0000-000000000000"
         search-uuid #uuid "80000000-0000-0000-0000-000000000000"
         after-uuid #uuid "f0000000-0000-0000-0000-000000000000"
-        ^IRelationSelector iid-selector (scan/iid-selector (util/uuid->byte-buffer search-uuid))]
+        ^IRelationSelector iid-selector (scan/iid-selector tu/*allocator* (util/uuid->byte-buffer search-uuid))]
     (letfn [(test-uuids [uuids]
               (with-open [rel-wrt (-> (VectorSchemaRoot/create (Schema. [(types/->field "xt$iid" #xt.arrow/type [:fixed-size-binary 16] false)])
                                                                tu/*allocator*)
@@ -540,7 +540,7 @@
                 (let [iid-wtr (.colWriter rel-wrt "xt$iid")]
                   (doseq [uuid uuids]
                     (.writeBytes iid-wtr (util/uuid->byte-buffer uuid))))
-                (.select iid-selector tu/*allocator* (vw/rel-wtr->rdr rel-wrt) nil)))]
+                (.select iid-selector (vw/rel-wtr->rdr rel-wrt) nil)))]
 
       (t/is (= nil
                (seq (test-uuids [])))

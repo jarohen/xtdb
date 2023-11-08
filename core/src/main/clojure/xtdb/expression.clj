@@ -12,6 +12,7 @@
            (java.nio.charset StandardCharsets)
            (java.time Clock Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime ZoneOffset ZonedDateTime)
            (java.util Arrays Date List Map UUID)
+           [java.util.function IntPredicate]
            (java.util.regex Pattern)
            (java.util.stream IntStream)
            (org.apache.arrow.vector PeriodDuration ValueVector)
@@ -1528,13 +1529,48 @@
             (.setValueCount out-vec row-count)
             (vr/vec->reader out-vec)))))))
 
-(defn ->expression-relation-selector ^xtdb.operator.IRelationSelector [expr input-types]
-  (let [projector (->expression-projection-spec "select" {:op :call, :f :boolean, :args [expr]} input-types)]
-    (reify IRelationSelector
-      (select [_ al in-rel params]
-        (with-open [selection (.project projector al in-rel params)]
-          (let [res (IntStream/builder)]
-            (dotimes [idx (.valueCount selection)]
-              (when (.getBoolean selection idx)
-                (.add res idx)))
-            (.toArray (.build res))))))))
+(def ^:private emit-selection
+  "NOTE: we macroexpand inside the memoize on the assumption that
+   everything outside yields the same result on the pre-expanded expr - this
+   assumption wouldn't hold if macroexpansion created new variable exprs, for example.
+   macroexpansion is non-deterministic (gensym), so busts the memo cache."
+  (-> (fn [expr opts]
+        ;; TODO should lit->param be outside the memoize, s.t. we don't have a cache entry for each literal value?
+        (let [expr (prepare-expr expr)
+              {:keys [continue] :as emitted-expr} (codegen-expr expr opts)]
+
+          (-> `(fn [~(-> rel-sym (with-tag RelationReader))
+                    ~(-> params-sym (with-tag RelationReader))]
+                 (let [~@(batch-bindings emitted-expr)]
+                   (reify IntPredicate
+                     (~'test [_# ~idx-sym]
+                      ~(continue (fn [_ c]
+                                   `(boolean ~c)))))))
+
+              #_(doto clojure.pprint/pprint) ; <<no-commit>>
+              #_(->> (binding [*print-meta* true]))
+              eval)))
+
+      (util/lru-memoize) ; <<no-commit>>
+      wrap-zone-id-cache-buster))
+
+(defn ->expression-relation-selector ^xtdb.operator.IRelationSelector [expr]
+  (reify IRelationSelector
+    (select [_ in-rel params]
+      (let [var->col-type (->> (seq in-rel)
+                               (into {} (map (fn [^IVectorReader iv]
+                                               [(symbol (.getName iv))
+                                                (types/field->col-type (.getField iv))]))))
+
+            selection-fn (emit-selection expr {:param-types (->param-types params)
+                                               :var->col-type var->col-type})
+
+            ^IntPredicate pred (selection-fn in-rel params)
+
+            !idxs (IntStream/builder)]
+
+        (dotimes [idx (.rowCount in-rel)]
+          (when (.test pred idx)
+            (.add !idxs idx)))
+
+        (.toArray (.build !idxs))))))

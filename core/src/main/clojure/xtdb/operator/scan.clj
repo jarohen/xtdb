@@ -211,9 +211,9 @@
                              system-from
                              nil))))))))
 
-(defn iid-selector [^ByteBuffer iid-bb]
+(defn iid-selector [^BufferAllocator allocator, ^ByteBuffer iid-bb]
   (reify IRelationSelector
-    (select [_ allocator rel-rdr _params]
+    (select [_ rel-rdr _params]
       (with-open [arrow-buf (util/->arrow-buf-view allocator iid-bb)]
         (let [iid-ptr (ArrowBufPointer. arrow-buf 0 (.capacity iid-bb))
               ptr (ArrowBufPointer.)
@@ -279,7 +279,7 @@
                     :when leaf
                     :let [^RelationReader data-rdr (merge-task-data-reader buffer-pool vsr-cache table-path leaf)
                           ^RelationReader leaf-rdr (cond-> data-rdr
-                                                     iid-pred (.select (.select iid-pred allocator data-rdr params)))
+                                                     iid-pred (.select (.select iid-pred data-rdr params)))
                           rc (-> (copy-row-consumer out-rel leaf-rdr col-names)
                                  (wrap-temporal-bounds temporal-bounds))
                           ev-ptr (EventRowPointer. leaf-rdr path)]]
@@ -298,7 +298,7 @@
                                                       (vr/with-absent-cols allocator col-names))
                               [^IRelationSelector col-pred & col-preds] (vals (dissoc col-preds "xt$iid"))]
                          (if col-pred
-                           (recur (.select rel (.select col-pred allocator rel params)) col-preds)
+                           (recur (.select rel (.select col-pred rel params)) col-preds)
                            rel)))))
         true)
 
@@ -460,8 +460,7 @@
                              (let [input-types {:col-types (update-vals fields types/field->col-type)
                                                 :param-types (update-vals param-fields types/field->col-type)}]
                                (MapEntry/create col-name
-                                                (expr/->expression-relation-selector (expr/form->expr select-form input-types)
-                                                                                     input-types))))
+                                                (expr/->expression-relation-selector (expr/form->expr select-form input-types)))))
                            (into {}))
 
             metadata-args (vec (for [[col-name select] selects
@@ -479,7 +478,7 @@
          :->cursor (fn [{:keys [allocator, ^IWatermark watermark, basis, params default-all-valid-time?]}]
                      (let [iid-bb (selects->iid-byte-buffer selects params)
                            col-preds (cond-> col-preds
-                                       iid-bb (assoc "xt$iid" (iid-selector iid-bb)))
+                                       iid-bb (assoc "xt$iid" (iid-selector allocator iid-bb)))
                            metadata-pred (expr.meta/->metadata-selector (cons 'and metadata-args) (update-vals fields types/field->col-type) params)
                            scan-opts (-> scan-opts
                                          (update :for-valid-time
