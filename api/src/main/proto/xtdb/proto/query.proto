@@ -1,0 +1,175 @@
+//// Expr
+
+message ZonedTimestamp {
+  required int64 micros = 1;
+  required string zone = 2;
+}
+
+message Interval {
+  optional int32 months = 1;
+  optional int32 days = 2;
+  optional int64 nanos = 3;
+}
+
+message Constant {
+  oneof value {
+    int64 int = 1;
+    double float = 2;
+    string string = 3;
+    bool bool = 4;
+    int64 duration_micros = 5;
+    int64 instant_micros = 6;
+    ZonedTimestamp zoned_timestamp = 7;
+    int64 local_timestamp_micros = 8;
+    Interval interval = 9;
+    bytes uuid = 10;
+    string keyword = 11;
+    string uri = 12;
+    bytes bytes = 13;
+  }
+}
+
+message Call {
+  required string func = 1;
+  repeated Expr args = 2;
+}
+
+message SubQuery {
+  required Query query = 1;
+  map<string, Expr> args = 2;
+}
+
+message ListExpr {
+  repeated Expr exprs = 1;
+}
+
+message MapExpr {
+  map<string, Expr> exprs = 1;
+}
+
+message SetExpr {
+  repeated Expr exprs = 1;
+}
+
+message Expr {
+  oneof expr {
+    string sym = 1;
+    Constant const = 2;
+
+    Call call = 3;
+
+    ListExpr list = 4;
+    MapExpr map = 5;
+    SetExpr set = 6;
+
+    SubQuery query = 7;
+    SubQuery exists = 8;
+    SubQuery pull = 9;
+    SubQuery pullMany = 10;
+  }
+}
+
+//// Query
+
+message Pipeline {
+  required Query query = 1;
+  repeated QueryTail tail = 2;
+}
+
+message TemporalExtents {
+  optional int64 from_micros = 1;
+  optional int64 to_micros = 2;
+}
+
+message Binding {
+  required string sym = 1;
+  optional Expr expr = 2;
+}
+
+message From {
+  required string table = 1;
+  optional TemporalExtents for_valid_time = 2;
+  optional TemporalExtents for_system_time = 3;
+  repeated Binding bindings = 4;
+}
+
+message Join {
+  required Query query = 1;
+  map<string, Expr> args = 2;
+  repeated Binding bindings = 3;
+}
+
+message Where {
+  repeated Expr predicates = 1;
+}
+
+message ColSpecs {
+  map<string, Expr> cols = 1;
+}
+
+message Without {
+  repeated string cols = 1;
+}
+
+enum OrderDirection {
+  ASC = 0;
+  DESC = 1;
+}
+
+enum OrderNulls {
+  FIRST = 0;
+  LAST = 1;
+}
+
+message OrderBySpec {
+  required Expr val = 1;
+  optional OrderDirection direction = 2;
+  optional OrderNulls nulls = 3;
+}
+
+message OrderBy {
+  repeated OrderBySpec specs = 1;
+}
+
+message Unnest {
+  required string sym = 1;
+  required Expr expr = 2;
+}
+
+message QueryTail {
+  oneof op {
+    Where where = 1;
+    ColSpecs with = 2;
+    ColSpecs return = 3;
+    ColSpecs aggregate = 4;
+    Without without = 5;
+    OrderBy order_by = 6;
+    int64 limit = 7;
+    int64 offset = 8;
+    Unnest unnest = 9;
+  }
+}
+
+message UnifyClause {
+  oneof op {
+    From from = 1;
+    Where where = 2;
+    ColSpecs with = 3;
+    Join join = 4;
+    Join left_join = 5;
+    Unnest unnest = 6;
+  }
+}
+
+message Unify {
+  repeated UnifyClause clauses = 1;
+}
+
+message Query {
+  oneof op {
+    From from = 1;
+    Unify unify = 2;
+    Pipeline pipeline = 3;
+  }
+}
+

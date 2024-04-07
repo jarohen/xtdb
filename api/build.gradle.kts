@@ -8,6 +8,7 @@ plugins {
     kotlin("jvm")
     kotlin("plugin.serialization")
     id("org.jetbrains.dokka")
+    id("com.google.protobuf") version "0.9.4"
 }
 
 publishing {
@@ -36,6 +37,8 @@ dependencies {
     api("org.jetbrains.kotlinx", "kotlinx-serialization-json", "1.6.0")
 
     api("com.github.ben-manes.caffeine", "caffeine", "3.1.8")
+
+    implementation("com.google.protobuf:protobuf-javalite:3.25.3")
 }
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(21))
@@ -60,6 +63,23 @@ kotlin {
 
         java {
             freeCompilerArgs.add("-Xjvm-default=all")
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        // You still need protoc like in the non-Android case
+        artifact = "com.google.protobuf:protoc:3.8.0"
+    }
+
+    generateProtoTasks {
+        all().forEach { task ->
+            task.builtins {
+                named("java") {
+                    option("lite")
+                }
+            }
         }
     }
 }
