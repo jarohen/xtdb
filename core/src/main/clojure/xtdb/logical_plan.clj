@@ -373,6 +373,10 @@
                          (repeatedly next-name))]
         (with-smap [:rename smap [:scan scan-opts columns]] smap))
 
+      [:mega-join join-map rels]
+      (let [smap (apply merge (map ->smap rels))]
+        (with-smap [:mega-join (w/postwalk-replace smap join-map) rels] smap))
+
       [:join join-map lhs rhs]
       (let [smap (merge (->smap lhs) (->smap rhs))]
         (with-smap [:join (w/postwalk-replace smap join-map) lhs rhs] smap))

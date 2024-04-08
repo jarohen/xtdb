@@ -1935,3 +1935,23 @@
 
     (t/is (= [{:x 3}]
              (xt/q tu/*node* "SELECT docs.x FROM docs WHERE has_table_privilege('docs', 'select') ")))))
+
+(t/deftest test-xtql-plan
+  (t/is (=plan-file
+         "test-xtql-plan-top-level"
+         (plan-sql "XTQL
+  UNIFY(FROM foo {x},
+        FROM bar {x: y},
+        WHERE x)
+  AGGREGATE {x, rc: COUNT(x)}")))
+
+  (t/is (=plan-file
+         "test-xtql-plan-sub-relation"
+         (plan-sql "
+SELECT xtql.x, COUNT(xtql.x) AS rc
+FROM (XTQL
+  UNIFY(FROM foo {x},
+        FROM bar {x: y},
+        WHERE x))
+  xtql
+GROUP BY xtql.x"))))

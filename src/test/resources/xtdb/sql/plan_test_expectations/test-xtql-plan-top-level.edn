@@ -1,0 +1,16 @@
+[:rename
+ {x1 x, x5 rc}
+ [:group-by
+  [x1 {x5 (count x1)}]
+  [:mega-join
+   []
+   [[:rename
+     {x x1}
+     [:scan
+      {:table foo, :for-valid-time nil, :for-system-time nil}
+      [{x x}]]]
+    [:rename
+     {x x3}
+     [:scan
+      {:table bar, :for-valid-time nil, :for-system-time nil}
+      [x]]]]]]]

@@ -1681,7 +1681,6 @@
             [{(first ks) (expr z)}])))
       z)]))
 
-
 (defn- plan-query-expr [z]
   (let [qeb (if-not (r/ctor? :with_clause (r/$ z 1))
               (r/$ z 1)
@@ -1962,8 +1961,8 @@
     (build-values-list rvel)
 
     [:contextually_typed_table_value_constructor _ ^:z cttvl]
-    (build-values-list cttvl) 
-    
+    (build-values-list cttvl)
+
     (r/zcase z
       :query_expression (plan-query-expr z)
       :in_value_list (build-values-list z)
@@ -1976,6 +1975,8 @@
                        (err/illegal-arg ::cannot-build-plan
                                         {::err/message (str "Cannot build plan for table_primary: "  (pr-str (r/node z)))
                                          :node (r/node z)}))
+
+      :xtql_relation_constructor (:ra-plan (sem/xtql-relation-constructor-plan z))
 
       (throw (err/illegal-arg ::cannot-build-plan
                               {::err/message (str "Cannot build plan for: "  (pr-str (r/node z)))

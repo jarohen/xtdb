@@ -1844,6 +1844,7 @@ query_primary
 <simple_table>
     : query_specification
     | table_value_constructor
+    | xtql_relation_constructor
     ;
 
 order_by_clause
@@ -2666,4 +2667,114 @@ direct_sql_statements
 
 (* <time zone region> *)
 
-time_zone_region : #'([\w\/]+)'
+time_zone_region : #'([\w\/]+)' ;
+
+(* XTQL relation *)
+
+xtql_relation_constructor : <'XTQL'> xtql_relation ;
+
+<xtql_relation> : xtql_query xtql_query_tail*
+
+<xtql_query> : xtql_from | xtql_unify | xtql_fragment ;
+
+<xtql_query_tail>
+    : xtql_where | xtql_with | xtql_agg
+    | xtql_order_by | xtql_limit | xtql_offset
+    | xtql_fragment
+    ;
+
+<xtql_unify_clause> : xtql_from | xtql_where | xtql_with | xtql_fragment ;
+
+xtql_from
+    : <'FROM'> xtql_table_name (xtql_for_valid_time | xtql_for_system_time)* xtql_bindings ;
+
+xtql_table_name : identifier ;
+
+xtql_for_valid_time : <'FOR'> <'VALID_TIME'> xtql_temporal_filter ;
+xtql_for_system_time : <'FOR'> <'SYSTEM_TIME'> xtql_temporal_filter ;
+
+xtql_temporal_filter
+    : 'FROM' timestamp_literal ( 'TO' timestamp_literal )
+    | 'AS' 'OF' timestamp_literal
+    ;
+
+xtql_unify : <'UNIFY'> <left_paren> xtql_unify_clause (<comma> xtql_unify_clause)* <right_paren> ;
+xtql_where : <'WHERE'> xtql_expr (<comma> xtql_expr)* ;
+xtql_with : <'WITH'> xtql_bindings ;
+xtql_agg : <'AGGREGATE'> xtql_bindings ;
+xtql_limit : <'LIMIT'> exact_numeric_literal ;
+xtql_offset : <'OFFSET'> exact_numeric_literal ;
+
+xtql_order_by : <'ORDER'> <'BY'> xtql_order_by_spec (<comma> xtql_order_by_spec)*
+xtql_order_by_spec : xtql_expr [ ordering_specification ] [ null_ordering ]
+
+xtql_binding
+    : identifier (<'TO'> xtql_expr)?
+    | xtql_fragment
+    ;
+
+xtql_fragment
+    : '~' identifier
+    | '~@' identifier
+    ;
+
+<xtql_expr>
+  : xtql_numeric_expression
+  | xtql_boolean_expression
+  ;
+
+xtql_numeric_expression
+  : xtql_numeric_term
+  | xtql_numeric_expression plus_sign xtql_numeric_term
+  | xtql_numeric_expression minus_sign xtql_numeric_term
+  ;
+
+xtql_numeric_term
+  : xtql_numeric_factor
+  | xtql_numeric_term asterisk xtql_numeric_factor
+  | xtql_numeric_term solidus xtql_numeric_factor
+  ;
+
+xtql_numeric_factor
+  : [ sign ] xtql_expr_primary
+  | xtql_expr_primary
+  ;
+
+xtql_boolean_expression
+  : xtql_boolean_term
+  | xtql_boolean_expression 'OR' xtql_boolean_term
+  ;
+
+xtql_boolean_term
+  : xtql_boolean_factor
+  | xtql_boolean_term 'AND' xtql_boolean_factor
+  ;
+
+xtql_boolean_factor : [ 'NOT' ] xtql_boolean_test ;
+xtql_boolean_test : xtql_predicate [ 'IS' [ 'NOT' ] truth_value ] ;
+
+xtql_predicate
+  : xtql_expr_primary 
+  | xtql_predicate comp_op xtql_expr_primary
+  ;
+
+<xtql_expr_primary>
+  : <left_paren> xtql_expr <right_paren>
+  | identifier
+  | exact_numeric_literal
+  | character_string_literal
+  | timestamp_literal
+  | date_literal
+  | xtql_expr_call
+  | xtql_expr_list
+  | xtql_expr_map
+  ;
+
+xtql_expr_call : identifier <left_paren> xtql_exprs? <right_paren>
+xtql_expr_list : <left_bracket> xtql_exprs? <right_bracket>
+<xtql_exprs> : xtql_expr ( <comma> xtql_expr)* <comma>?
+
+xtql_expr_map : <left_brace> xtql_map_entries? <right_brace>
+<xtql_bindings> : <left_brace> xtql_map_entries? <right_brace>
+<xtql_map_entries> : xtql_binding (<comma> xtql_binding)* <comma>?
+xtql_binding : identifier (<colon> xtql_expr)? ;

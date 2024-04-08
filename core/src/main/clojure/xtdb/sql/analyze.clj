@@ -5,7 +5,10 @@
             [xtdb.information-schema :as info-schema]
             [xtdb.rewrite :as r]
             [xtdb.sql.parser :as p]
-            [xtdb.util :as util]))
+            [xtdb.util :as util]
+            [xtdb.xtql :as xtql])
+  (:import [java.util List]
+           (xtdb.api.query Binding Exprs XtqlQuery$Aggregate XtqlQuery$From XtqlQuery$Limit XtqlQuery$Offset XtqlQuery$Pipeline XtqlQuery$Return XtqlQuery$Unify XtqlQuery$Where XtqlQuery$With)))
 
 (defn- ->line-info-str [loc]
   (let [{:keys [sql]} (meta (r/root loc))
@@ -97,7 +100,7 @@
 
 ;; Identifiers
 
-(defn identifier [ag]
+(defn identifier ^String [ag]
   (r/zcase ag
     :derived_column
     (r/zmatch ag
@@ -526,6 +529,78 @@
 
     ::r/inherit))
 
+;; XTQL
+
+(defn- parse-xtql-expr ^xtdb.api.query.Expr [z]
+  (r/zcase z
+    :regular_identifier (Exprs/lVar (identifier z))
+    :xtql_expr_call (Exprs/call (identifier (r/$ z 1))
+                                ^List (map parse-xtql-expr (r/right-zips (r/$ z 2))))
+    (throw (UnsupportedOperationException. (pr-str (r/ctor z))))))
+
+(defn- parse-xtql-binding [z]
+  (r/zmatch z
+    [:xtql_binding ^:z binding ^:z expr] (Binding. (identifier binding) (parse-xtql-expr expr))
+    [:xtql_binding ^:z binding] (Binding. (identifier binding))))
+
+(defn- parse-xtql-from [z]
+  (XtqlQuery$From. (-> (r/find-first (partial r/ctor? :xtql_table_name) z)
+                       (r/$ 1)
+                       (identifier))
+                   (->> (r/right-zips (r/$ z 1))
+                        (filter (partial r/ctor? :xtql_binding))
+                        (map parse-xtql-binding))
+                   nil
+                   nil
+                   false))
+
+(defn- parse-xtql-where [z]
+  (XtqlQuery$Where. (->> (r/right-zips (r/$ z 1))
+                         (mapv parse-xtql-expr))))
+
+(defn- parse-xtql-with [z]
+  (XtqlQuery$With. (->> (r/right-zips (r/$ z 1))
+                        (map parse-xtql-binding))))
+
+(defn- parse-xtql-unify-clause [z]
+  (r/zcase z
+    :xtql_from (parse-xtql-from z)
+    :xtql_where (parse-xtql-where z)
+    :xtql_with (parse-xtql-with z)
+    (throw (UnsupportedOperationException. (pr-str (r/ctor z))))))
+
+(defn- parse-xtql-query [z]
+  (r/zcase z
+    :xtql_from (parse-xtql-from z)
+    :xtql_unify (XtqlQuery$Unify. (->> (r/right-zips (r/$ z 1))
+                                       (mapv parse-xtql-unify-clause)))
+    (throw (UnsupportedOperationException. (pr-str (r/ctor z))))))
+
+(defn- parse-exact-numeric [z]
+  (let [lexeme (r/$ z 1)]
+    (if (str/includes? lexeme ".")
+      (parse-double lexeme)
+      (parse-long lexeme))))
+
+(defn- parse-xtql-query-tail [z]
+  (r/zcase z
+    :xtql_where (parse-xtql-where z)
+    :xtql_with (parse-xtql-with z)
+    :xtql_return (XtqlQuery$Return. (->> (r/right-zips (r/$ z 1))
+                                         (map parse-xtql-binding)))
+    :xtql_agg (XtqlQuery$Aggregate. (->> (r/right-zips (r/$ z 1))
+                                         (map parse-xtql-binding)))
+    :xtql_limit (XtqlQuery$Limit. (parse-exact-numeric (r/$ z 1)))
+    :xtql_offset (XtqlQuery$Offset. (parse-exact-numeric (r/$ z 1)))
+    (throw (UnsupportedOperationException. (pr-str (r/ctor z))))))
+
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
+(defn xtql-relation-constructor-plan [ag]
+  (let [[query & tails] (r/right-zips (r/zright (r/zdown ag)))]
+    (xtql/plan-query
+     (XtqlQuery$Pipeline. (parse-xtql-query query)
+                          (map parse-xtql-query-tail tails)))))
+
 ;; Select
 
 (defn- set-operator [ag]
@@ -849,6 +924,12 @@
 
          nil))
      ag)
+
+    :xtql_relation_constructor
+    [(->> (:provided-vars (xtql-relation-constructor-plan ag))
+          (mapv (comp (fn [projected-var]
+                        {:identifier projected-var})
+                      str)))]
 
     :subquery
     (projected-columns (r/$ ag 1))

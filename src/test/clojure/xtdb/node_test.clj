@@ -55,11 +55,14 @@ VALUES (1, 'Happy 2024!', DATE '2024-01-01'),
                            [:sql "UPDATE foo SET v = 1"]])
 
   (t/is (= [{:xt/id "foo", :v 1}]
-           (xt/q tu/*node* "SELECT foo.xt$id, foo.v FROM foo"))))
+           (xt/q tu/*node* "SELECT foo.xt$id, foo.v FROM foo")))
+
+  (t/is (= [{:xt/id "foo", :v 1}]
+           (xt/q tu/*node* "XTQL FROM foo {xt$id, v}"))))
 
 (t/deftest test-delete-without-search-315
   (letfn [(q []
-            (xt/q tu/*node* "SELECT foo.xt$id, foo.xt$valid_from, foo.xt$valid_to FROM foo"
+            (xt/q tu/*node* "XTQL FROM foo {xt$id, xt$valid_from, xt$valid_to}"
                   {:default-all-valid-time? true}))]
     (xt/submit-tx tu/*node* [[:sql "INSERT INTO foo (xt$id) VALUES ('foo')"]])
 
