@@ -239,15 +239,12 @@
 
 
 (deftest pull
-
   (xt/submit-tx tu/*node*
-    (concat
-      articles comments
+    (concat articles comments
       [[:put-docs :authors {:xt/id "ivan", :first-name "Ivan", :last-name "Ivanov"}]
        [:put-docs :authors {:xt/id "petr", :first-name "Petr", :last-name "Petrov"}]]))
 
   (testing "For example, if a user is reading an article, we might also want to show them details about the author as well as any comments."
-
     (t/is (= #{{:article-id 1
                 :title "First",
                 :content "My first blog",
@@ -276,9 +273,29 @@
                                                  (limit 10))
                                              {:args [article-id]})}))
                  ;; end::pull-xtql-1[]
-                 ,))
+                 ))
+
+
              (set (xt/q tu/*node* (json-example-query "pull-json-1")))))))
             ;; No SQL for this one
+
+(comment
+  ;; pull in stringy XTQL
+
+  (def pull-q "XTQL
+    FROM articles {xt$id: article_id, title, content, author_id}
+    WITH {
+      author: PULL({author_id} ->
+        FROM authors {xt$id: author_id, first_name, last_name}
+      ),
+      comments: PULL_MANY({article_id} ->
+        FROM comments {article_id, created_at, comment}
+        ORDER BY created_at DESC
+        LIMIT 10
+      )
+    }
+")
+  )
 
 (deftest bitemporality
 

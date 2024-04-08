@@ -1304,6 +1304,11 @@
                        tx1, nil)))
             "entity history, all time")
 
+      #_{:clj-kondo/ignore [:inline-def]}
+      (comment
+        (def all-time-str "XTQL
+          FROM docs FOR ALL VALID_TIME {xt$id: id, xt$valid_from: app_from, xt$valid_to: app_to}"))
+
       (t/is (= #{{:id :matthew, :app-from (time/->zdt #inst "2015")}
                  {:id :luke, :app-from (time/->zdt #inst "2021"), :app-to (time/->zdt #inst "2022")}}
                (set (q '(from :docs {:bind [{:xt/id id} {:xt/valid-from app-from
@@ -1319,6 +1324,14 @@
                                             :for-valid-time (at #inst "2024")})),
                        tx1, nil)))
             "cross-time join - who was here in both 2018 and 2023?")
+
+      #_{:clj-kondo/ignore [:inline-def]}
+      (comment
+        (def cross-time-join-str "XTQL
+          UNIFY (
+            FROM docs FOR VALID_TIME AT DATE '2018-01-01' {xt$id: id}
+            FROM docs FOR VALID_TIME AT DATE '2024-01-01' {xt$id: id}
+          )"))
 
       (t/is (= #{{:vt-from (time/->zdt #inst "2021")
                   :vt-to (time/->zdt #inst "2022")
@@ -1346,6 +1359,13 @@
                                       :for-valid-time (in $arg-from $arg-to)})
                         {:args {:arg-from #inst "2021"
                                 :arg-to #inst "2023"}}))))
+
+    #_{:clj-kondo/ignore [:inline-def]}
+    (comment
+      (def params-str "XTQL {valid_from: ?, valid_to: ?}
+        FROM docs FOR VALID_TIME FROM valid_from TO valid_to {
+          xt$id: id, xt$valid_from: app_from, xt$valid_to: app_to
+        }"))
     
     (t/is (= #{{:id :matthew}}
              (set (xt/q tu/*node*
@@ -2145,6 +2165,22 @@
                          (with {:customer (pull (from :customers [name {:xt/id $customer-id}])
                                                 {:args [customer-id]})}))))))
 
+  #_{:clj-kondo/ignore [:inline-def]}
+  (comment
+    ;; stringy
+    (def pull-str "XTQL
+      FROM orders {xt$id: id, customer_id}
+      WITH {
+        customer: PULL({customer_id} -> FROM customers {name, xt$id: customer_id})
+      }")
+
+    ;; and one below
+    (def pull-many-str "XTQL
+      FROM customers {xt$id: id, name}
+      WITH {
+        orders: PULL_MANY({c_id: id} -> FROM orders {customer_id: c_id, xt$id: id})
+      }"))
+
   (t/is (=
          #{{:orders [{:id 1} {:id 0}], :name "bob", :id 0}
            {:orders [{:id 2}], :name "alice", :id 1}}
@@ -2390,7 +2426,26 @@
                                                                        (return id friends))
                                                                    {:args [friends]})})
                                                   (return id friends))
-                                              {:args [friends]})}))))))
+                                              {:args [friends]})})))))
+
+  #_{:clj-kondo/ignore [:inline-def]}
+  (comment
+    (def nested-subqs-str "XTQL
+      FROM users {xt$id: id, friends: u1_friends}
+      WITH {
+        friends: PULL_MANY({u1_friends} ->
+          FROM users {xt$id: u2, friends: u2_friends}
+          WHERE u2 IN u1_friends
+          RETURN {
+            id: u2,
+            friends: PULL_MANY({u2_friends} ->
+              FROM users {xt$id: u3, friends: u3_friends}
+              WHERE u3 IN u2_friends
+              RETURN {id: u3, friends: u3_friends}
+            )
+          }
+        )
+      }")))
 
 (deftest test-expression-in-join-args
   (xt/submit-tx tu/*node* [[:put-docs :a {:xt/id :a1, :a 2 :b 1}]
