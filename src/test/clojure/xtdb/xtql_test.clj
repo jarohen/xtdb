@@ -2347,7 +2347,7 @@
   (t/is (empty? (xt/q tu/*node* '(from :xt/txs [{:xt/committed? false}])))))
 
 (deftest plan-expr-test
-  (let [required-vars (comp xtql/required-vars edn/parse-expr)]
+  (let [required-vars (comp xtql/required-vars xtql/<-Expr edn/parse-expr)]
     (t/testing "required-vars"
       (t/is (= #{'a}
                (required-vars '#{1 (+ a $b) 2})))
