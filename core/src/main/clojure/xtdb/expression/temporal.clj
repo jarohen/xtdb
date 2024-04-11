@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [xtdb.error :as err]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.time :as time]
             [xtdb.types :as types])
   (:import (java.nio ByteBuffer)
@@ -449,12 +450,11 @@
                        (.toString)
                        (string->byte-buffer)))})
 
-;; TODO - finish this
-(defmethod expr/parse-list-form  'cast-tstz [[_ expr opts] env]
+(defmethod form/parse-list-form  'cast-tstz [[_ expr opts] env]
   (let [unit (or (:unit opts) :micro)]
     {:op :call
      :f :cast
-     :args [(expr/form->expr expr env)]
+     :args [(form/form->expr expr env)]
      :target-type [:timestamp-tz unit (str (.getZone expr/*clock*))]
      :cast-opts opts}))
 

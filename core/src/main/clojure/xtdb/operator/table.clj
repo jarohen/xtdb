@@ -3,6 +3,7 @@
             [clojure.spec.alpha :as s]
             [xtdb.error :as err]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.logical-plan :as lp]
             [xtdb.rewrite :refer [zmatch]]
             [xtdb.types :as types]
@@ -82,7 +83,7 @@
 
         (doseq [[k v] row
                 :let [k-sym (symbol k)]]
-          (let [expr (expr/form->expr v (assoc opts :param-types param-types))
+          (let [expr (form/form->expr v (assoc opts :param-types param-types))
                 ^Set field-set (.computeIfAbsent field-sets k-sym (reify Function (apply [_ _] (HashSet.))))]
             (case (:op expr)
               :literal (do
@@ -100,7 +101,7 @@
               ;; HACK: this is quite heavyweight to calculate a single value -
               ;; the EE doesn't yet have an efficient means to do so...
               (let [input-types (assoc opts :param-types param-types)
-                    expr (expr/form->expr v input-types)
+                    expr (form/form->expr v input-types)
                     projection-spec (expr/->expression-projection-spec "_scalar" expr input-types)]
                 (.add field-set (types/col-type->field (.getColumnType projection-spec)))
                 (.put out-row k (fn [{:keys [allocator params]}]

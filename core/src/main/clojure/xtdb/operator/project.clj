@@ -2,6 +2,7 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.string :as str]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.logical-plan :as lp]
             [xtdb.types :as types]
             [xtdb.util :as util]
@@ -157,7 +158,7 @@
                                            :extend (let [[col-name form] (first arg)
                                                          input-types {:col-types (update-vals inner-fields types/field->col-type)
                                                                       :param-types (update-vals param-fields types/field->col-type)}
-                                                         expr (expr/form->expr form input-types)]
+                                                         expr (form/form->expr form input-types)]
                                                      (expr/->expression-projection-spec col-name expr input-types)))))]
           {:fields (->> projection-specs
                         (into {} (map (juxt #(.getColumnName ^IProjectionSpec %)

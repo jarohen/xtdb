@@ -1,6 +1,7 @@
 (ns xtdb.expression.metadata
   (:require [xtdb.bloom :as bloom]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.expression.walk :as ewalk]
             [xtdb.metadata :as meta]
             [xtdb.types :as types]
@@ -196,7 +197,7 @@
 
 (defn ->metadata-selector ^xtdb.metadata.IMetadataPredicate [form col-types params]
   (let [param-types (expr/->param-types params)
-        {:keys [expr f]} (compile-meta-expr (expr/form->expr form {:param-types param-types,
+        {:keys [expr f]} (compile-meta-expr (form/form->expr form {:param-types param-types,
                                                                    :col-types col-types})
                                             {:param-types param-types
                                              :col-types col-types

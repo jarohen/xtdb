@@ -1,11 +1,13 @@
 (ns xtdb.expression.map
   (:require [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.expression.walk :as ewalk]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw])
-  (:import (java.lang AutoCloseable)
+  (:import (com.carrotsearch.hppc IntObjectHashMap)
+           (java.lang AutoCloseable)
            java.util.function.IntBinaryOperator
            java.util.List
            (org.apache.arrow.memory BufferAllocator)
@@ -13,8 +15,7 @@
            (org.apache.arrow.vector NullVector VectorSchemaRoot)
            (org.apache.arrow.vector.types.pojo Schema)
            (org.roaringbitmap IntConsumer RoaringBitmap)
-           (xtdb.vector RelationReader IVectorReader)
-           (com.carrotsearch.hppc IntObjectHashMap)))
+           (xtdb.vector IVectorReader RelationReader)))
 
 (def ^:private ^org.apache.arrow.memory.util.hash.ArrowBufHasher hasher
   SimpleHasher/INSTANCE)
@@ -117,7 +118,7 @@
 
 (defn- ->theta-comparator [probe-rel build-rel theta-expr params {:keys [build-fields probe-fields param-types]}]
   (let [col-types (update-vals (merge build-fields probe-fields) types/field->col-type)
-        f (build-comparator (->> (expr/form->expr theta-expr {:col-types col-types, :param-types param-types})
+        f (build-comparator (->> (form/form->expr theta-expr {:col-types col-types, :param-types param-types})
                                  (expr/prepare-expr)
                                  (ewalk/postwalk-expr (fn [{:keys [op] :as expr}]
                                                         (cond-> expr

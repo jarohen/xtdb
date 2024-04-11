@@ -5,6 +5,7 @@
             [clojure.test.check.generators :as tcg]
             [clojure.test.check.properties :as tcp]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.test-util :as tu]
             [xtdb.time :as time]
             [xtdb.types :as types]
@@ -31,7 +32,7 @@
   (with-open [in-rel (tu/open-rel (->data-vecs))]
     (letfn [(project [form]
               (let [input-types {:col-types {'a :f64, 'b :f64, 'd :i64}, :param-types {}}
-                    expr (expr/form->expr form input-types)]
+                    expr (form/form->expr form input-types)]
                 (with-open [project-col (.project (expr/->expression-projection-spec "c" expr input-types)
                                                   tu/*allocator* in-rel
                                                   vw/empty-params)]
@@ -71,7 +72,7 @@
     (letfn [(select-relation [form col-types params-map]
               (with-open [param-rel (tu/open-params params-map)]
                 (let [input-types {:col-types col-types, :param-types (expr/->param-types param-rel)}]
-                  (alength (.select (expr/->expression-relation-selector (expr/form->expr form input-types) input-types)
+                  (alength (.select (expr/->expression-relation-selector (form/form->expr form input-types) input-types)
                                     tu/*allocator* in-rel param-rel)))))]
 
       (t/testing "selector"
@@ -84,7 +85,7 @@
 
 (t/deftest nil-selection-doesnt-yield-the-row
   (t/is (= 0
-           (-> (.select (expr/->expression-relation-selector (expr/form->expr '(and true nil) {}) {})
+           (-> (.select (expr/->expression-relation-selector (form/form->expr '(and true nil) {}) {})
                         tu/*allocator* (vr/rel-reader [] 1) vw/empty-params)
                (alength)))))
 
@@ -320,7 +321,7 @@
                        (into {} (map (juxt #(symbol (.getName ^IVectorReader %))
                                            #(types/field->col-type (.getField ^IVectorReader %))))))
         input-types {:col-types col-types, :param-types {}}
-        expr (expr/form->expr form input-types)]
+        expr (form/form->expr form input-types)]
     (with-open [out-ivec (.project (expr/->expression-projection-spec "out" expr input-types)
                                    tu/*allocator* rel vw/empty-params)]
       {:res (tu/<-reader out-ivec)

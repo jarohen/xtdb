@@ -6,6 +6,7 @@
             [xtdb.bloom :as bloom]
             [xtdb.buffer-pool :as bp]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.expression.metadata :as expr.meta]
             xtdb.indexer.live-index
             [xtdb.information-schema :as info-schema]
@@ -19,10 +20,10 @@
             [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw])
   (:import (clojure.lang MapEntry)
+           (com.carrotsearch.hppc IntArrayList)
            (java.io Closeable)
            java.nio.ByteBuffer
            (java.nio.file Path)
-           (com.carrotsearch.hppc IntArrayList)
            (java.util ArrayList Comparator HashMap Iterator LinkedList Map PriorityQueue)
            (java.util.function IntPredicate Predicate)
            (java.util.stream IntStream)
@@ -39,8 +40,7 @@
            xtdb.operator.IRelationSelector
            (xtdb.trie ArrowHashTrie$Leaf EventRowPointer HashTrie HashTrieKt LiveHashTrie$Leaf MergePlanNode MergePlanTask)
            (xtdb.util TemporalBounds TemporalBounds$TemporalColumn)
-           (xtdb.vector IRelationWriter IRowCopier IVectorReader IVectorWriter RelationReader RelationWriter
-                        IMultiVectorRelationFactory IVectorIndirection$Selection IndirectMultiVectorReader)
+           (xtdb.vector IMultiVectorRelationFactory IRelationWriter IVectorIndirection$Selection IVectorReader IVectorWriter IndirectMultiVectorReader RelationReader RelationWriter)
            (xtdb.watermark ILiveTableWatermark IWatermarkSource Watermark)))
 
 (s/def ::table symbol?)
@@ -458,7 +458,7 @@
                              (let [input-types {:col-types (update-vals fields types/field->col-type)
                                                 :param-types (update-vals param-fields types/field->col-type)}]
                                (MapEntry/create col-name
-                                                (expr/->expression-relation-selector (expr/form->expr select-form input-types)
+                                                (expr/->expression-relation-selector (form/form->expr select-form input-types)
                                                                                      input-types))))
                            (into {}))
 

@@ -2,6 +2,7 @@
   (:require [clojure.spec.alpha :as s]
             [xtdb.error :as err]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.expression.map :as emap]
             [xtdb.logical-plan :as lp]
             [xtdb.rewrite :refer [zmatch]]
@@ -245,7 +246,7 @@
             (close [_] (.close out-vec))))))))
 
 (defn- ->projector ^xtdb.operator.IProjectionSpec [col-name form input-types]
-  (expr/->expression-projection-spec col-name (expr/form->expr form input-types) input-types))
+  (expr/->expression-projection-spec col-name (form/form->expr form input-types) input-types))
 
 (defmethod ->aggregate-factory :sum [{:keys [from-name from-type] :as agg-opts}]
   (let [to-type (->> (types/flatten-union-types from-type)

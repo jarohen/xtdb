@@ -6,6 +6,7 @@
             [xtdb.bloom :as bloom]
             [xtdb.error :as err]
             [xtdb.expression :as expr]
+            [xtdb.expression.form :as form]
             [xtdb.expression.map :as emap]
             [xtdb.logical-plan :as lp]
             [xtdb.operator.project :as project]
@@ -20,8 +21,8 @@
            (org.apache.arrow.memory BufferAllocator)
            org.apache.arrow.vector.BitVector
            (org.apache.arrow.vector.types.pojo Field)
-           org.roaringbitmap.RoaringBitmap
            (org.roaringbitmap.buffer MutableRoaringBitmap)
+           org.roaringbitmap.RoaringBitmap
            (xtdb ICursor)
            (xtdb.expression.map IRelationMap)
            (xtdb.operator IProjectionSpec)
@@ -384,7 +385,7 @@
                       input-types {:col-types (update-vals fields types/field->col-type)
                                    :param-types (update-vals param-fields types/field->col-type)}]
                   {:key-col-name col-name
-                   :projection (expr/->expression-projection-spec col-name (expr/form->expr form input-types)
+                   :projection (expr/->expression-projection-spec col-name (form/form->expr form input-types)
                                                                   input-types)})))]
 
       {:left (equi-projection :left left-expr left-fields)
