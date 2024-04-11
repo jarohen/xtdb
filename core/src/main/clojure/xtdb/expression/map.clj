@@ -1,7 +1,6 @@
 (ns xtdb.expression.map
   (:require [xtdb.expression :as expr]
             [xtdb.expression.form :as form]
-            [xtdb.expression.walk :as ewalk]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
@@ -15,6 +14,7 @@
            (org.apache.arrow.vector NullVector VectorSchemaRoot)
            (org.apache.arrow.vector.types.pojo Schema)
            (org.roaringbitmap IntConsumer RoaringBitmap)
+           xtdb.expression.Variable
            (xtdb.vector IVectorReader RelationReader)))
 
 (def ^:private ^org.apache.arrow.memory.util.hash.ArrowBufHasher hasher
@@ -106,9 +106,11 @@
 
 (defn- ->equi-comparator [^IVectorReader left-col, ^IVectorReader right-col, params
                           {:keys [nil-keys-equal? param-types]}]
-  (let [f (build-comparator {:op :call, :f (if nil-keys-equal? :null-eq :=)
-                             :args [{:op :variable, :variable left-vec, :rel left-rel, :idx left-idx}
-                                    {:op :variable, :variable right-vec, :rel right-rel, :idx right-idx}]}
+  (let [f (build-comparator (expr/->CallExpr (if nil-keys-equal? :null-eq :=)
+                              [(-> (expr/->Variable left-vec)
+                                   (assoc :rel left-rel, :idx left-idx))
+                               (-> (expr/->Variable right-vec)
+                                   (assoc :rel right-rel, :idx right-idx))])
                             {:var->col-type {left-vec (types/field->col-type (.getField left-col))
                                              right-vec (types/field->col-type (.getField right-col))}
                              :param-types param-types})]
@@ -120,13 +122,13 @@
   (let [col-types (update-vals (merge build-fields probe-fields) types/field->col-type)
         f (build-comparator (->> (form/form->expr theta-expr {:col-types col-types, :param-types param-types})
                                  (expr/prepare-expr)
-                                 (ewalk/postwalk-expr (fn [{:keys [op] :as expr}]
-                                                        (cond-> expr
-                                                          (= op :variable)
-                                                          (into (let [{:keys [variable]} expr]
-                                                                  (if (contains? probe-fields variable)
-                                                                    {:rel left-rel, :idx left-idx}
-                                                                    {:rel right-rel, :idx right-idx})))))))
+                                 (expr/postwalk-expr (fn [expr]
+                                                       (cond-> expr
+                                                         (instance? Variable expr)
+                                                         (into (let [{:keys [variable]} expr]
+                                                                 (if (contains? probe-fields variable)
+                                                                   {:rel left-rel, :idx left-idx}
+                                                                   {:rel right-rel, :idx right-idx})))))))
                             {:var->col-type col-types, :param-types param-types})]
     (f probe-rel build-rel params)))
 

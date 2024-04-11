@@ -72,12 +72,13 @@
               right-col-sym (gensym 'right_col)
 
               {cont :continue, :as emitted-expr}
-              (expr/codegen-expr {:op :call,
-                                  :f (case null-ordering
-                                       :nulls-first :compare_nulls_first
-                                       :nulls-last :compare_nulls_last)
-                                  :args [{:op :variable, :variable left-col-sym, :idx left-idx-sym}
-                                         {:op :variable, :variable right-col-sym, :idx right-idx-sym}]}
+              (expr/codegen-expr (expr/->CallExpr (case null-ordering
+                                                    :nulls-first :compare_nulls_first
+                                                    :nulls-last :compare_nulls_last)
+                                   [(-> (expr/->Variable left-col-sym)
+                                        (assoc :idx left-idx-sym))
+                                    (-> (expr/->Variable right-col-sym)
+                                        (assoc :idx right-idx-sym))])
 
                                  {:var->col-type {left-col-sym left-col-type, right-col-sym right-col-type}
                                   :extract-vecs-from-rel? false})]

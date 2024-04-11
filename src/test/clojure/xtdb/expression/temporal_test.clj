@@ -8,7 +8,6 @@
             [xtdb.test-util :as tu]
             [xtdb.time :as time])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime Period ZoneId ZoneOffset ZonedDateTime)
-           (java.time.format DateTimeParseException)
            (org.apache.arrow.vector PeriodDuration)
            (xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth)))
 

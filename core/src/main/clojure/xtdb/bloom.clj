@@ -10,6 +10,7 @@
            [org.apache.arrow.vector ValueVector]
            (org.roaringbitmap RoaringBitmap)
            org.roaringbitmap.buffer.ImmutableRoaringBitmap
+           xtdb.expression.Param
            (xtdb.vector IVectorReader IVectorWriter RelationReader)))
 
 (set! *unchecked-math* :warn-on-boxed)
@@ -88,11 +89,10 @@
 (def literal-hasher
   (-> (fn [value-expr target-col-type]
         (let [{:keys [return-type continue] :as emitted-expr}
-              (expr/codegen-expr {:op :call
-                                  :f :cast
-                                  :args [value-expr]
-                                  :target-type target-col-type}
-                                 {:param-types (when (= :param (:op value-expr))
+              (expr/codegen-expr (-> (expr/->CallExpr :cast [value-expr])
+                                     (assoc :target-type target-col-type))
+
+                                 {:param-types (when (instance? Param value-expr)
                                                  (let [{:keys [param param-type]} value-expr]
                                                    {param param-type}))})
               {:keys [writer-bindings write-value-out!]} (expr/write-value-out-code return-type)]

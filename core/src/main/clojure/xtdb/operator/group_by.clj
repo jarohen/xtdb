@@ -183,14 +183,15 @@
 
               return-type [:union (conj #{:null} to-type)]
 
-              acc-expr {:op :variable, :variable acc-col-sym, :idx group-idx-sym
-                        :extract-vec-from-rel? false}
-              agg-expr (-> {:op :if-some, :local val-local, :expr val-expr
-                            :then {:op :if-some, :local acc-local,
-                                   :expr acc-expr
-                                   :then step-expr
-                                   :else {:op :local, :local val-local}}
-                            :else acc-expr}
+              acc-expr (-> (expr/->Variable acc-col-sym)
+                           (assoc :idx group-idx-sym
+                                  :extract-vec-from-rel? false))
+              agg-expr (-> (expr/->IfSomeExpr val-local val-expr
+                             (expr/->IfSomeExpr acc-local acc-expr
+                               step-expr
+                               (expr/->Local val-local))
+                             acc-expr)
+
                            (expr/prepare-expr))
 
               ;; ignore return-type of the codegen because it may be more specific than the acc type
@@ -256,11 +257,12 @@
                      (types/least-upper-bound))]
     (reducing-agg-factory (into agg-opts
                                 {:to-type to-type
-                                 :val-expr {:op :call, :f :cast, :target-type to-type
-                                            :args [{:op :variable, :variable from-name}]}
-                                 :step-expr {:op :call, :f :+,
-                                             :args [{:op :local, :local acc-local}
-                                                    {:op :local, :local val-local}]}}))))
+                                 :val-expr (-> (expr/->CallExpr :cast
+                                                 [(expr/->Variable from-name)])
+                                               (assoc :target-type to-type))
+                                 :step-expr (expr/->CallExpr :+
+                                              [(expr/->Local acc-local)
+                                               (expr/->Local val-local)])}))))
 
 (defmethod ->aggregate-factory :avg [{:keys [from-name from-type to-name zero-row?]}]
   (let [sum-agg (->aggregate-factory {:f :sum, :from-name from-name, :from-type from-type,
@@ -413,14 +415,14 @@
     (assert-supported-min-max-types from-types to-type)
     (reducing-agg-factory (into agg-opts
                                 {:to-type to-type
-                                 :val-expr {:op :call, :f :cast, :target-type to-type
-                                            :args [{:op :variable, :variable from-name}]}
-                                 :step-expr {:op :if,
-                                             :pred {:op :call, :f compare-kw,
-                                                    :args [{:op :local, :local val-local}
-                                                           {:op :local, :local acc-local}]}
-                                             :then {:op :local, :local val-local}
-                                             :else {:op :local, :local acc-local}}}))))
+                                 :val-expr (-> (expr/->CallExpr :cast
+                                                 [(expr/->Variable from-name)])
+                                               (assoc :target-type to-type))
+                                 :step-expr (expr/->IfExpr (expr/->CallExpr compare-kw
+                                                             [(expr/->Local val-local)
+                                                              (expr/->Local acc-local)])
+                                              (expr/->Local val-local)
+                                              (expr/->Local acc-local))}))))
 
 (defmethod ->aggregate-factory :min [agg-opts] (min-max-factory :< agg-opts))
 (defmethod ->aggregate-factory :min_all [agg-opts] (min-max-factory :< agg-opts))
@@ -560,10 +562,10 @@
 (defn- bool-agg-factory [step-f-kw {:keys [from-name] :as agg-opts}]
   (reducing-agg-factory (into agg-opts
                               {:to-type :bool
-                               :val-expr {:op :variable, :variable from-name}
-                               :step-expr {:op :call, :f step-f-kw,
-                                           :args [{:op :local, :local acc-local}
-                                                  {:op :local, :local val-local}]}})))
+                               :val-expr (expr/->Variable from-name)
+                               :step-expr (expr/->CallExpr step-f-kw
+                                            [(expr/->Local acc-local)
+                                             (expr/->Local val-local)])})))
 
 (defmethod ->aggregate-factory :all [agg-opts] (bool-agg-factory :and agg-opts))
 (defmethod ->aggregate-factory :every [agg-opts] (->aggregate-factory (assoc agg-opts :f :all)))

@@ -452,11 +452,10 @@
 
 (defmethod form/parse-list-form  'cast-tstz [[_ expr opts] env]
   (let [unit (or (:unit opts) :micro)]
-    {:op :call
-     :f :cast
-     :args [(form/form->expr expr env)]
-     :target-type [:timestamp-tz unit (str (.getZone expr/*clock*))]
-     :cast-opts opts}))
+    (-> (expr/->CallExpr :cast
+          [(form/form->expr expr env)])
+        (assoc :target-type [:timestamp-tz unit (str (.getZone expr/*clock*))]
+               :cast-opts opts))))
 
 (defmethod expr/codegen-cast [:utf8 :duration] [{[_ tgt-tsunit :as target-type] :target-type  {:keys [precision]} :cast-opts}]
   (when precision (ensure-fractional-precision-valid precision))
@@ -618,17 +617,16 @@
                                ::err/parse-exception e})))))
 
 (defn ->single-field-interval-call [{{:keys [start-field leading-precision fractional-precision]} :cast-opts}]
-  (let [expr {:op :call
-              :f :single_field_interval
-              :args [{} {:literal start-field} {:literal leading-precision} {:literal fractional-precision}]
-              :arg-types [:utf8 :utf8 :int :int]}]
+  (let [expr (-> (expr/->CallExpr :single_field_interval
+                   [{} {:literal start-field} {:literal leading-precision} {:literal fractional-precision}]
+                   )
+                 (assoc :arg-types [:utf8 :utf8 :int :int]))]
     (expr/codegen-call expr)))
 
 (defn ->multi-field-interval-call [{{:keys [start-field end-field leading-precision fractional-precision]} :cast-opts}]
-  (let [expr {:op :call
-              :f :multi_field_interval
-              :args [{} {:literal start-field} {:literal leading-precision} {:literal end-field} {:literal fractional-precision}]
-              :arg-types [:utf8 :utf8 :int :utf8 :int]}]
+  (let [expr (-> (expr/->CallExpr :multi_field_interval
+                   [{} {:literal start-field} {:literal leading-precision} {:literal end-field} {:literal fractional-precision}])
+                 (assoc :arg-types [:utf8 :utf8 :int :utf8 :int]))]
     (expr/codegen-call expr)))
 
 (defmethod expr/codegen-cast [:utf8 :interval] [{interval-opts :cast-opts :as expr}]

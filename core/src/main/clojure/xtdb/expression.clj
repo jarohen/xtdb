@@ -1,6 +1,5 @@
 (ns xtdb.expression
   (:require [xtdb.error :as err]
-            [xtdb.expression.macro :as macro]
             [xtdb.rewrite :refer [zmatch]]
             [xtdb.time :as time]
             [xtdb.types :as types]
@@ -47,16 +46,28 @@
 (def rel-sym (gensym 'rel))
 (def params-sym (gensym 'params))
 
-#_{:clj-kondo/ignore [:unused-binding]}
-(defmulti codegen-expr
-  "Returns a map containing
-    * `:return-types` (set)
-    * `:continue` (fn).
-      Returned fn expects a function taking a single return-type and the emitted code for that return-type.
-      May be called multiple times if there are multiple return types.
-      Returned fn returns the emitted code for the expression (including the code supplied by the callback)."
-  (fn [{:keys [op]} opts]
-    op))
+(defprotocol Expr
+  (direct-child-exprs [expr])
+  (walk-expr [expr inner-f outer-f])
+
+  (codegen-expr [expr opts]
+    "Returns a map containing
+     * `:return-types` (set)
+     * `:continue` (fn).
+       Returned fn expects a function taking a single return-type and the emitted code for that return-type.
+       May be called multiple times if there are multiple return types.
+       Returned fn returns the emitted code for the expression (including the code supplied by the callback)."))
+
+;; from clojure.walk
+(defn postwalk-expr [f expr]
+  (walk-expr expr (partial postwalk-expr f) f))
+
+(defn prewalk-expr [f expr]
+  (walk-expr (f expr) (partial prewalk-expr f) identity))
+
+(defn expr-seq [expr]
+  (lazy-seq
+   (cons expr (mapcat expr-seq (direct-child-exprs expr)))))
 
 (defmulti codegen-cast
   (fn [{:keys [source-type target-type]}]
@@ -214,17 +225,18 @@
   `(let [imdn# ~code]
      (PeriodDuration. (.-period imdn#) (.-duration imdn#))))
 
-(defmethod codegen-expr :literal [{:keys [literal]} _]
-  (let [return-type (vw/value->col-type literal)
-        literal-type (class literal)]
-    {:return-type return-type
-     :continue (fn [f]
-                 (f return-type (emit-value literal-type literal)))
-     :literal literal}))
+(defrecord Literal [literal]
+  Expr
+  (walk-expr [expr _inner outer] (outer expr))
+  (direct-child-exprs [_] nil)
 
-(defn prepare-expr [expr]
-  (->> expr
-       (macro/macroexpand-all)))
+  (codegen-expr [_ _]
+    (let [return-type (vw/value->col-type literal)
+          literal-type (class literal)]
+      {:return-type return-type
+       :continue (fn [f]
+                   (f return-type (emit-value literal-type literal)))
+       :literal literal})))
 
 (defn- wrap-boxed-poly-return [{:keys [return-type continue] :as emitted-expr} _]
   (zmatch return-type
@@ -255,99 +267,140 @@
 
     emitted-expr))
 
-(defmethod codegen-expr :variable [{:keys [variable rel idx extract-vec-from-rel?],
-                                    :or {rel rel-sym, idx idx-sym, extract-vec-from-rel? true}}
-                                   {:keys [var->col-type extract-vecs-from-rel?]
-                                    :or {extract-vecs-from-rel? true}}]
-  ;; NOTE we now get the widest var-type in the expr itself, but don't use it here (yet? at all?)
-  (let [vpos-sym (gensym 'vpos)
-        col-type (or (get var->col-type variable)
-                     (throw (AssertionError. (str "unknown variable: " variable))))
-        sanitized-var (util/symbol->normal-form-symbol variable)
-        var-rdr-sym (gensym sanitized-var)]
+(defrecord Variable [variable]
+  Expr
+  (walk-expr [expr _inner outer] (outer expr))
+  (direct-child-exprs [_] nil)
 
-    ;; NOTE: when used from metadata exprs, incoming vectors might not exist
-    {:return-type col-type
-     :batch-bindings [[vpos-sym `(IVectorPosition/build)]
-                      (if (and extract-vecs-from-rel? extract-vec-from-rel?)
-                        [var-rdr-sym `(.valueReader (.readerForName ~rel ~(str variable)) ~vpos-sym)]
-                        [var-rdr-sym `(some-> ~sanitized-var (.valueReader ~vpos-sym))])]
-     :continue (fn [f]
-                 `(do
-                    (.setPosition ~vpos-sym ~idx)
-                    ~(continue-read f col-type var-rdr-sym)))}))
+  (codegen-expr [{:keys [rel idx extract-vec-from-rel?],
+                  :or {rel rel-sym, idx idx-sym, extract-vec-from-rel? true}}
+                 {:keys [var->col-type extract-vecs-from-rel?]
+                  :or {extract-vecs-from-rel? true}}]
+    ;; NOTE we now get the widest var-type in the expr itself, but don't use it here (yet? at all?)
+    (let [vpos-sym (gensym 'vpos)
+          col-type (or (get var->col-type variable)
+                       (throw (AssertionError. (str "unknown variable: " variable))))
+          sanitized-var (util/symbol->normal-form-symbol variable)
+          var-rdr-sym (gensym sanitized-var)]
 
-(defmethod codegen-expr :param [{:keys [param]} {:keys [param-types]}]
-  (codegen-expr {:op :variable, :variable param, :rel params-sym, :idx 0}
-                {:var->col-type {param (get param-types param)}}))
+      ;; NOTE: when used from metadata exprs, incoming vectors might not exist
+      {:return-type col-type
+       :batch-bindings [[vpos-sym `(IVectorPosition/build)]
+                        (if (and extract-vecs-from-rel? extract-vec-from-rel?)
+                          [var-rdr-sym `(.valueReader (.readerForName ~rel ~(str variable)) ~vpos-sym)]
+                          [var-rdr-sym `(some-> ~sanitized-var (.valueReader ~vpos-sym))])]
+       :continue (fn [f]
+                   `(do
+                      (.setPosition ~vpos-sym ~idx)
+                      ~(continue-read f col-type var-rdr-sym)))})))
 
-(defmethod codegen-expr :if [{:keys [pred then else]} opts]
-  (let [{p-cont :continue, :as emitted-p} (codegen-expr {:op :call, :f :boolean, :args [pred]} opts)
-        {t-ret :return-type, t-cont :continue, :as emitted-t} (codegen-expr then opts)
-        {e-ret :return-type, e-cont :continue, :as emitted-e} (codegen-expr else opts)
-        return-type (types/merge-col-types t-ret e-ret)]
-    (-> {:return-type return-type
-         :children [emitted-p emitted-t emitted-e]
-         :continue (fn [f]
-                     `(if ~(p-cont (fn [_ code] code))
-                        ~(t-cont f)
-                        ~(e-cont f)))}
-        (wrap-boxed-poly-return opts))))
+(defrecord Param [param]
+  Expr
+  (walk-expr [expr _inner outer] (outer expr))
+  (direct-child-exprs [_] nil)
 
-(defmethod codegen-expr :local [{:keys [local]} {:keys [local-types]}]
-  (let [return-type (get local-types local)]
-    {:return-type return-type
-     :continue (fn [f] (f return-type local))}))
+  (codegen-expr [_ {:keys [param-types]}]
+    (codegen-expr (-> (->Variable param)
+                      (assoc :rel params-sym, :idx 0))
+                  {:var->col-type {param (get param-types param)}})))
 
-(defmethod codegen-expr :let [{:keys [local expr body]} opts]
-  (let [{local-type :return-type, continue-expr :continue, :as emitted-expr} (codegen-expr expr opts)
-        emitted-bodies (->> (for [local-type (types/flatten-union-types local-type)]
-                              (MapEntry/create local-type
-                                               (codegen-expr body (assoc-in opts [:local-types local] local-type))))
-                            (into {}))
-        return-type (apply types/merge-col-types (into #{} (map :return-type) (vals emitted-bodies)))]
-    (-> {:return-type return-type
-         :children (cons emitted-expr (vals emitted-bodies))
-         :continue (fn [f]
-                     (continue-expr (fn [local-type code]
-                                      `(let [~local ~code]
-                                         ~((:continue (get emitted-bodies local-type)) f)))))}
-        (wrap-boxed-poly-return opts))))
+(declare ->CallExpr)
 
-(defmethod codegen-expr :if-some [{:keys [local expr then else]} opts]
-  (let [{continue-expr :continue, expr-ret :return-type, :as emitted-expr}
-        (codegen-expr expr opts)
+(defrecord IfExpr [pred then else]
+  Expr
+  (walk-expr [_ inner outer]
+    (outer (->IfExpr (inner pred) (inner then) (inner else))))
 
-        expr-rets (types/flatten-union-types expr-ret)
+  (direct-child-exprs [_] [pred then else])
 
-        emitted-thens (->> (for [local-type (disj expr-rets :null)]
-                             (MapEntry/create local-type
-                                              (codegen-expr then (assoc-in opts [:local-types local] local-type))))
-                           (into {}))
-        then-rets (into #{} (map :return-type) (vals emitted-thens))
-        then-ret (apply types/merge-col-types then-rets)
+  (codegen-expr [_ opts]
+    (let [{p-cont :continue, :as emitted-p} (codegen-expr (->CallExpr :boolean [pred]) opts)
+          {t-ret :return-type, t-cont :continue, :as emitted-t} (codegen-expr then opts)
+          {e-ret :return-type, e-cont :continue, :as emitted-e} (codegen-expr else opts)
+          return-type (types/merge-col-types t-ret e-ret)]
+      (-> {:return-type return-type
+           :children [emitted-p emitted-t emitted-e]
+           :continue (fn [f]
+                       `(if ~(p-cont (fn [_ code] code))
+                          ~(t-cont f)
+                          ~(e-cont f)))}
+          (wrap-boxed-poly-return opts)))))
 
-        children (cons emitted-expr (vals emitted-thens))]
+(alter-meta! #'->IfExpr assoc :style/indent 1)
 
-    (-> (if-not (contains? expr-rets :null)
-          {:return-type then-ret
-           :children children
+(defrecord Local [local]
+  Expr
+  (walk-expr [expr _inner outer] (outer expr))
+  (direct-child-exprs [_] nil)
+
+  (codegen-expr [_ {:keys [local-types]}]
+    (let [return-type (get local-types local)]
+      {:return-type return-type
+       :continue (fn [f] (f return-type local))})))
+
+(defrecord LetExpr [local expr body]
+  Expr
+  (walk-expr [_ inner outer] (outer (->LetExpr local (inner expr) (inner body))))
+  (direct-child-exprs [_] [expr body])
+
+  (codegen-expr [_ opts]
+    (let [{local-type :return-type, continue-expr :continue, :as emitted-expr} (codegen-expr expr opts)
+          emitted-bodies (->> (for [local-type (types/flatten-union-types local-type)]
+                                (MapEntry/create local-type
+                                                 (codegen-expr body (assoc-in opts [:local-types local] local-type))))
+                              (into {}))
+          return-type (apply types/merge-col-types (into #{} (map :return-type) (vals emitted-bodies)))]
+      (-> {:return-type return-type
+           :children (cons emitted-expr (vals emitted-bodies))
            :continue (fn [f]
                        (continue-expr (fn [local-type code]
                                         `(let [~local ~code]
-                                           ~((:continue (get emitted-thens local-type)) f)))))}
+                                           ~((:continue (get emitted-bodies local-type)) f)))))}
+          (wrap-boxed-poly-return opts)))))
 
-          (let [{e-ret :return-type, e-cont :continue, :as emitted-else} (codegen-expr else opts)
-                return-type (apply types/merge-col-types e-ret then-rets)]
-            {:return-type return-type
-             :children (cons emitted-else children)
+(alter-meta! #'->LetExpr assoc :style/indent 2)
+
+(defrecord IfSomeExpr [local expr then else]
+  Expr
+  (walk-expr [_ inner outer] (outer (->IfSomeExpr local (inner expr) (inner then) (inner else))))
+  (direct-child-exprs [_] [expr then else])
+
+  (codegen-expr [_ opts]
+    (let [{continue-expr :continue, expr-ret :return-type, :as emitted-expr}
+          (codegen-expr expr opts)
+
+          expr-rets (types/flatten-union-types expr-ret)
+
+          emitted-thens (->> (for [local-type (disj expr-rets :null)]
+                               (MapEntry/create local-type
+                                                (codegen-expr then (assoc-in opts [:local-types local] local-type))))
+                             (into {}))
+          then-rets (into #{} (map :return-type) (vals emitted-thens))
+          then-ret (apply types/merge-col-types then-rets)
+
+          children (cons emitted-expr (vals emitted-thens))]
+
+      (-> (if-not (contains? expr-rets :null)
+            {:return-type then-ret
+             :children children
              :continue (fn [f]
                          (continue-expr (fn [local-type code]
-                                          (if (= local-type :null)
-                                            (e-cont f)
-                                            `(let [~local ~code]
-                                               ~((:continue (get emitted-thens local-type)) f))))))}))
-        (wrap-boxed-poly-return opts))))
+                                          `(let [~local ~code]
+                                             ~((:continue (get emitted-thens local-type)) f)))))}
+
+            (let [{e-ret :return-type, e-cont :continue, :as emitted-else} (codegen-expr else opts)
+                  return-type (apply types/merge-col-types e-ret then-rets)]
+              {:return-type return-type
+               :children (cons emitted-else children)
+               :continue (fn [f]
+                           (continue-expr (fn [local-type code]
+                                            (if (= local-type :null)
+                                              (e-cont f)
+                                              `(let [~local ~code]
+                                                 ~((:continue (get emitted-thens local-type)) f))))))}))
+          (wrap-boxed-poly-return opts)))))
+
+(alter-meta! #'->IfSomeExpr assoc :style/indent 2)
 
 (def normalise-fn-name
   (-> (fn [f]
@@ -490,18 +543,25 @@
 
 (declare codegen-concat)
 
-(defmethod codegen-expr :call [{:keys [f args] :as expr} opts]
-  (let [emitted-args (for [arg args]
-                       (codegen-expr arg opts))
-        expr (assoc expr :emitted-args emitted-args)]
-    (-> (case f
-          :and (codegen-and emitted-args)
-          :or (codegen-or emitted-args)
-          :concat (codegen-concat expr)
-          (codegen-call* expr))
+(defrecord CallExpr [f args]
+  Expr
+  (walk-expr [this inner outer] (outer (update this :args #(mapv inner %))))
+  (direct-child-exprs [_] args)
 
-        (assoc :children emitted-args)
-        (wrap-boxed-poly-return opts))))
+  (codegen-expr [expr opts]
+    (let [emitted-args (for [arg args]
+                         (codegen-expr arg opts))
+          expr (assoc expr :emitted-args emitted-args)]
+      (-> (case f
+            :and (codegen-and emitted-args)
+            :or (codegen-or emitted-args)
+            :concat (codegen-concat expr)
+            (codegen-call* expr))
+
+          (assoc :children emitted-args)
+          (wrap-boxed-poly-return opts)))))
+
+(alter-meta! #'->CallExpr assoc :style/indent 1)
 
 (doseq [[f-kw cmp] [[:< #(do `(neg? ~%))]
                     [:<= #(do `(not (pos? ~%)))]
@@ -1061,36 +1121,41 @@
 (defmethod codegen-call [:cast :any] [{[source-type] :arg-types, :keys [target-type cast-opts]}]
   (codegen-cast {:source-type source-type, :target-type target-type :cast-opts cast-opts}))
 
-(defmethod codegen-expr :struct [{:keys [entries]} opts]
-  (let [emitted-vals (->> entries
-                          (mapv (fn [[k expr]]
-                                  (let [k (symbol k)]
-                                    {:k k
-                                     :val-box (gensym (str (util/symbol->normal-form-symbol k) "-box"))
-                                     :emitted-expr (codegen-expr expr opts)}))))
+(defrecord MapExpr [entries]
+  Expr
+  (walk-expr [_ inner outer] (outer (->MapExpr (update-vals entries inner))))
+  (direct-child-exprs [_] (vals entries))
 
-        return-type [:struct (->> emitted-vals
-                                  (into {} (map (juxt :k (comp :return-type :emitted-expr)))))]
-        map-sym (gensym 'map)]
+  (codegen-expr [_ opts]
+    (let [emitted-vals (->> entries
+                            (mapv (fn [[k expr]]
+                                    (let [k (symbol k)]
+                                      {:k k
+                                       :val-box (gensym (str (util/symbol->normal-form-symbol k) "-box"))
+                                       :emitted-expr (codegen-expr expr opts)}))))
 
-    {:return-type return-type
-     :batch-bindings (conj (->> emitted-vals
-                                (mapv (fn [{:keys [val-box]}]
-                                        [val-box `(ValueBox.)])))
+          return-type [:struct (->> emitted-vals
+                                    (into {} (map (juxt :k (comp :return-type :emitted-expr)))))]
+          map-sym (gensym 'map)]
 
-                           [(-> map-sym (with-tag Map))
-                            (->> emitted-vals
-                                 (into {} (map (fn [{:keys [k val-box]}]
-                                                 [(str k) val-box]))))])
+      {:return-type return-type
+       :batch-bindings (conj (->> emitted-vals
+                                  (mapv (fn [{:keys [val-box]}]
+                                          [val-box `(ValueBox.)])))
 
-     :children (mapv :emitted-expr emitted-vals)
-     :continue (fn [f]
-                 `(do
-                    ~@(for [{:keys [val-box], {:keys [continue]} :emitted-expr} emitted-vals]
-                        (continue (fn [val-type code]
-                                    (write-value-code val-type `(.legWriter ~val-box ~(types/col-type->leg val-type)) code))))
+                             [(-> map-sym (with-tag Map))
+                              (->> emitted-vals
+                                   (into {} (map (fn [{:keys [k val-box]}]
+                                                   [(str k) val-box]))))])
 
-                    ~(f return-type map-sym)))}))
+       :children (mapv :emitted-expr emitted-vals)
+       :continue (fn [f]
+                   `(do
+                      ~@(for [{:keys [val-box], {:keys [continue]} :emitted-expr} emitted-vals]
+                          (continue (fn [val-type code]
+                                      (write-value-code val-type `(.legWriter ~val-box ~(types/col-type->leg val-type)) code))))
+
+                      ~(f return-type map-sym)))})))
 
 (defmethod codegen-call [:get_field :struct] [{[[_ field-types]] :arg-types, :keys [field]}]
   (if-let [val-type (get field-types field)]
@@ -1169,46 +1234,56 @@
        :->call-code (fn [[code]]
                       `(MonoToPolyReader. ~code ~type-id 0))})))
 
-(defmethod codegen-expr :list [{:keys [elements]} opts]
-  (let [emitted-els (->> elements
-                         (into [] (map-indexed (fn [idx el]
-                                                 {:idx idx
-                                                  :el-box (gensym (str "el" idx))
-                                                  :emitted-el (codegen-expr el opts)}))))
+(defrecord ListExpr [exprs]
+  Expr
+  (walk-expr [_ inner outer] (outer (->ListExpr (mapv inner exprs))))
+  (direct-child-exprs [_] exprs)
 
-        return-type [:list (->> (into #{} (map (comp :return-type :emitted-el)) emitted-els)
-                                (apply types/merge-col-types))]]
+  (codegen-expr [_ opts]
+    (let [emitted-els (->> exprs
+                           (into [] (map-indexed (fn [idx el]
+                                                   {:idx idx
+                                                    :el-box (gensym (str "el" idx))
+                                                    :emitted-el (codegen-expr el opts)}))))
 
-    {:return-type return-type
-     :children (mapv :emitted-el emitted-els)
+          return-type [:list (->> (into #{} (map (comp :return-type :emitted-el)) emitted-els)
+                                  (apply types/merge-col-types))]]
 
-     :batch-bindings (->> emitted-els
-                          (mapv (fn [{:keys [el-box]}]
-                                  [el-box `(ValueBox.)])))
-     :continue (fn [f]
-                 (f return-type
-                    `(reify IListValueReader
-                       (~'size [_#] ~(count emitted-els))
+      {:return-type return-type
+       :children (mapv :emitted-el emitted-els)
 
-                       (~'nth [_# idx#]
-                        (case idx#
-                          ~@(->> emitted-els
-                                 (sequence (comp (map-indexed (fn [idx {:keys [el-box], {:keys [continue]} :emitted-el}]
-                                                                [idx (continue (fn [return-type code]
-                                                                                 (let [leg (types/col-type->leg return-type)]
-                                                                                   `(do
-                                                                                      ~(write-value-code return-type `(.legWriter ~el-box ~leg) code)
-                                                                                      ~el-box))))]))
-                                                 cat))))))))}))
+       :batch-bindings (->> emitted-els
+                            (mapv (fn [{:keys [el-box]}]
+                                    [el-box `(ValueBox.)])))
+       :continue (fn [f]
+                   (f return-type
+                      `(reify IListValueReader
+                         (~'size [_#] ~(count emitted-els))
 
-(defmethod codegen-expr :set [expr opts]
-  (let [{[_list el-type] :return-type, continue-list :continue, :as emitted-expr} (codegen-expr (assoc expr :op :list) opts)
-        return-type [:set el-type]]
-    (-> emitted-expr
-        (assoc :return-type return-type
-               :continue (fn [f]
-                           (continue-list (fn [_list-type code]
-                                            (f return-type code))))))))
+                         (~'nth [_# idx#]
+                          (case idx#
+                            ~@(->> emitted-els
+                                   (sequence (comp (map-indexed (fn [idx {:keys [el-box], {:keys [continue]} :emitted-el}]
+                                                                  [idx (continue (fn [return-type code]
+                                                                                   (let [leg (types/col-type->leg return-type)]
+                                                                                     `(do
+                                                                                        ~(write-value-code return-type `(.legWriter ~el-box ~leg) code)
+                                                                                        ~el-box))))]))
+                                                   cat))))))))})))
+
+(defrecord SetExpr [exprs]
+  Expr
+  (walk-expr [_ inner outer] (outer (->SetExpr (mapv inner exprs))))
+  (direct-child-exprs [_] exprs)
+
+  (codegen-expr [_ opts]
+    (let [{[_list el-type] :return-type, continue-list :continue, :as emitted-expr} (codegen-expr (->ListExpr exprs) opts)
+          return-type [:set el-type]]
+      (-> emitted-expr
+          (assoc :return-type return-type
+                 :continue (fn [f]
+                             (continue-list (fn [_list-type code]
+                                              (f return-type code)))))))))
 
 (defmethod codegen-call [:nth :list :int] [{[[_ list-el-type] _n-type] :arg-types}]
   (let [return-type (types/merge-col-types list-el-type :null)]
@@ -1359,6 +1434,148 @@
   (fn [expr opts]
     (f expr (assoc opts :zone-id (.getZone *clock*)))))
 
+(def ^:private nil-literal (->Literal nil))
+
+#_{:clj-kondo/ignore [:unused-binding]}
+(defmulti macroexpand1-call
+  (fn [{:keys [f] :as call-expr}]
+    (keyword (name f)))
+  :default ::default)
+
+(defmethod macroexpand1-call ::default [expr] expr)
+
+(defn macroexpand1l-call [{:keys [f args] :as expr}]
+  (if (> (count args) 2)
+    (->CallExpr f
+      [(update expr :args butlast)
+       (last args)])
+    expr))
+
+(defn macroexpand1r-call [{:keys [f args] :as expr}]
+  (if (> (count args) 2)
+    (->CallExpr f
+      [(first args)
+       (update expr :args rest)])
+    expr))
+
+(doseq [f #{:+ :- :* :/}]
+  (defmethod macroexpand1-call f [expr] (macroexpand1l-call expr)))
+
+(doseq [[f cmp-f] [[:greatest :>] [:least :<]]]
+  (defmethod macroexpand1-call f [{:keys [f args] :as expr}]
+    (case (count args)
+      0 nil-literal
+      1 (first args)
+      2 (let [[l-expr r-expr] args
+              l-sym (gensym 'l)
+              r-sym (gensym 'r)
+              l-local (->Local l-sym)
+              r-local (->Local r-sym)]
+          (->IfSomeExpr l-sym l-expr
+            (->IfSomeExpr r-sym r-expr
+              (->IfExpr (->CallExpr cmp-f [l-local r-local])
+                l-local
+                r-local)
+              nil-literal)
+            nil-literal))
+
+      (->CallExpr f [(update expr :args butlast)
+                     (last args)]))))
+
+(doseq [[f id] #{[:and true] [:or false]}]
+  (defmethod macroexpand1-call f [{:keys [args] :as expr}]
+    (case (count args)
+      0 (->Literal id)
+      1 (first args)
+      2 expr
+      (macroexpand1r-call expr))))
+
+(doseq [f #{:< :<= := :!= :>= :>}]
+  (defmethod macroexpand1-call f [{:keys [args] :as expr}]
+    (case (count args)
+      (0 1) (->Literal (not= f :!=))
+      2 expr
+
+      (->CallExpr :and
+        (for [args (partition 2 1 args)]
+          (->CallExpr f args))))))
+
+(defmethod macroexpand1-call :cond [{:keys [args]}]
+  (case (count args)
+    0 nil-literal
+    1 (first args) ; unlike Clojure, we allow a default expr at the end
+    (let [[test expr & more-args] args]
+      (->IfExpr (->CallExpr :true?
+                  [test])
+        expr
+        (->CallExpr :cond more-args)))))
+
+(defmethod macroexpand1-call :case [{:keys [args]}]
+  (let [[expr & clauses] args
+        local (gensym 'case)]
+    (->LetExpr local expr
+      (->CallExpr :cond
+        (->> (for [[test expr] (partition-all 2 clauses)]
+               (if-not expr
+                 [test] ; default case
+                 [(->CallExpr := [(->Local local) test])
+                  expr]))
+             (mapcat identity))))))
+
+(defmethod macroexpand1-call :coalesce [{:keys [args]}]
+  (case (count args)
+    0 nil-literal
+    1 (first args)
+    (let [local (gensym 'coalesce)]
+      (->IfSomeExpr local (first args)
+        (->Local local)
+        (->CallExpr :coalesce (rest args))))))
+
+(defmethod macroexpand1-call :nullif [{[x y] :args}]
+  (let [local (gensym 'nullif)]
+    (->LetExpr local x
+      (->IfExpr (->CallExpr :true?
+                  [(->CallExpr := [(->Local local) y])])
+        nil-literal
+        (->Local local)))))
+
+;; SQL:2011 §8.3
+(defmethod macroexpand1-call :between [{[x left right :as args] :args, :as expr}]
+  (assert (= 3 (count args)) (format "`between` expects 3 args: '%s'" (pr-str expr)))
+
+  ;; TODO hiding `x` behind a local might mean we don't use metadata when we could.
+  (let [local (gensym 'between)
+        local-expr (->Local local)]
+    (->LetExpr local x
+      (->CallExpr :and
+        [(->CallExpr :>= [local-expr left])
+         (->CallExpr :<= [local-expr right])]))))
+
+(defmethod macroexpand1-call :between-symmetric [{[x left right :as args] :args, :as expr}]
+  (assert (= 3 (count args)) (format "`between-symmetric` expects 3 args: '%s'" (pr-str expr)))
+
+  (let [local (gensym 'between-symmetric)
+        local-expr (->Local local)]
+    (->LetExpr local x
+      (->CallExpr :or
+        [(->CallExpr :between [local-expr left right])
+         (->CallExpr :between [local-expr right left])]))))
+
+(defn macroexpand-expr [expr]
+  (loop [expr expr]
+    (if-not (instance? CallExpr expr)
+      expr
+      (let [new-expr (macroexpand1-call expr)]
+        (if (identical? expr new-expr)
+          new-expr
+          (recur new-expr))))))
+
+(defn macroexpand-all [expr]
+  (prewalk-expr macroexpand-expr expr))
+
+(defn prepare-expr [expr]
+  (macroexpand-all expr))
+
 (def ^:private emit-projection
   "NOTE: we macroexpand inside the memoize on the assumption that
    everything outside yields the same result on the pre-expanded expr - this
@@ -1432,7 +1649,7 @@
             (vr/vec->reader out-vec)))))))
 
 (defn ->expression-relation-selector ^xtdb.operator.IRelationSelector [expr input-types]
-  (let [projector (->expression-projection-spec "select" {:op :call, :f :boolean, :args [expr]} input-types)]
+  (let [projector (->expression-projection-spec "select" (->CallExpr :boolean [expr]) input-types)]
     (reify IRelationSelector
       (select [_ al in-rel params]
         (with-open [selection (.project projector al in-rel params)]
