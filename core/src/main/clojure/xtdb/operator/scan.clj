@@ -17,13 +17,12 @@
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
-            [xtdb.vector.writer :as vw]
-            [xtdb.xtql.edn :as edn])
+            [xtdb.vector.writer :as vw])
   (:import (clojure.lang MapEntry)
-           (com.carrotsearch.hppc IntArrayList)
            (java.io Closeable)
            java.nio.ByteBuffer
            (java.nio.file Path)
+           (com.carrotsearch.hppc IntArrayList)
            (java.util ArrayList Comparator HashMap Iterator LinkedList Map PriorityQueue)
            (java.util.function IntPredicate Predicate)
            (java.util.stream IntStream)
@@ -40,7 +39,8 @@
            xtdb.operator.IRelationSelector
            (xtdb.trie ArrowHashTrie$Leaf EventRowPointer HashTrie HashTrieKt LiveHashTrie$Leaf MergePlanNode MergePlanTask)
            (xtdb.util TemporalBounds TemporalBounds$TemporalColumn)
-           (xtdb.vector IMultiVectorRelationFactory IRelationWriter IVectorIndirection$Selection IVectorReader IVectorWriter IndirectMultiVectorReader RelationReader RelationWriter)
+           (xtdb.vector IRelationWriter IRowCopier IVectorReader IVectorWriter RelationReader RelationWriter
+                        IMultiVectorRelationFactory IVectorIndirection$Selection IndirectMultiVectorReader)
            (xtdb.watermark ILiveTableWatermark IWatermarkSource Watermark)))
 
 (s/def ::table symbol?)
@@ -458,8 +458,7 @@
                              (let [input-types {:col-types (update-vals fields types/field->col-type)
                                                 :param-types (update-vals param-fields types/field->col-type)}]
                                (MapEntry/create col-name
-                                                (expr/->expression-relation-selector (-> (edn/parse-expr select-form)
-                                                                                         (expr/<-Expr input-types))
+                                                (expr/->expression-relation-selector (expr/form->expr select-form input-types)
                                                                                      input-types))))
                            (into {}))
 
@@ -478,7 +477,6 @@
          :->cursor (fn [{:keys [allocator, ^Watermark watermark, basis, params default-all-valid-time?]}]
                      (if-let [derived-table-schema (info-schema/derived-tables table-name)]
                        (info-schema/->cursor allocator derived-table-schema table-name col-names col-preds params metadata-mgr watermark)
-
                        (let [iid-bb (selects->iid-byte-buffer selects params)
                              col-preds (cond-> col-preds
                                          iid-bb (assoc "xt$iid" (iid-selector iid-bb)))
