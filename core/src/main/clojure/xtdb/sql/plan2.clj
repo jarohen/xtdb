@@ -1,18 +1,17 @@
 (ns xtdb.sql.plan2
-  (:require [clojure.string :as str]
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
             [xtdb.error :as err]
             [xtdb.logical-plan :as lp]
             [xtdb.types :as types]
             [xtdb.util :as util])
   (:import clojure.lang.MapEntry
            (java.time Duration LocalDate LocalDateTime LocalTime OffsetTime Period ZoneId ZoneOffset ZonedDateTime)
-           (java.util HashMap Map)
+           (java.util HashMap HashSet Map Set)
            java.util.function.Function
-           (java.time Duration LocalDate LocalDateTime LocalTime OffsetTime Period ZoneId ZoneOffset ZonedDateTime)
-           (java.util HashMap Map)
            java.util.function.Function
            (org.antlr.v4.runtime CharStreams CommonTokenStream ParserRuleContext)
-           (xtdb.antlr SqlLexer SqlParser SqlParser$SetClauseContext SqlParser$BaseTableContext SqlParser$IntervalQualifierContext SqlParser$JoinSpecificationContext SqlParser$JoinTypeContext SqlParser$ObjectNameAndValueContext SqlParser$SearchedWhenClauseContext SqlParser$SimpleWhenClauseContext SqlParser$WhenOperandContext SqlParser$WithTimeZoneContext SqlVisitor)
+           (xtdb.antlr SqlLexer SqlLexer SqlParser SqlParser SqlParser$BaseTableContext SqlParser$BaseTableContext SqlParser$IntervalQualifierContext SqlParser$IntervalQualifierContext SqlParser$JoinSpecificationContext SqlParser$JoinSpecificationContext SqlParser$JoinTypeContext SqlParser$JoinTypeContext SqlParser$ObjectNameAndValueContext SqlParser$ObjectNameAndValueContext SqlParser$SearchedWhenClauseContext SqlParser$SearchedWhenClauseContext SqlParser$SetClauseContext SqlParser$SetClauseContext SqlParser$SimpleWhenClauseContext SqlParser$SimpleWhenClauseContext SqlParser$SortSpecificationContext SqlParser$WhenOperandContext SqlParser$WhenOperandContext SqlParser$WithTimeZoneContext SqlParser$WithTimeZoneContext SqlVisitor SqlVisitor)
            (xtdb.types IntervalMonthDayNano)))
 
 (defn- add-err! [{:keys [!errors]} err]
@@ -42,8 +41,7 @@
 
 (extend-protocol Scope nil
   (available-cols [_ _])
-  (find-decl [_ _])
-  (find-decl [_ _ _])
+  (find-decl ([_ _]) ([_ _ _]))
 
   (plan-scope [_]
     [:table [{}]]))
@@ -306,6 +304,64 @@
     < '>=, > '<=
     <= '>, >= '<))
 
+(defrecord InvalidOrderByOrdinal [out-cols ordinal])
+
+(defn parse-order-spec [idx ^SqlParser$SortSpecificationContext sort-spec-ctx]
+  {:expr-sym (-> (symbol (format "xt$ob_%d" idx))
+                 (vary-meta assoc :order-by-sym? true))
+
+   :expr-ctx (.expr sort-spec-ctx)
+
+   :direction (or (some-> (.orderingSpecification sort-spec-ctx)
+                          (.getText)
+                          str/lower-case
+                          keyword)
+                  :asc)
+
+   ;; we're allowed to default either way here
+   :nulls (or (some-> (.nullOrdering sort-spec-ctx)
+                      (.getChild 1)
+                      (.getText)
+                      str/lower-case
+                      keyword)
+
+              :last)})
+
+(defn- ->eobr-projection [{:keys [!id-count]} sym]
+  (let [eobr-sym (symbol (format "xt$eobr_%s_%d" (name sym) (dec (swap! !id-count inc))))]
+    (->ProjectedCol {eobr-sym sym}
+                    eobr-sym)))
+
+(defrecord ExtendedOrderByColRefScope [env, scope, projected-col-names, ^Map !extended-ob-col-refs]
+  Scope
+  (find-decl [_ col-name]
+    (or (when-let [projected-col (some-> (get projected-col-names col-name) symbol)]
+          (->ProjectedCol projected-col projected-col))
+
+        (when-let [sym (find-decl scope col-name)]
+          (:col-sym (.computeIfAbsent !extended-ob-col-refs sym
+                                      (reify Function
+                                        (apply [_ sym]
+                                          (-> (->eobr-projection env sym)
+                                              (update :col-sym vary-meta assoc :extended-ob-col-ref col-name)))))))))
+
+  (find-decl [_ table-name col-name]
+    (when-let [sym (find-decl scope table-name col-name)]
+      (:col-sym (.computeIfAbsent !extended-ob-col-refs sym
+                                  (reify Function
+                                    (apply [_ sym]
+                                      (-> (->eobr-projection env sym)
+                                          (update :col-sym vary-meta assoc :extended-ob-col-ref [table-name col-name])))))))))
+
+(defn- extended-ob-col-refs [order-by-specs env scope projected-col-names]
+  (let [!extended-ob-col-refs (HashMap.)
+        expr-visitor (->ExprPlanVisitor env (->ExtendedOrderByColRefScope env scope projected-col-names !extended-ob-col-refs))]
+
+    (doseq [{:keys [^ParserRuleContext expr-ctx]} order-by-specs]
+      (.accept expr-ctx expr-visitor))
+
+    (mapv val !extended-ob-col-refs)))
+
 (defrecord ScopeVisitor [env scope]
   SqlVisitor
   (visitFromClause [this ctx]
@@ -362,7 +418,7 @@
            (-> (plan-scope scope)
                (apply-sqs (into {} !subqs)))]))))
 
-  (visitSelectClause [_ ctx]
+  (visitSelectClause [{:keys [order-by-specs]} ctx]
     (let [sl-ctx (.selectList ctx)
           !subqs (HashMap.)
           projected-cols (if (or (nil? ctx) (.ASTERISK sl-ctx))
@@ -394,56 +450,16 @@
                                                                          :let [sym (find-decl scope table-name col-name)]]
                                                                      (->ProjectedCol sym sym))
                                                                    (throw (UnsupportedOperationException. (str "Table not found: " table-name))))))))))
-                                               cat))))]
+                                               cat))))
+
+          projected-cols (into projected-cols (extended-ob-col-refs order-by-specs env scope (into #{} (map (comp str :col-sym)) projected-cols)))]
+
       (reify Scope
         (plan-scope [_]
           (-> [:project (mapv :projection projected-cols)
                (-> (plan-scope scope)
                    (apply-sqs (into {} !subqs)))]
               (with-meta {:col-syms (mapv :col-sym projected-cols)})))))))
-
-#_
-(defn find-decl [{:keys [scopes !id-count] :as env} table-name col-name]
-  (let [table-name-norm (some-> table-name (util/str->normal-form-str))
-        {:keys [decl scope error?]} (or (some (if table-name
-                                                (fn [{:keys [tables] :as scope}]
-                                                  (when-let [table (get tables table-name-norm)]
-                                                    (if-let [col (-try-refer-col table col-name)]
-                                                      {:decl col, :scope scope}
-                                                      (do
-                                                        (add-err! env (->ColumnNotFound col-name))
-                                                        {:error? true}))))
-
-                                                (fn [{:keys [tables] :as scope}]
-                                                  (let [matches (for [table (vals tables)
-                                                                      :let [col (-try-refer-col table col-name)]
-                                                                      :when col]
-                                                                  {:decl col, :scope scope})]
-
-                                                    (case (count matches)
-                                                      0 nil
-                                                      1 (first matches)
-                                                      (do
-                                                        (add-err! env (->AmbiguousColumnReference col-name))
-                                                        {:error? true})))))
-
-                                              scopes)
-
-                                        (do
-                                          (add-err! env (->ColumnNotFound col-name))
-                                          {:error? true}))]
-    (when-not error?
-      (if scope
-        (if-not (identical? scope (first scopes))
-          (let [{:keys [^Map !sq-refs]} scope]
-            (.computeIfAbsent !sq-refs decl
-                              (reify Function
-                                (apply [_ _]
-                                  (-> (symbol (str "?xt$sq_ref" (dec (swap! !id-count inc))))
-                                      (vary-meta assoc :correlated-column? true))))))
-
-          (-> decl (vary-meta assoc :column? true)))
-        decl))))
 
 (defn seconds-fraction->nanos ^long [seconds-fraction]
   (if seconds-fraction
@@ -645,16 +661,18 @@
 
   (visitColumnExpr [this ctx] (-> (.columnReference ctx) (.accept this)))
 
-  (visitColumnReference [_ ctx]
+  (visitColumnReference [{:keys [^Set !ob-col-refs]} ctx]
     (let [schema-name (some-> (.schemaName ctx) identifier-str)
           table-name (some-> (.tableName ctx) identifier-str)
           col-name (identifier-str (.columnName ctx))]
       (when schema-name (throw (UnsupportedOperationException. "schema")))
 
-      (or (if table-name
-            (find-decl scope table-name col-name)
-            (find-decl scope col-name))
-          (add-err! env (->ColumnNotFound col-name)))))
+      (when-let [sym (or (if table-name
+                           (find-decl scope table-name col-name)
+                           (find-decl scope col-name))
+                         (add-err! env (->ColumnNotFound col-name)))]
+        (some-> !ob-col-refs (.add sym))
+        sym)))
 
   (visitParamExpr [this ctx] (-> (.parameterSpecification ctx) (.accept this)))
 
@@ -1094,72 +1112,98 @@
 
 (defrecord ColumnCountMismatch [expected given])
 
-#_
-(defn plan-select-list [^SqlParser$SelectListContext ctx, {:keys [scopes] :as env}]
-  (let [{:keys [tables]} (first scopes)]
-    (if (or (nil? ctx) (.ASTERISK ctx))
-      {:projected-cols (vec (for [table (vals tables)
-                                  col-name (-available-cols table)
-                                  :let [sym (-try-refer-col table col-name)]]
-                              (->ProjectedCol sym sym)))}
-
-      (let [!subqs (HashMap.)]
-        {:projected-cols (->> (.selectSublist ctx)
-                              (into [] (comp (map-indexed
-                                              (fn [col-idx ^ParserRuleContext sl-elem]
-                                                (.accept (.getChild sl-elem 0)
-                                                         (reify SqlVisitor
-                                                           (visitDerivedColumn [_ ctx]
-                                                             [(let [expr (.accept (.expr ctx) (map->ExprPlanVisitor {:env env, :!subqs !subqs}))]
-                                                                (if-let [as-clause (.asClause ctx)]
-                                                                  (let [col-name (symbol (identifier-str as-clause))]
-                                                                    (->ProjectedCol {col-name expr} col-name))
-
-                                                                  (if (symbol? expr)
-                                                                    (->ProjectedCol expr expr)
-                                                                    (let [col-name (symbol (str "xt$column_" (inc col-idx)))]
-                                                                      (->ProjectedCol {col-name expr} col-name)))))])
-
-                                                           (visitQualifiedAsterisk [_ ctx]
-                                                             (let [table-name (identifier-str (.identifier ctx))
-                                                                   table (get tables table-name)]
-                                                               (if-let [table-cols (some-> table (-available-cols))]
-                                                                 (for [col-name table-cols
-                                                                       :let [sym (-try-refer-col table col-name)]]
-                                                                   (->ProjectedCol sym sym))
-                                                                 (throw (UnsupportedOperationException. (str "Table not found: " table-name))))))))))
-                                             cat)))
-         :subqs (into {} !subqs)}))))
-
 (defprotocol Optimise
   (optimise [stmt]))
 
 (defrecord QueryExpr [plan col-syms]
   Optimise (optimise [this] (update this :plan lp/rewrite-plan)))
 
+(defn ->ob-scope [env plan col-syms order-by-specs]
+  (let [available-col-syms (set col-syms)
+        extended-ob-col-refs (->> available-col-syms
+                                  (into {} (keep (fn [col-sym]
+                                                   (when-let [extended-ob-col-ref (:extended-ob-col-ref (meta col-sym))]
+                                                     [extended-ob-col-ref col-sym])))))]
+    (reify Scope
+      (find-decl [_ col-name]
+        (or (get extended-ob-col-refs col-name)
+            (get available-col-syms (symbol col-name))))
+
+      (find-decl [_ table-name col-name]
+        (get extended-ob-col-refs [table-name col-name]))
+
+      (plan-scope [this]
+        (let [ob-expr-plan-visitor (->ExprPlanVisitor env this)
+              out-cols (->> available-col-syms
+                            (into [] (remove (comp (some-fn :order-by-sym? :extended-ob-col-ref) meta))))]
+          (-> [:project out-cols
+               [:order-by (->> order-by-specs
+                               (mapv (fn [{:keys [expr-sym direction nulls]}]
+                                       [expr-sym {:direction direction
+                                                  :null-ordering (case nulls :first :nulls-first, :last :nulls-last)}])))
+                [:map (->> order-by-specs
+                           (mapv (fn [{:keys [expr-sym ^ParserRuleContext expr-ctx]}]
+                                   (let [ob-expr (.accept expr-ctx ob-expr-plan-visitor)]
+                                     {expr-sym (cond
+                                                 (not (number? ob-expr)) ob-expr
+
+                                                 (< 1 ob-expr (count col-syms))
+                                                 (add-err! env (->InvalidOrderByOrdinal col-syms ob-expr))
+
+                                                 :else (nth col-syms (dec ob-expr)))}))))
+                 plan]]]
+              (with-meta {:col-syms out-cols})))))))
+
 (defrecord QueryPlanVisitor [env scope]
   SqlVisitor
   (visitQueryExpression [this ctx]
-    (as-> (.accept (.queryExpressionBody ctx) this)
-        {:keys [plan col-syms]}
+    (let [order-by-specs (some->> (.orderByClause ctx)
+                                  (.sortSpecificationList)
+                                  (.sortSpecification)
+                                  (map-indexed parse-order-spec))]
 
-      (let [out-projections (->> col-syms
-                                 (into [] (map (fn [col-sym]
-                                                 (if (namespace col-sym)
-                                                   (let [out-sym (symbol (name col-sym))]
-                                                     (->ProjectedCol {out-sym col-sym}
-                                                                     out-sym))
-                                                   (->ProjectedCol col-sym col-sym))))))]
+      (as-> (-> (.queryExpressionBody ctx)
+                (.accept (assoc this :order-by-specs order-by-specs)))
+          {:keys [plan col-syms] :as query-expr}
 
-        (->QueryExpr [:project (mapv :projection out-projections)
-                      plan]
-                     (mapv :col-sym out-projections)))))
+        (if order-by-specs
+          (let [plan (plan-scope (->ob-scope env plan col-syms order-by-specs))]
+            (->QueryExpr plan (:col-syms (meta plan))))
+
+          query-expr)
+
+        (let [out-projections (->> col-syms
+                                   (into [] (map (fn [col-sym]
+                                                   (if (namespace col-sym)
+                                                     (let [out-sym (symbol (name col-sym))]
+                                                       (->ProjectedCol {out-sym col-sym}
+                                                                       out-sym))
+                                                     (->ProjectedCol col-sym col-sym))))))]
+          (->QueryExpr [:project (mapv :projection out-projections)
+                        plan]
+                       (mapv :col-sym out-projections)))
+
+        (let [offset-clause (.resultOffsetClause ctx)
+              limit-clause (.fetchFirstClause ctx)]
+          (cond-> query-expr
+            (or offset-clause limit-clause)
+            (update :plan (fn [plan]
+                            (let [expr-visitor (->ExprPlanVisitor env scope)]
+                              [:top {:offset (some-> offset-clause
+                                                     (.offsetRowCount)
+                                                     (.accept expr-visitor))
+
+                                     :limit (when limit-clause
+                                              (or (some-> (.fetchFirstRowCount limit-clause)
+                                                          (.accept expr-visitor))
+                                                  1))}
+                               plan]))))))))
 
   (visitUnionQuery [_ _] (throw (UnsupportedOperationException. "UNION")))
   (visitExceptQuery [_ _] (throw (UnsupportedOperationException. "EXCEPT")))
   (visitIntersectQuery [_ _] (throw (UnsupportedOperationException. "INTERSECT")))
 
-  (visitQuerySpecification [{:keys [out-col-syms]} ctx]
+  (visitQuerySpecification [{:keys [out-col-syms order-by-specs]} ctx]
     (let [qs-scope (if-let [from (.fromClause ctx)]
                      (.accept from (->ScopeVisitor env scope))
                      scope)
@@ -1169,19 +1213,19 @@
                      qs-scope)
 
           qs-scope (if-let [select-clause (.selectClause ctx)]
-                     (.accept select-clause (->ScopeVisitor env qs-scope))
+                     (.accept select-clause (-> (->ScopeVisitor env qs-scope)
+                                                (assoc :order-by-specs order-by-specs)))
                      (throw (UnsupportedOperationException. "select *")))
 
-          plan (plan-scope qs-scope)
-          {:keys [col-syms]} (meta plan)]
+          plan (plan-scope qs-scope)]
 
-      (as-> (->QueryExpr plan col-syms)
+      (as-> (->QueryExpr plan (:col-syms (meta plan)))
           {:keys [plan col-syms] :as query-expr}
 
         (if out-col-syms
           (->QueryExpr [:rename (zipmap out-col-syms col-syms)
                         plan]
-                       out-col-syms)
+                       (into out-col-syms (filter (comp :extended-ob-col-ref meta)) col-syms))
           query-expr))))
 
   (visitValuesQuery [this ctx] (-> (.tableValueConstructor ctx) (.accept this)))
@@ -1364,6 +1408,8 @@
                                        (throw (UnsupportedOperationException. "TODO")))
                                    (atom (set internal-cols)))
 
+          ;; TODO support subqs
+
           expr-visitor (->ExprPlanVisitor env dml-scope)
 
           set-clauses (->> (for [^SqlParser$SetClauseContext set-clause (->> (.setClauseList ctx) (.setClause))
@@ -1516,6 +1562,6 @@
          (vary-meta assoc :param-count @!param-count)))))
 
 (comment
-  (plan-statement "SELECT bar, EXISTS (SELECT quux FROM bar WHERE quux = baz) FROM foo"
+  (plan-statement "SELECT bar + 1 as inc_bar FROM foo ORDER by inc_bar, 1, baz"
                   {:table-info {"foo" #{"bar" "baz"}
                                 "bar" #{"quux"}}}))
