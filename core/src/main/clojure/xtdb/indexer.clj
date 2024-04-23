@@ -298,7 +298,7 @@
                                                               (map (fn [^IVectorReader vec]
                                                                      (.withName vec (util/str->normal-form-str (.getName vec))))))
                                                          (.rowCount in-rel))
-              table (util/str->normal-form-str table)
+              table (util/str->normal-form-str (str table))
               id-col (.readerForName in-rel "xt$id")
               valid-from-rdr (.readerForName in-rel "xt$valid_from")
               valid-to-rdr (.readerForName in-rel "xt$valid_to")

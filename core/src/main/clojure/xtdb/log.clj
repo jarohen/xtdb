@@ -414,7 +414,7 @@
   (try
     (doseq [tx-op tx-ops
             :when (instance? TxOp$Sql tx-op)]
-      (sql/parse-query (.sql ^TxOp$Sql tx-op)))
+      (sql/compile-query (.sql ^TxOp$Sql tx-op)))
     (catch Throwable e
       (CompletableFuture/failedFuture e))))
 
