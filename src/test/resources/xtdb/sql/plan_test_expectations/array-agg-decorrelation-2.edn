@@ -1,11 +1,17 @@
-[:rename
- {x5 xt$column_1}
- [:project
-  [x5]
-  [:apply
-   :single-join
-   {x1 ?x7}
-   [:rename {z x1} [:scan {:table tab0} [z]]]
+[:project
+ [{xt$column_1 xt$sq_0}]
+ [:apply
+  :single-join
+  {tab0.1/z ?xt$sq_z_2}
+  [:rename tab0.1 [:scan {:table tab0} [z]]]
+  [:project
+   [{xt$sq_0 xt$array_agg_out5}]
    [:group-by
-    [{x5 (array-agg x3)}]
-    [:table [x3] [{x3 1} {x3 2} {x3 3} {x3 ?x7}]]]]]]
+    [{xt$array_agg_out5 (array-agg x.4/y)}]
+    [:rename
+     x.4
+     [:project
+      [{y xt.values.2/y}]
+      [:rename
+       xt.values.2
+       [:table [y] [{:y 1} {:y 2} {:y 3} {:y ?xt$sq_z_2}]]]]]]]]]
