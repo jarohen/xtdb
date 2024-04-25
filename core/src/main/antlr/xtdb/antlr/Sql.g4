@@ -192,6 +192,7 @@ exprPrimary
     | literal # LiteralExpr
     | exprPrimary '.' fieldName #FieldAccess
     | exprPrimary '[' expr ']' #ArrayAccess
+    | exprPrimary '::' dataType #CastExpr
     | exprPrimary '||' exprPrimary #ConcatExpr
 
     | parameterSpecification # ParamExpr
