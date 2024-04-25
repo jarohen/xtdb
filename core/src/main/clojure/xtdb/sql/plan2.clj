@@ -151,8 +151,14 @@
                                 (.accept
                                  (reify SqlVisitor
                                    (visitJoinCondition [_ ctx]
-                                     [(-> (.expr ctx)
-                                          (.accept (->ExprPlanVisitor env this-scope)))]))))
+                                     (let [expr-visitor (->ExprPlanVisitor env this-scope)]
+                                       [(-> (.expr ctx)
+                                            (.accept expr-visitor))]))
+
+                                   (visitNamedColumnsJoin [_ ctx]
+                                     (vec (for [col-name (->> (.columnNameList ctx) (.columnName) (mapv identifier-str))]
+                                            {(find-decl l env col-name)
+                                             (find-decl r env col-name)}))))))
                         [])
           planned-l (plan-scope l)
           planned-r (plan-scope r)]
