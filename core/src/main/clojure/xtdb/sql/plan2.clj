@@ -116,6 +116,32 @@
                     for-st (assoc :for-system-time for-st))
             (vec (.keySet !reqd-cols))]])))))
 
+#_
+(defn- named-cols-join-cond [env l-tables r-tables col-names]
+  (let [l-env (-> env
+                  (update :scopes conj (->Scope l-tables nil (HashMap.))))
+        r-env (-> env
+                  (update :scopes conj (->Scope r-tables nil (HashMap.))))]
+    (vec (for [col-name col-names]
+           {(find-decl l-env nil col-name)
+            (find-decl r-env nil col-name)}))))
+
+#_
+(defn- plan-join-spec [^ParserRuleContext ctx env l-tables r-tables]
+  (-> ctx
+      (.accept
+       (reify SqlVisitor
+         (visitJoinCondition [_ ctx]
+           (let [expr-visitor (->ExprPlanVisitor (-> env
+                                                     (update :scopes conj (->Scope (merge l-tables r-tables) nil (HashMap.)))))]
+             [(-> (.expr ctx)
+                  (.accept expr-visitor))]))
+
+         (visitNamedColumnsJoin [_ ctx]
+           (named-cols-join-cond env l-tables r-tables
+                                 (->> (.columnNameList ctx) (.columnName) (mapv identifier-str))))))))
+
+
 (defrecord JoinTable [env
                       ^SqlParser$JoinTypeContext join-type-ctx
                       ^SqlParser$JoinSpecificationContext join-spec-ctx
@@ -147,6 +173,20 @@
                       "right" :right-outer-join
                       "full" :full-outer-join
                       :join)
+          #_
+          (if natural?
+            (let [l-cols (set (for [table (vals l-tables)
+                                    col (-available-cols table)]
+                                col))
+                  r-cols (set (for [table (vals r-tables)
+                                    col (-available-cols table)]
+                                col))]
+              (named-cols-join-cond env l-tables r-tables
+                                    (vec (set/intersection l-cols r-cols))))
+
+            (some-> join-spec-ctx
+                    (plan-join-spec env l-tables r-tables)))
+
           join-cond (or (some-> join-spec-ctx
                                 (.accept
                                  (reify SqlVisitor
@@ -389,6 +429,24 @@
     (->JoinTable env (.joinType ctx) (.joinSpecification ctx)
                  (-> (.tableReference ctx 0) (.accept this))
                  (-> (.tableReference ctx 1) (.accept this))))
+
+  #_
+  (visitCrossJoinTable [this ctx]
+    (->JoinTables false :cross-join nil
+                  (-> (.tableReference ctx 0) (.accept this))
+                  (-> (.tableReference ctx 1) (.accept this))))
+
+  #_
+  (visitNaturalJoinTable [this ctx]
+    (->JoinTables true
+                  (case (some-> (.joinType ctx) (.outerJoinType) (.getText))
+                    "left" :left-outer-join
+                    "right" :right-outer-join
+                    "full" :full-outer-join
+                    :join)
+                  nil
+                  (-> (.tableReference ctx 0) (.accept this))
+                  (-> (.tableReference ctx 1) (.accept this))))
 
   (visitDerivedTable [{{:keys [!id-count]} :env} ctx]
     (let [{:keys [plan col-syms]} (-> (.subquery ctx) (.queryExpression)
