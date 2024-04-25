@@ -152,6 +152,7 @@ expr
     | expr '[' expr ']' #ArrayAccess
     | '+' expr #UnaryPlusExpr
     | '-' expr #UnaryMinusExpr
+    | expr '::' dataType #CastExpr
     | expr '*' expr #MultiplyExpr
     | expr '/' expr #DivideExpr
     | expr '+' expr #AddExpr
