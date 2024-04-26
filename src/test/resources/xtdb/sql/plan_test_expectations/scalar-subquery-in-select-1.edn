@@ -1,0 +1,8 @@
+[:project
+ [{some_column (= 1 xt$sq_0)}]
+ [:single-join
+  []
+  [:rename x.1 [:scan {:table x} [{y (= y 1)}]]]
+  [:project
+   [{xt$sq_0 foo.2/bar}]
+   [:rename foo.2 [:scan {:table foo} [bar]]]]]]
