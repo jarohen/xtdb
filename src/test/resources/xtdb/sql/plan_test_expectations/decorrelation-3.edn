@@ -1,19 +1,29 @@
-[:rename
- {x1 name, x11 xt$column_2}
- [:project
-  [x1 x11]
+[:project
+ [{name customers.1/name} {xt$column_2 xt$sq_0}]
+ [:map
+  [{xt$sq_0 xt$row_count_5}]
   [:group-by
-   [x1 x2 x3 xt$row_number_0 {x11 (count x10)}]
+   [customers.1/name
+    customers.1/custno
+    customers.1/country
+    xt$needle
+    xt$sq_0
+    xt$row_number_0
+    {xt$row_count_5 (row-count)}]
    [:left-outer-join
-    [{x2 x8}]
+    [{customers.1/custno orders.3/custno}]
     [:map
      [{xt$row_number_0 (row-number)}]
-     [:anti-join
-      [(or (= x3 x5) (nil? x3) (nil? x5))]
-      [:rename
-       {name x1, custno x2, country x3}
-       [:scan {:table customers} [name custno country]]]
-      [:rename {country x5} [:scan {:table salesp} [country]]]]]
-    [:map
-     [{x10 1}]
-     [:rename {custno x8} [:scan {:table orders} [custno]]]]]]]]
+     [:map
+      [{xt$sq_0 true}]
+      [:semi-join
+       [(= xt$needle country)]
+       [:map
+        [{xt$needle customers.1/country}]
+        [:rename
+         customers.1
+         [:scan {:table customers} [name custno country]]]]
+       [:project
+        [{country salesp.2/country}]
+        [:rename salesp.2 [:scan {:table salesp} [country]]]]]]]
+    [:rename orders.3 [:scan {:table orders} [custno]]]]]]]

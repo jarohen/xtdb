@@ -1,18 +1,38 @@
-[:rename
- {x1 a1}
- [:project
-  [x1]
-  [:mega-join
-   [{x1 x5}]
-   [[:semi-join
-     [{x7 x15}]
-     [:rename {c1 x7} [:scan {:table t3} [c1]]]
-     [:table [x15] [{x15 792} {x15 14}]]]
-    [:semi-join
-     [{x2 x9}]
-     [:rename {a1 x1, b1 x2} [:scan {:table t1} [a1 b1]]]
-     [:table [x9] [{x9 532} {x9 593}]]]
-    [:semi-join
-     [{x4 x12}]
-     [:rename {b1 x4, a2 x5} [:scan {:table t2} [b1 a2]]]
-     [:table [x12] [{x12 808} {x12 662}]]]]]]]
+[:project
+ [{a1 t1.1/a1}]
+ [:map
+  [{xt$sq_1 true}]
+  [:semi-join
+   [(= xt$needle xt.values.5/xt$column_1)]
+   [:map
+    [{xt$needle t2.2/b1}]
+    [:map
+     [{xt$sq_2 true}]
+     [:semi-join
+      [(= xt$needle xt.values.6/xt$column_1)]
+      [:map
+       [{xt$needle t3.3/c1}]
+       [:map
+        [{xt$sq_0 true}]
+        [:semi-join
+         [(= xt$needle xt.values.4/xt$column_1)]
+         [:map
+          [{xt$needle t1.1/b1}]
+          [:mega-join
+           [(= t1.1/a1 t2.2/a2)]
+           [[:rename t1.1 [:scan {:table t1} [b1 a1]]]
+            [:rename t2.2 [:scan {:table t2} [b1 a2]]]
+            [:rename t3.3 [:scan {:table t3} [c1]]]]]]
+         [:rename
+          xt.values.4
+          [:table
+           [xt$column_1]
+           [{:xt$column_1 532} {:xt$column_1 593}]]]]]]
+      [:rename
+       xt.values.6
+       [:table
+        [xt$column_1]
+        [{:xt$column_1 792} {:xt$column_1 14}]]]]]]
+   [:rename
+    xt.values.5
+    [:table [xt$column_1] [{:xt$column_1 808} {:xt$column_1 662}]]]]]]

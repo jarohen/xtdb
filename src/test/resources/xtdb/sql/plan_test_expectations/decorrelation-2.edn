@@ -1,8 +1,12 @@
-[:rename
- {x1 country, x2 custno}
- [:semi-join
-  [{x2 x4}]
-  [:rename
-   {country x1, custno x2}
-   [:scan {:table customers} [{country (= country "Mexico")} custno]]]
-  [:rename {custno x4} [:scan {:table orders} [custno]]]]]
+[:project
+ [{country customers.1/country} {custno customers.1/custno}]
+ [:map
+  [{xt$sq_0 true}]
+  [:semi-join
+   [{customers.1/custno custno}]
+   [:rename
+    customers.1
+    [:scan {:table customers} [custno {country (= country "Mexico")}]]]
+   [:project
+    [{custno orders.2/custno}]
+    [:rename orders.2 [:scan {:table orders} [custno]]]]]]]
