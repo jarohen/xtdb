@@ -5,4 +5,4 @@
            :xtql/missing-parameter {:level :error}
            :xtql/type-mismatch {:level :error}
            :xtql/invalid-arity {:level :error}}
- :hooks {:analyze-call {xtdb.api/q hooks.xtql/q}}}
+ :hooks {#_#_:analyze-call {xtdb.api/q hooks.xtql/q}}}

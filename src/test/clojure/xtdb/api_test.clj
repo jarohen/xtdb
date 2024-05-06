@@ -458,19 +458,19 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
 
 (t/deftest test-basic-xtql-dml
   (letfn [(all-users [tx]
-            (->> (xt/q *node* '(from :users [first-name last-name xt/valid-from xt/valid-to])
+            (->> (xt/q *node* '($ :users first-name last-name xt/valid-from xt/valid-to)
                        {:basis {:at-tx tx}
                         ;; TODO when `from` supports for-valid-time we can shift this to the query
                         :default-all-valid-time? true})
                  (into #{} (map (juxt :first-name :last-name :xt/valid-from :xt/valid-to)))))]
 
-    (let [tx1 (xt/submit-tx *node* [[:put-docs {:into :users, :valid-from #inst "2018"}
+    (let [tx1 (xt/submit-tx *node* [[:put-docs {:into :users, :for-valid-time [:from #inst "2018"]}
                                      {:xt/id "dave", :first-name "Dave", :last-name "Davis"}]
-                                    [:put-docs {:into :users, :valid-from #inst "2019"}
+                                    [:put-docs {:into :users, :for-valid-time [:from #inst "2019"]}
                                      {:xt/id "claire", :first-name "Claire", :last-name "Cooper"}]
-                                    [:put-docs {:into :users, :valid-from #inst "2020"}
+                                    [:put-docs {:into :users, :for-valid-time [:from #inst "2020"]}
                                      {:xt/id "alan", :first-name "Alan", :last-name "Andrews"}]
-                                    [:put-docs {:into :users, :valid-from #inst "2021"}
+                                    [:put-docs {:into :users, :for-valid-time [:from #inst "2021"]}
                                      {:xt/id "susan", :first-name "Susan", :last-name "Smith"}]])
           tx1-expected #{["Dave" "Davis", (time/->zdt #inst "2018"), nil]
                          ["Claire" "Cooper", (time/->zdt #inst "2019"), nil]
@@ -482,21 +482,26 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
       (t/is (= tx1-expected (all-users tx1)))
 
       (t/testing "insert by query"
-        (xt/submit-tx *node* [[:insert-into :users2 '(from :users {:bind [xt/id {:first-name given-name, :last-name surname} xt/valid-from xt/valid-to]
-                                                                   :for-valid-time :all-time})]])
+        (xt/submit-tx *node* [[:insert '{:into :users2
+                                         :where [($ {:from :users, :for-valid-time :all-time}
+                                                    xt/id {:first-name given-name, :last-name surname}
+                                                    xt/valid-from xt/valid-to)]}]])
 
         (t/is (= #{["Dave" "Davis", (time/->zdt #inst "2018"), nil]
                    ["Claire" "Cooper", (time/->zdt #inst "2019"), nil]
                    ["Alan" "Andrews", (time/->zdt #inst "2020"), nil]
                    ["Susan" "Smith", (time/->zdt #inst "2021") nil]}
-                 (->> (xt/q *node* '(from :users2 {:bind [given-name surname xt/valid-from xt/valid-to]
-                                                   :for-valid-time :all-time}))
+                 (->> (xt/q *node* '($ {:from :users2, :for-valid-time :all-time}
+                                       given-name surname xt/valid-from xt/valid-to))
                       (into #{} (map (juxt :given-name :surname :xt/valid-from :xt/valid-to)))))))
 
-      (let [tx2 (xt/submit-tx *node* [[:delete '{:from :users
-                                                 :for-valid-time (from #inst "2020-05-01")
-                                                 :bind [{:xt/id $uid}]}
-                                       {:uid "dave"}]])
+      (let [tx2 (xt/submit-tx *node* [[:delete '{:from :users, :for-valid-time [:from #inst "2020-05-01"]
+                                                 :match [{:xt/id uid}]
+                                                 :in [uid]}
+                                       "dave"]
+
+                                      [:delete-keys {:from :users, :for-valid-time [:from #inst "2020-05-01"]}
+                                       "dave"]])
             tx2-expected #{["Dave" "Davis", (time/->zdt #inst "2018"), (time/->zdt #inst "2020-05-01")]
                            ["Claire" "Cooper", (time/->zdt #inst "2019"), nil]
                            ["Alan" "Andrews", (time/->zdt #inst "2020"), nil]
@@ -505,12 +510,12 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
         (t/is (= tx2-expected (all-users tx2)))
         (t/is (= tx1-expected (all-users tx1)))
 
-        (let [tx3 (xt/submit-tx *node* [[:update '{:table :users
-                                                   :for-valid-time (from #inst "2021-07-01")
-                                                   :bind [{:xt/id $uid}]
+        (let [tx3 (xt/submit-tx *node* [[:update '{:table :users,
+                                                   :for-valid-time [:from #inst "2021-07-01"]
+                                                   :match [{:xt/id uid}]
+                                                   :in [uid]
                                                    :set {:first-name "Sue"}}
-
-                                         {:uid "susan"}]]
+                                         "susan"]]
 
                                 {:default-all-valid-time? true})
 
@@ -526,8 +531,8 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
 
 (t/deftest test-erase-xtql
   (letfn [(q [tx]
-            (set (xt/q *node* '(from :foo {:bind [xt/id version xt/valid-from xt/valid-to]
-                                           :for-valid-time :all-time})
+            (set (xt/q *node* '($ {:from :foo, :for-valid-time :all-time}
+                                   version xt/valid-from xt/valid-to)
                        {:basis {:at-tx tx}})))]
     (let [tx1 (xt/submit-tx *node*
                             [[:put-docs :foo {:xt/id "foo", :version 0}]
@@ -552,7 +557,8 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
                  (assoc v1 :xt/id "bar")}
                (q tx2)))
 
-      (let [tx3 (xt/submit-tx *node* [[:erase {:from :foo, :bind [{:xt/id "foo"}]}]])]
+      (let [tx3 (xt/submit-tx *node* [[:erase {:from :foo
+                                               :match [{:xt/id "foo"}]}]])]
         (t/is (= #{(assoc v0 :xt/id "bar") (assoc v1 :xt/id "bar")} (q tx3)))
         (t/is (= #{(assoc v0 :xt/id "bar") (assoc v1 :xt/id "bar")} (q tx2)))
 
@@ -562,12 +568,15 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
 
 (t/deftest test-assert-dml
   (t/testing "assert-not-exists"
-    (xt/submit-tx tu/*node* [[:assert-not-exists '(from :users [{:first-name $name}])
-                              {:name "James"}]
-                             [:put-docs :users {:xt/id :james, :first-name "James"}]])
+    (xt/submit-tx tu/*node* [[:assert-not-exists '{:params [name]
+                                                   :where [($ :users {:first-name name})]}
+                              "James"]
+                             [:put :users {:xt/id :james, :first-name "James"}]])
 
-    (xt/submit-tx tu/*node* [[:assert-not-exists '(from :users [{:first-name $name}])
-                              {:name "Dave"}]
+    (xt/submit-tx tu/*node* [[:assert-not-exists '{:in [name]
+                                                   :where [($ :users {:first-name name})]}
+
+                              "Dave"]
                              [:put-docs :users {:xt/id :dave, :first-name "Dave"}] ])
 
     (t/is (= (serde/map->TxAborted
@@ -576,9 +585,10 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
                :committed? false,
                :error #xt/runtime-err [:xtdb/assert-failed "Precondition failed: assert-not-exists" {:row-count 1}]})
 
-             (xt/execute-tx tu/*node* [[:assert-not-exists '(from :users [{:first-name $name}])
-                                        {:name "James"}]
-                                       [:put-docs :users {:xt/id :james2, :first-name "James"}] ])))
+             (xt/execute-tx tu/*node* [[:assert-not-exists '{:params [name]
+                                                             :where [($ :users {:first-name name})]}
+                                        "James"]
+                                       [:put-docs :users {:xt/id :james2, :first-name "James"}]])))
 
     (t/is (= #{{:xt/id :james, :first-name "James"}
                {:xt/id :dave, :first-name "Dave"}}
@@ -599,14 +609,18 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
                :system-time #time/instant "2020-01-04T00:00:00Z",
                :committed? false,
                :error #xt/runtime-err [:xtdb/assert-failed "Precondition failed: assert-exists" {:row-count 0}]})
-             (xt/execute-tx tu/*node* [[:assert-exists '(from :users [{:first-name $name}])
-                                        {:name "Mike"}]
-                                       [:put-docs :users {:xt/id :mike, :first-name "Mike"}] ])))
+             (xt/execute-tx tu/*node* [[:assert-exists '($ :users {:first-name %})
+                                        "Mike"]
+                                       [:put-docs :users {:xt/id :mike, :first-name "Mike"}]])))
 
-    (xt/submit-tx tu/*node* [[:assert-exists '(from :users [{:first-name $name}])
-                              {:name "James"}]
-                             [:delete-docs :users :james]
-                             [:put-docs :users {:xt/id :james2, :first-name "James"}]])
+    (xt/submit-tx tu/*node* [[:assert-exists '($ :users {:first-name %})
+                              "James"]
+                             [:put-docs :users {:xt/id :james, :first-name "James"}]
+                             [:assert-exists '($ :users {:first-name %})
+                              "James"]
+                             [:delete-keys :users :james]
+                             [:put-docs :users
+                              {:xt/id :james2, :first-name "James"}]])
 
     (t/is (= #{{:xt/id :james2, :first-name "James"}
                {:xt/id :dave, :first-name "Dave"}}

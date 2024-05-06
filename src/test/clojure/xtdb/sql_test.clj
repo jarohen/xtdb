@@ -1,6 +1,7 @@
 (ns xtdb.sql-test
   (:require [clojure.java.io :as io]
             [clojure.test :as t :refer [deftest]]
+            [honey.sql :as hs]
             [xtdb.api :as xt]
             [xtdb.logical-plan :as lp]
             [xtdb.serde :as serde]
@@ -2059,6 +2060,7 @@
                            [:put-docs :orders {:xt/id 2, :customer-id 1, :value 12.34}]])
 
 
+  ;; SQL nest-one
   (t/is (= #{{:customer {:name "bob"}, :order-id 0, :value 26.20}
              {:customer {:name "bob"}, :order-id 1, :value 8.99}
              {:customer {:name "alice"}, :order-id 2, :value 12.34}}
@@ -2067,6 +2069,32 @@
                               NEST_ONE(SELECT c.name FROM customers c WHERE c.xt$id = o.customer_id) AS customer
                        FROM orders o"))))
 
+  ;; datalog
+  (t/is (= #{{:customer {:name "bob"}, :order-id 0, :value 26.20}
+             {:customer {:name "bob"}, :order-id 1, :value 8.99}
+             {:customer {:name "alice"}, :order-id 2, :value 12.34}}
+           (set (xt/q tu/*node*
+                      '{:where [($ :orders {:xt/id order-id} customer-id value)]
+                        :find [order-id value
+                               {:customer (nest-one {:in [c-id]
+                                                     :where [($ :customers {:xt/id c-id} name)]
+                                                     :find [name]}
+                                                    customer-id)}]}))))
+
+  ;; honey-sql
+  (t/is (= #{{:customer {:name "bob"}, :order-id 0, :value 26.20}
+             {:customer {:name "bob"}, :order-id 1, :value 8.99}
+             {:customer {:name "alice"}, :order-id 2, :value 12.34}}
+           (set (xt/q tu/*node*
+                      (hs/format
+                       '{:from [[:orders o]]
+                         :select [(:xt/id o) :value
+                                  [(nest_one {:from [[:customers c]]
+                                              :where (= c/xt$id o/customer-id)
+                                              :select [c-name]})
+                                   :customer]]})))))
+
+  ;; SQL nest-many
   (t/is (= #{{:orders [{:order-id 1, :value 8.99} {:order-id 0, :value 26.20}], :name "bob", :customer-id 0}
              {:orders [{:order-id 2, :value 12.34}], :name "alice", :customer-id 1}}
            (set (xt/q tu/*node*
@@ -2075,7 +2103,29 @@
                                         FROM orders o
                                         WHERE o.customer_id = c.xt$id)
                                 AS orders
-                       FROM customers c")))))
+                       FROM customers c"))))
+
+  ;; datalog
+  (t/is (= #{{:orders [{:order-id 1, :value 8.99} {:order-id 0, :value 26.20}], :name "bob", :customer-id 0}
+             {:orders [{:order-id 2, :value 12.34}], :name "alice", :customer-id 1}}
+           (set (xt/q tu/*node*
+                      '{:where [($ :customers {:xt/id customer-id} name)]
+                        :find [customer-id name
+                               {:orders (nest-many {:in [customer-id]
+                                                    :where [($ :orders customer-id value {:xt/id order-id})]
+                                                    :find [order-id value]})}]}))))
+
+  ;; honey-sql
+  (t/is (= #{{:orders [{:order-id 1, :value 8.99} {:order-id 0, :value 26.20}], :name "bob", :customer-id 0}
+             {:orders [{:order-id 2, :value 12.34}], :name "alice", :customer-id 1}}
+           (set (xt/q tu/*node*
+                      (hs/format
+                       '{:from [[:customers c]]
+                         :select [:customer-id :name
+                                  [(nest_many {:from [[:orders o]]
+                                               :where (= c/xt$id o/customer-id)
+                                               :select [:xt/id :value]})
+                                   :orders]]}))))))
 
 (deftest test-invalid-xt-id-in-query-3324
   (xt/submit-tx tu/*node* [[:put-docs :foo {:xt/id 0 :name "bob"}]])

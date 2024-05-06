@@ -18,10 +18,8 @@
             [xtdb.xtql.edn :as xtql.edn])
   (:import (java.io Writer)
            java.util.concurrent.ExecutionException
-           java.util.function.Function
            java.util.List
            java.util.Map
-           [java.util.stream Stream]
            (xtdb.api IXtdb TransactionKey)
            (xtdb.api.query Basis QueryOptions XtqlQuery)
            (xtdb.api.tx TxOp TxOptions)

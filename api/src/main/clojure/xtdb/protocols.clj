@@ -4,6 +4,9 @@
 (defprotocol PNode
   (^java.util.stream.Stream open-query [node query opts]))
 
+(defprotocol PDatalogNode
+  (^java.util.stream.Stream open-datalog-query [node query opts]))
+
 (defprotocol PStatus
   (latest-submitted-tx [node])
   (status [node]))

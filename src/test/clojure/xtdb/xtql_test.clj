@@ -21,26 +21,26 @@
   [[:put-docs :docs {:xt/id :ivan, :first-name "Ivan", :last-name "Ivanov"}]
    [:put-docs :docs {:xt/id :petr, :first-name "Petr", :last-name "Petrov"}]])
 
-(deftest test-from
+(deftest test-match
   (xt/submit-tx tu/*node* ivan+petr)
 
   (t/is (= #{{:first-name "Ivan"}
              {:first-name "Petr"}}
-           (set (xt/q tu/*node* '(from :docs [first-name])))))
+           (set (xt/q tu/*node* '($ :docs first-name)))))
 
   (t/is (= #{{:name "Ivan"}
              {:name "Petr"}}
-           (set (xt/q tu/*node* '(from :docs [{:first-name name}])))))
+           (set (xt/q tu/*node* '($ :docs {:first-name name})))))
 
   (t/is (= #{{:e :ivan, :name "Ivan"}
              {:e :petr, :name "Petr"}}
            (set (xt/q tu/*node*
-                      '(from :docs [{:xt/id e, :first-name name}]))))
+                      '($ :docs {:xt/id e, :first-name name}))))
         "returning eid")
 
   (t/is (= #{{:name "Ivan" :also-name "Ivan"}
              {:name "Petr" :also-name "Petr"}}
-           (set (xt/q tu/*node* '(from :docs [{:first-name name} {:first-name also-name}]))))
+           (set (xt/q tu/*node* '($ :docs {:first-name name} {:first-name also-name}))))
         "projecting col out multiple times to different vars"))
 
 (deftest test-from-star
@@ -48,28 +48,28 @@
 
   (t/is (= #{{:last-name "Petrov", :first-name "Petr", :xt/id :petr}
              {:last-name "Ivanov", :first-name "Ivan", :xt/id :ivan}}
-           (set (xt/q tu/*node* '(from :docs [*]))))
+           (set (xt/q tu/*node* '($ :docs *))))
         "Extra short-form projections are redundant")
 
   (t/is (= #{{:last-name "Petrov", :first-name "Petr", :xt/id :petr}
              {:last-name "Ivanov", :first-name "Ivan", :xt/id :ivan}}
-           (set (xt/q tu/*node* '(from :docs [first-name *]))))
+           (set (xt/q tu/*node* '($ :docs first-name *))))
         "Extra short-form projections are redundant")
 
   (t/is (= #{{:last-name "Ivanov", :first-name "Ivan", :xt/id :ivan}}
-           (set (xt/q tu/*node* '(from :docs [{:first-name "Ivan"} *]))))
+           (set (xt/q tu/*node* '($ :docs {:first-name "Ivan"} *))))
         "literal filters still work")
 
   (xt/submit-tx tu/*node* [[:put-docs :docs {:xt/id :jeff, :first-name "Jeff", :last-name "Jeff"}]])
 
   (t/is (= #{{:last-name "Jeff", :first-name "Jeff", :xt/id :jeff}}
-           (set (xt/q tu/*node* '(from :docs [{:last-name first-name} *]))))
+           (set (xt/q tu/*node* '($ :docs {:last-name first-name} *))))
         "Implicitly projected cols unify with explicitly projected cols")
 
   (t/is (thrown-with-msg? IllegalArgumentException
                           #"\* is not a valid in from when inside a unify context"
                           (xt/q tu/*node*
-                                 '(unify (from :docs [*]))))))
+                                 '(unify ($ :docs *))))))
 
 (deftest test-from-unification
   (xt/submit-tx tu/*node*
@@ -77,10 +77,10 @@
                       [:put-docs :docs {:xt/id :jeff, :first-name "Jeff", :last-name "Jeff"}]))
 
   (t/is (= #{{:name "Jeff"}}
-           (set (xt/q tu/*node* '(from :docs [{:first-name name :last-name name}])))))
+           (set (xt/q tu/*node* '($ :docs {:first-name name :last-name name})))))
 
   (t/is (= #{{:name "Jeff"} {:name "Petr"} {:name "Ivan"}}
-           (set (xt/q tu/*node* '(from :docs [{:first-name name} {:first-name name}]))))
+           (set (xt/q tu/*node* '($ :docs {:first-name name} {:first-name name}))))
         "unifying over the same column, for completeness rather than utility"))
 
 (deftest test-basic-query
@@ -88,18 +88,18 @@
 
   (t/is (= [{:e :ivan}]
            (xt/q tu/*node*
-                 '(from :docs [{:xt/id e, :first-name "Ivan"}])))
+                 '($ :docs {:xt/id e, :first-name "Ivan"})))
         "query by single field")
 
   ;; HACK this scans first-name out twice
   (t/is (= [{:first-name "Petr", :last-name "Petrov"}]
            (xt/q tu/*node*
-                 '(from :docs [{:first-name "Petr"} first-name last-name])))
+                 '($ :docs {:first-name "Petr"} first-name last-name)))
         "returning the queried field")
 
   (t/is (= [{:first-name "Petr", :last-name "Petrov"}]
            (xt/q tu/*node*
-                 '(from :docs [{:xt/id :petr} first-name last-name])))
+                 '($ :docs {:xt/id :petr} first-name last-name)))
         "literal eid"))
 
 (deftest test-rel
@@ -2141,16 +2141,18 @@
              {:customer-id 1, :customer {:name "alice"}, :order-id 2, :value 12.34}}
 
            (set (xt/q tu/*node*
-                      '(-> (from :orders [{:xt/id order-id} customer-id value])
-                           (with {:customer (pull (from :customers [name {:xt/id $customer-id}])
-                                                  {:args [customer-id]})}))))))
+                      '{:where [($ :orders [{:xt/id order-id} customer-id value])]
+                        :find [order-id value
+                               {:customer (nest1 ($ :customers [name {:xt/id %}])
+                                                 customer-id)}]}))))
 
-  (t/is (= #{{:orders [{:id 1, :value 8.99} {:id 0, :value 26.20}], :name "bob", :id 0}
-             {:orders [{:id 2, :value 12.34}], :name "alice", :id 1}}
+  (t/is (= #{{:orders [{:order-id 1, :value 8.99} {:order-id 0, :value 26.20}], :name "bob", :customer-id 0}
+             {:orders [{:order-id 2, :value 12.34}], :name "alice", :customer-id 1}}
            (set (xt/q tu/*node*
-                      '(-> (from :customers [{:xt/id id} name])
-                           (with {:orders (pull* (from :orders [{:customer-id $c-id} {:xt/id id} value])
-                                                 {:args [{:c-id id}]})}))))))
+                      '{:where [($ {:from :customers, :as c} [{:xt/id customer-id} name])]
+                        :find [customer-id name
+                               {:orders (nest ($ :orders [{:xt/id order-id, :customer-id %} value])
+                                              customer-id)}]}))))
 
   (t/is (= [{}]
            (xt/q tu/*node* '(unify (with {orders (pull (rel [] []))})))))
