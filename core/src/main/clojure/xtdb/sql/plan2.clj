@@ -358,6 +358,24 @@
     [:rename unique-table-alias
      plan]))
 
+(defrecord ArrowTable [env url table-alias unique-table-alias ^SequencedSet !table-cols]
+  Scope
+  (available-cols [_ chain]
+    (when-not (and chain (not= chain [table-alias]))
+      !table-cols))
+
+  (available-tables [_] [table-alias])
+
+  (find-decl [_ [col-name table-name]]
+    (when (and (or (nil? table-name) (= table-name table-alias))
+               (.contains !table-cols col-name))
+      (->col-sym (str unique-table-alias) (str col-name))))
+
+  (plan-scope [_]
+    [:rename unique-table-alias
+     [:project (vec !table-cols)
+      [:arrow url]]]))
+
 (defrecord FromClauseScope [env inner-scope table-ref-scopes]
   Scope
   (available-cols [_ chain]
@@ -560,7 +578,15 @@
                       (symbol (str table-alias "." (swap! !id-count inc)))
                       (LinkedHashSet. ^Collection col-syms))))
 
-  (visitWrappedTableReference [this ctx] (-> (.tableReference ctx) (.accept this))))
+  (visitWrappedTableReference [this ctx] (-> (.tableReference ctx) (.accept this)))
+
+  (visitArrowTable [{{:keys [!id-count]} :env} ctx]
+    (let [table-alias (identifier-sym (.tableAlias ctx))
+          cols (->table-projection (.tableProjection ctx))
+          url (some-> (.characterString ctx) (.accept (->ExprPlanVisitor env scope)))]
+      (->ArrowTable env url table-alias
+                    (symbol (str table-alias "." (swap! !id-count inc)))
+                    (LinkedHashSet. ^Collection cols)))))
 
 (defrecord SelectClauseProjectedCols [env scope order-by-specs]
   SqlVisitor
