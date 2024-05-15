@@ -56,11 +56,13 @@
 
 (defprotocol Scope
   (available-cols [scope chain])
+  (available-tables [scope])
   (find-decl [scope chain])
   (plan-scope [scope]))
 
 (extend-protocol Scope nil
   (available-cols [_ _])
+  (available-tables [_])
   (find-decl [_ _])
 
   (plan-scope [_]
@@ -95,6 +97,7 @@
 (defrecord SubqueryScope [env, scope, ^Map !sq-refs]
   Scope
   (available-cols [_ chain] (available-cols scope chain))
+  (available-tables [_] (available-tables scope))
 
   (find-decl [_ chain]
     (-> (find-decl scope chain)
@@ -219,6 +222,8 @@
     (when-not (and chain (not= chain [table-alias]))
       cols))
 
+  (available-tables [_] [table-alias])
+
   (find-decl [_ [col-name table-name]]
     (when (or (nil? table-name) (= table-name table-alias))
       (when (or (contains? cols col-name) (types/temporal-column? col-name))
@@ -251,6 +256,10 @@
          (into [] (comp (mapcat #(available-cols % chain))
                         (distinct)))))
 
+  (available-tables [_]
+    (into (available-tables l)
+          (available-tables r)))
+
   (find-decl [_ chain]
     (let [matches (->> [l r]
                        (keep (fn [scope]
@@ -269,6 +278,10 @@
     (->> [l r]
          (into [] (comp (mapcat #(available-cols % chain))
                         (distinct)))))
+
+  (available-tables [_]
+    (into (available-tables l)
+          (available-tables r)))
 
   (find-decl [_ chain]
     (let [matches (->> (if (and (= 1 (count chain))
@@ -329,6 +342,10 @@
          (into [] (comp (mapcat #(available-cols % chain))
                         (distinct)))))
 
+  (available-tables [_]
+    (into (available-tables l)
+          (available-tables r)))
+
   (find-decl [_ chain]
     (let [matches (->> [l r]
                        (keep (fn [scope]
@@ -348,6 +365,8 @@
   (available-cols [_ chain]
     (when-not (and chain (not= chain [table-alias]))
       available-cols))
+
+  (available-tables [_] [table-alias])
 
   (find-decl [_ [col-name table-name]]
     (when (or (nil? table-name) (= table-name table-alias))
@@ -381,6 +400,10 @@
   (available-cols [_ chain]
     (->> table-ref-scopes
          (into [] (comp (mapcat #(available-cols % chain)) (distinct)))))
+
+  (available-tables [_]
+    (into (available-tables inner-scope)
+          (mapcat available-tables table-ref-scopes)))
 
   (find-decl [_ chain]
     (let [matches (->> table-ref-scopes
@@ -495,8 +518,10 @@
       (for [col-ref !implied-gicrs]
         col-ref)))
 
-  Scope
+  Scope 
   (available-cols [_ table-name] (available-cols scope table-name))
+
+  (available-tables [_] (available-tables scope))
 
   (find-decl [_ chain]
     (when-let [sym (find-decl scope chain)]
@@ -609,8 +634,8 @@
 
                                             excludes (when-let [exclude-ctx (.excludeClause ctx)]
                                                        (into #{} (map identifier-sym) (.identifier exclude-ctx)))]
-
-                                        (vec (for [col-name (available-cols scope nil)
+                                        (vec (for [table-name (available-tables scope)
+                                                   col-name (available-cols scope [table-name])
                                                    :when (not (contains? excludes col-name))
                                                    :let [sym (find-decl scope [col-name table-name])]
                                                    :when (not (contains? excludes sym))]
@@ -672,8 +697,9 @@
 
 (defn- project-all-cols [env scope order-by-specs]
   ;; duplicated from the ASTERISK case above
-  {:projected-cols (as-> (vec (for [col-name (available-cols scope nil)
-                                    :let [sym (find-decl scope [col-name])]]
+  {:projected-cols (as-> (vec (for [table-name (available-tables scope)
+                                    col-name (available-cols scope [table-name])
+                                    :let [sym (find-decl scope [col-name table-name])]]
                                 (->ProjectedCol sym sym)))
                        projected-cols
 
@@ -1793,6 +1819,8 @@
   (available-cols [_ chain]
     (when-not (and chain (not= chain [table-alias]))
       cols))
+  
+  (available-tables [_] [table-alias])
 
   (find-decl [_ [col-name table-name]]
     (when (or (nil? table-name) (= table-name table-alias))
@@ -1844,6 +1872,8 @@
   (available-cols [_ chain]
     (when-not (and chain (not= chain [table-alias]))
       cols))
+  
+  (available-tables [_] [table-alias])
 
   (find-decl [_ [col-name table-name :as chain]]
     (when (or (nil? table-name) (= table-name table-alias))
