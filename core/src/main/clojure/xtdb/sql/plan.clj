@@ -11,7 +11,7 @@
            (java.util Collection HashMap HashSet LinkedHashSet Map SequencedSet Set)
            java.util.function.Function
            (org.antlr.v4.runtime BaseErrorListener CharStreams CommonTokenStream ParserRuleContext Recognizer)
-           (xtdb.antlr SqlLexer SqlParser SqlParser$BaseTableContext SqlParser$DirectSqlStatementContext SqlParser$IntervalQualifierContext SqlParser$JoinSpecificationContext SqlParser$JoinTypeContext SqlParser$ObjectNameAndValueContext SqlParser$RenameColumnContext SqlParser$SearchedWhenClauseContext SqlParser$SetClauseContext SqlParser$SimpleWhenClauseContext SqlParser$SortSpecificationContext SqlParser$WhenOperandContext SqlParser$WithTimeZoneContext SqlVisitor)
+           (xtdb.antlr SqlLexer SqlParser SqlParser$BaseTableContext SqlParser$DirectSqlStatementContext SqlParser$IntervalQualifierContext SqlParser$JoinSpecificationContext SqlParser$JoinTypeContext SqlParser$ObjectNameAndValueContext SqlParser$OrderByClauseContext SqlParser$QuerySpecificationContext SqlParser$RenameColumnContext SqlParser$SearchedWhenClauseContext SqlParser$SetClauseContext SqlParser$SimpleWhenClauseContext SqlParser$SortSpecificationContext SqlParser$WhenOperandContext SqlParser$WithTimeZoneContext SqlVisitor)
            (xtdb.types IntervalMonthDayNano)))
 
 (defprotocol PlanError
@@ -444,57 +444,6 @@
   PlanError
   (error-string [_] (format "Invalid order by ordinal: %s - out-cols: %s" ordinal out-cols)))
 
-(defn parse-order-spec [idx ^SqlParser$SortSpecificationContext sort-spec-ctx]
-  {:expr-sym (-> (symbol (format "xt$ob_%d" idx))
-                 (vary-meta assoc :order-by-sym? true))
-
-   :expr-ctx (.expr sort-spec-ctx)
-
-   :direction (or (some-> (.orderingSpecification sort-spec-ctx)
-                          (.getText)
-                          str/lower-case
-                          keyword)
-                  :asc)
-
-   ;; we're allowed to default either way here
-   :nulls (or (some-> (.nullOrdering sort-spec-ctx)
-                      (.getChild 1)
-                      (.getText)
-                      str/lower-case
-                      keyword)
-
-              :last)})
-
-(defn- ->eobr-projection [{:keys [!id-count]} sym]
-  (let [eobr-sym (->col-sym (format "xt$eobr_%s_%d" (name sym) (dec (swap! !id-count inc))))]
-    (->ProjectedCol {eobr-sym (->col-sym sym)}
-                    eobr-sym)))
-
-(defrecord ExtendedOrderByColRefScope [env, scope, projected-col-names, ^Map !extended-ob-col-refs]
-  Scope
-  (find-decl [_ chain]
-    (or (get !extended-ob-col-refs chain)
-        (when (= 1 (count chain))
-          (let [[col-name] chain]
-            (when-let [projected-col (get projected-col-names col-name)]
-              (->ProjectedCol projected-col projected-col))))
-
-        (when-let [sym (find-decl scope chain)]
-          (:col-sym (.computeIfAbsent !extended-ob-col-refs sym
-                                      (reify Function
-                                        (apply [_ sym]
-                                          (-> (->eobr-projection env sym)
-                                              (update :col-sym vary-meta assoc :extended-ob-col-ref chain))))))))))
-
-(defn- extended-ob-col-refs [order-by-specs env scope projected-col-names]
-  (let [!extended-ob-col-refs (HashMap.)
-        expr-visitor (->ExprPlanVisitor env (->ExtendedOrderByColRefScope env scope projected-col-names !extended-ob-col-refs))]
-
-    (doseq [{:keys [^ParserRuleContext expr-ctx]} order-by-specs]
-      (.accept expr-ctx expr-visitor))
-
-    (mapv val !extended-ob-col-refs)))
-
 (defrecord MissingGroupingColumns [missing-grouping-cols]
   PlanError
   (error-string [_] (format "Missing grouping columns: %s" missing-grouping-cols)))
@@ -613,7 +562,7 @@
                     (symbol (str table-alias "." (swap! !id-count inc)))
                     (LinkedHashSet. ^Collection cols)))))
 
-(defrecord SelectClauseProjectedCols [env scope order-by-specs]
+(defrecord SelectClauseProjectedCols [env scope]
   SqlVisitor
   (visitSelectClause [_ ctx]
     (let [sl-ctx (.selectList ctx)
@@ -691,19 +640,16 @@
                                                                               (throw (UnsupportedOperationException. (str "Table not found: " table-name))))))))))
                                                           cat))))))]
 
-      {:projected-cols (into projected-cols (extended-ob-col-refs order-by-specs env scope (into #{} (map :col-sym) projected-cols)))
+      {:projected-cols projected-cols
        :subqs (not-empty (into {} !subqs))
        :aggs (not-empty (into {} !aggs))})))
 
-(defn- project-all-cols [env scope order-by-specs]
+(defn- project-all-cols [scope]
   ;; duplicated from the ASTERISK case above
-  {:projected-cols (as-> (vec (for [table-name (available-tables scope)
-                                    col-name (available-cols scope [table-name])
-                                    :let [sym (find-decl scope [col-name table-name])]]
-                                (->ProjectedCol sym sym)))
-                       projected-cols
-
-                     (into projected-cols (extended-ob-col-refs order-by-specs env scope (into #{} (map :col-sym) projected-cols))))})
+  {:projected-cols (vec (for [table-name (available-tables scope)
+                              col-name (available-cols scope [table-name])
+                              :let [sym (find-decl scope [col-name table-name])]]
+                          (->ProjectedCol sym sym)))})
 
 (defn seconds-fraction->nanos ^long [seconds-fraction]
   (if seconds-fraction
@@ -1517,41 +1463,81 @@
 (defrecord QueryExpr [plan col-syms]
   OptimiseStatement (optimise-stmt [this] (update this :plan lp/rewrite-plan)))
 
-(defn ->ob-scope [env plan col-syms order-by-specs]
-  (let [available-col-syms (set col-syms)
-        extended-ob-col-refs (->> available-col-syms
-                                  (into {} (keep (fn [col-sym]
-                                                   (when-let [extended-ob-col-ref (:extended-ob-col-ref (meta col-sym))]
-                                                     [extended-ob-col-ref col-sym])))))]
-    (reify Scope
-      (find-decl [_ chain]
-        (or (get extended-ob-col-refs chain)
-            (when (= 1 (count chain))
-              (let [[col-name] chain]
-                (get available-col-syms (symbol col-name))))
-            (get extended-ob-col-refs chain)))
+(defn- plan-order-by [^SqlParser$OrderByClauseContext ctx
+                      {:keys [!id-count] :as env} inner-scope outer-col-syms]
+  (let [available-cols (set outer-col-syms)
+        ob-expr-visitor (->ExprPlanVisitor env
+                                           (reify Scope
+                                             (available-cols [_ chain]
+                                               (set/union (available-cols inner-scope chain)
+                                                          (when (empty? chain) available-cols)))
 
-      (plan-scope [this]
-        (let [ob-expr-plan-visitor (->ExprPlanVisitor env this)
-              out-cols (->> col-syms
-                            (into [] (remove (comp (some-fn :order-by-sym? :extended-ob-col-ref) meta))))]
-          (-> [:project out-cols
-               [:order-by (->> order-by-specs
-                               (mapv (fn [{:keys [expr-sym direction nulls]}]
-                                       [expr-sym {:direction direction
-                                                  :null-ordering (case nulls :first :nulls-first, :last :nulls-last)}])))
-                [:map (->> order-by-specs
-                           (mapv (fn [{:keys [expr-sym ^ParserRuleContext expr-ctx]}]
-                                   (let [ob-expr (.accept expr-ctx ob-expr-plan-visitor)]
-                                     {expr-sym (cond
-                                                 (not (number? ob-expr)) ob-expr
+                                             (find-decl [_ [col-name :as chain]]
+                                               (or (when (= 1 (count chain))
+                                                     (get available-cols col-name))
+                                                   (find-decl inner-scope chain)))))]
 
-                                                 (< 1 ob-expr (count col-syms))
-                                                 (add-err! env (->InvalidOrderByOrdinal col-syms ob-expr))
+    (-> (.sortSpecificationList ctx)
+        (.sortSpecification)
+        (->> (mapv (fn [^SqlParser$SortSpecificationContext sort-spec-ctx]
+                     (let [expr (-> (.expr sort-spec-ctx) (.accept ob-expr-visitor))
+                           dir (or (some-> (.orderingSpecification sort-spec-ctx)
+                                           (.getText)
+                                           str/lower-case
+                                           keyword)
+                                   :asc)
 
-                                                 :else (nth col-syms (dec ob-expr)))}))))
-                 plan]]]
-              (with-meta {:col-syms out-cols})))))))
+                           ob-opts {:direction dir
+
+                                    :null-ordering (or (when-let [null-order (.nullOrdering sort-spec-ctx)]
+                                                         (case (-> (.getChild null-order 1)
+                                                                   (.getText)
+                                                                   str/lower-case)
+                                                           "first" :nulls-first
+                                                           "last" :nulls-last))
+
+                                                       ;; postgres sorts nulls high - so last on asc and first on desc
+                                                       (case dir :asc :nulls-last, :desc :nulls-first))}]
+
+                       ;; we could potentially try to avoid this extra projection for simple cols
+                       (cond
+                         (integer? expr) (if (<= 1 (long expr) (count outer-col-syms))
+                                           {:order-by-spec [(nth outer-col-syms (dec expr)) ob-opts]}
+                                           (add-err! env (->InvalidOrderByOrdinal outer-col-syms expr)))
+
+                         (contains? available-cols expr) {:order-by-spec [expr ob-opts]}
+
+                         :else (let [in-sym (->col-sym (str "xt$ob" (swap! !id-count inc)))]
+                                 {:order-by-spec [in-sym ob-opts]
+                                  :in-projection {in-sym expr}})))))))))
+
+(defn- wrap-isolated-ob [plan outer-col-syms ob-specs]
+  (let [in-projs (not-empty (into [] (keep :in-projection) ob-specs))]
+    (as-> plan plan
+      (if in-projs
+        [:map in-projs plan]
+        plan)
+
+      [:order-by (mapv :order-by-spec ob-specs)
+       plan]
+
+      (if in-projs
+        [:project outer-col-syms plan]
+        plan))))
+
+(defn- wrap-integrated-ob [plan projected-cols ob-specs]
+  (let [in-projs (not-empty (into [] (keep :in-projection) ob-specs))]
+    (as-> plan plan
+      [:project (into (mapv :projection projected-cols)
+                      in-projs)
+       plan]
+
+      [:order-by (mapv :order-by-spec ob-specs)
+       plan]
+
+      (if in-projs
+        [:project (mapv :col-sym projected-cols) plan]
+        plan))))
 
 (defrecord DuplicateColumnProjection [col-sym]
   PlanError
@@ -1591,18 +1577,21 @@
                                                                         (.accept (->WithVisitor env scope)))
                                                                 (:ctes env))))
 
-          order-by-specs (some->> (.orderByClause ctx)
-                                  (.sortSpecificationList)
-                                  (.sortSpecification)
-                                  (map-indexed parse-order-spec))]
+          order-by-ctx (.orderByClause ctx)
 
-      (as-> (-> (.queryExpressionBody ctx)
-                (.accept (assoc this :scope scope, :order-by-specs order-by-specs)))
+          qeb-ctx (.queryExpressionBody ctx)
+
+          ;; see SQL:2011 §7.13, syntax rule 28c
+          simple-table-query? (instance? SqlParser$QuerySpecificationContext qeb-ctx)]
+
+      (as-> (.accept qeb-ctx (cond-> (assoc this :scope scope)
+                               simple-table-query? (assoc :order-by-ctx order-by-ctx)))
           {:keys [plan col-syms] :as query-expr}
 
-        (if order-by-specs
-          (let [plan (plan-scope (->ob-scope env plan col-syms order-by-specs))]
-            (->QueryExpr plan (:col-syms (meta plan))))
+        (if (and order-by-ctx (not simple-table-query?))
+          (->QueryExpr (-> plan
+                           (wrap-isolated-ob col-syms (plan-order-by order-by-ctx env nil col-syms)))
+                       col-syms)
 
           query-expr)
 
@@ -1663,7 +1652,7 @@
                      plan)
                    col-syms)))
 
-  (visitQuerySpecification [{:keys [out-col-syms order-by-specs]} ctx]
+  (visitQuerySpecification [{:keys [out-col-syms order-by-ctx]} ctx]
     (let [qs-scope (if-let [from (.fromClause ctx)]
                      (.accept from (->ScopeVisitor env scope))
                      scope)
@@ -1685,9 +1674,17 @@
 
           select-clause (.selectClause ctx)
 
-          select-plan (if select-clause
-                        (.accept select-clause (->SelectClauseProjectedCols env group-invar-col-tracker order-by-specs))
-                        (project-all-cols env group-invar-col-tracker order-by-specs))
+          {:keys [projected-cols] :as select-plan} (if select-clause
+                                                     (.accept select-clause (->SelectClauseProjectedCols env group-invar-col-tracker))
+                                                     (project-all-cols group-invar-col-tracker))
+
+          aggs (not-empty (merge (:aggs select-plan) (:aggs having-plan)))
+          grouped-table? (boolean (or aggs (.groupByClause ctx)))
+
+          distinct? (some-> select-clause .setQuantifier (.getText) (str/upper-case) (= "DISTINCT"))
+
+          ob-specs (some-> order-by-ctx
+                           (plan-order-by env qs-scope (mapv :col-sym projected-cols)))
 
           plan (as-> (plan-scope qs-scope) plan
                  (if-let [{:keys [predicate subqs]} where-plan]
@@ -1696,10 +1693,8 @@
                        (wrap-predicates predicate))
                    plan)
 
-                 (let [aggs (not-empty (merge (:aggs select-plan) (:aggs having-plan)))]
-                   (cond-> plan
-                     (or aggs (.groupByClause ctx))
-                     (wrap-aggs aggs (.accept ctx group-invar-col-tracker))))
+                 (cond-> plan
+                   grouped-table? (wrap-aggs aggs (.accept ctx group-invar-col-tracker)))
 
                  (if-let [{:keys [predicate subqs]} having-plan]
                    (-> plan
@@ -1707,9 +1702,14 @@
                        (wrap-predicates predicate))
                    plan)
 
-                 (let [{:keys [projected-cols subqs]} select-plan]
+                 (-> plan (apply-sqs (:subqs select-plan)))
+
+                 (if order-by-ctx
+                   (-> plan
+                       (wrap-integrated-ob projected-cols ob-specs))
+
                    [:project (mapv :projection projected-cols)
-                    (-> plan (apply-sqs subqs))]))]
+                    plan]))]
 
       (as-> (->QueryExpr plan (mapv :col-sym (:projected-cols select-plan)))
           {:keys [plan col-syms] :as query-expr}
@@ -1717,10 +1717,10 @@
         (if out-col-syms
           (->QueryExpr [:rename (zipmap col-syms out-col-syms)
                         plan]
-                       (into out-col-syms (filter (comp :extended-ob-col-ref meta)) col-syms))
+                       out-col-syms)
           query-expr)
 
-        (if (some-> select-clause .setQuantifier (.getText) (str/upper-case) (= "DISTINCT"))
+        (if distinct?
           (->QueryExpr [:distinct plan]
                        col-syms)
           query-expr))))

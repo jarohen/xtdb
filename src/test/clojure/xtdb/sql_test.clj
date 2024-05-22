@@ -192,7 +192,6 @@
          (plan-sql "SELECT si.movieTitle FROM StarsIn AS si UNION SELECT si.name FROM StarsIn AS si"
                    {:table-info {"stars_in" #{"movie_title" "name"}}})))
 
-  #_ ; TODO order-by over union shouldn't create eobrs
   (t/is (=plan-file
          "basic-query-19"
          (plan-sql "SELECT si.name FROM StarsIn AS si UNION SELECT si.name FROM StarsIn AS si ORDER BY name"
@@ -229,7 +228,6 @@
           (plan-sql "SELECT si.movieTitle FROM StarsIn AS si ORDER BY movieTitle DESC"
                     {:table-info {"stars_in" #{"movie_title"}}})))
 
-  #_ ; TODO this is an error
   (t/is (=plan-file
           "basic-query-26"
           (plan-sql "SELECT si.movieTitle FROM StarsIn AS si ORDER BY si.\"year\" = 'foo' DESC, movieTitle"
@@ -1120,6 +1118,8 @@
            (xt/q tu/*node* "SELECT docs.x AS b FROM docs ORDER BY b")))
   (t/is (= [{:x 1} {:x 2} {:x 3}]
            (xt/q tu/*node* "SELECT y.x FROM docs AS y ORDER BY x")))
+
+  #_ ; TODO error - can't take an output and _then_ re-project (Postgres bans it, fwiw)
   (t/is (= [{:b 1} {:b 2} {:b 3}]
            (xt/q tu/*node* "SELECT docs.x AS b FROM docs ORDER BY (b + 2)"))))
 
