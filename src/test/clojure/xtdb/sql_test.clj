@@ -905,17 +905,6 @@
       (t/is (=plan-file "delete-target-table-aliases-2"
                         (plan-sql "DELETE FROM t1 WHERE t1.col1 = 30" opts))))))
 
-(deftest test-remove-names-359
-  (t/is
-   (=plan-file
-    "test-remove-names-359-single-ref"
-    (plan-sql "SELECT (SELECT x.bar FROM z) FROM x")))
-
-  (t/is
-   (=plan-file
-    "test-remove-names-359-multiple-ref"
-    (plan-sql "SELECT (SELECT x.bar FROM (SELECT x.bar FROM z) AS y) FROM x"))))
-
 (deftest test-system-time-period-predicate
   (t/is
     (=plan-file

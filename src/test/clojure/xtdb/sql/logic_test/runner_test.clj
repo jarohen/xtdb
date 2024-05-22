@@ -1,9 +1,7 @@
 (ns xtdb.sql.logic-test.runner-test
-  (:require [clojure.java.io :as io]
-            [clojure.test :as t]
+  (:require [clojure.test :as t]
             [xtdb.sql.logic-test.runner :as slt]
             [xtdb.sql.logic-test.xtdb-engine :as xtdb-engine]
-            [xtdb.sql.parser :as p]
             [xtdb.sql.plan2 :as plan2]
             [xtdb.test-util :as tu]))
 
@@ -125,29 +123,3 @@ CREATE UNIQUE INDEX t1i0 ON t1(
       (t/is (= [[:put-docs :t1 {:a nil :b -102 :c true :d "101" :e 104.5}]]
                (sql->ops "INSERT INTO t1 VALUES(NULL,-102,TRUE,'101',104.5)"))))))
 
-(comment
-
-  (doseq [f (->> (file-seq (io/file (io/resource "xtdb/sql/logic_test/sqlite_test/")))
-                 (filter #(clojure.string/ends-with? % ".test"))
-                 (sort))]
-    (time
-     (let [records (slt/parse-script (slurp f))
-           failures (atom 0)]
-       (println f (count records))
-       (doseq [{:keys [type statement query] :as record} records
-               :let [input (case type
-                             :statement statement
-                             :query query
-                             nil)]
-               :when (and input
-                          (not (slt/skip-record? "xtdb" record))
-                          (not (xtdb-engine/skip-statement? input)))
-               :let [tree (p/sql-parser input :directly_executable_statement)]]
-         (if (p/failure? tree)
-           (do (when-not (xtdb-engine/parse-create-table input)
-                 (when (= 1 (swap! failures inc))
-                   (println (p/failure->str tree))))
-               #_(println (or (xtdb-engine/parse-create-table input) (p/failure->str tree))))
-           #_(print ".")))
-       (println "failures: " @failures)
-       (println)))))
