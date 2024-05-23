@@ -1,7 +1,7 @@
 (ns xtdb.sql.expr-test
   (:require [clojure.test :as t]
             [xtdb.api :as xt]
-            [xtdb.sql.plan2 :as plan]
+            [xtdb.sql.plan :as plan]
             [xtdb.sql-test :as sql-test]
             [xtdb.test-util :as tu])
   (:import (java.time.zone ZoneRulesException)

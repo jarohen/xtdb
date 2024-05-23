@@ -5,7 +5,7 @@
             xtdb.node.impl
             [xtdb.operator.scan :as scan]
             [xtdb.sql.logic-test.runner :as slt]
-            [xtdb.sql.plan2 :as plan2]
+            [xtdb.sql.plan :as plan]
             [xtdb.util :as util])
   (:import [java.time Instant]
            (org.antlr.v4.runtime ParserRuleContext)
@@ -50,7 +50,7 @@
 
         ;; we grab the projection afterwards so that xt/q has awaited the tx
         ;; TODO hoping that there'll be a better means of getting hold of this soon
-        projection (->> (:col-syms (plan2/plan-statement sql-statement {:table-info (node->table-info node)}))
+        projection (->> (:col-syms (plan/plan-statement sql-statement {:table-info (node->table-info node)}))
                         (mapv str))]
     (vec
      (for [row res]
@@ -78,12 +78,12 @@
 
   (visitInsertStatement [this ctx]
     (-> (.insertColumnsAndSource ctx)
-        (.accept (assoc this :insert-table (keyword (plan2/identifier-sym (.tableName ctx)))))))
+        (.accept (assoc this :insert-table (keyword (plan/identifier-sym (.tableName ctx)))))))
 
   (visitInsertValues [{{:keys [tables]} :node, :keys [insert-table] :as this} ctx]
     (let [this (-> this
                    (assoc :insert-cols (->> (if-let [col-list (.columnNameList ctx)]
-                                              (mapv plan2/identifier-sym (.columnName col-list))
+                                              (mapv plan/identifier-sym (.columnName col-list))
                                               (get tables insert-table))
                                             (mapv keyword))))]
       [(into [:put-docs insert-table]
@@ -94,12 +94,12 @@
 
   (visitSingleExprRowConstructor [{:keys [insert-cols]} ctx]
     (assert (= 1 (count insert-cols)))
-    (let [expr-visitor (plan2/->ExprPlanVisitor nil nil)]
+    (let [expr-visitor (plan/->ExprPlanVisitor nil nil)]
       (merge {:xt/id (random-uuid)}
              {(first insert-cols) (.accept (.expr ctx) expr-visitor)})))
 
   (visitMultiExprRowConstructor [{:keys [insert-cols]} ctx]
-    (let [expr-visitor (plan2/->ExprPlanVisitor nil nil)]
+    (let [expr-visitor (plan/->ExprPlanVisitor nil nil)]
       (merge {:xt/id (random-uuid)}
              (zipmap insert-cols (for [^ParserRuleContext expr (.expr ctx)]
                                    (.accept expr expr-visitor))))))
@@ -137,7 +137,7 @@
 
       (:direct-sql slt/*opts*) (execute-sql-statement node statement variables (select-keys slt/*opts* [:decorrelate?]))
 
-      :else (-> (plan2/parse-statement statement)
+      :else (-> (plan/parse-statement statement)
                 (.accept (->SltStmtVisitor node statement)))))
 
   (execute-query [this query variables]

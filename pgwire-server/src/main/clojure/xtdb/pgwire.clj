@@ -7,7 +7,7 @@
             [xtdb.node :as xtn]
             [xtdb.node.impl]
             [xtdb.query]
-            [xtdb.sql.plan2 :as plan2]
+            [xtdb.sql.plan :as plan]
             [xtdb.time :as time]
             [xtdb.util :as util])
   (:import [clojure.lang PersistentQueue]
@@ -473,16 +473,16 @@
           {:statement-type :canned-response, :canned-response canned-response})
 
         (try
-          (.accept (plan2/parse-statement sql-trimmed)
+          (.accept (plan/parse-statement sql-trimmed)
                    (reify SqlVisitor
                      (visitDirectSqlStatement [this ctx] (.accept (.directlyExecutableStatement ctx) this))
                      (visitDirectlyExecutableStatement [this ctx] (-> (.getChild ctx 0) (.accept this)))
 
                      (visitSetSessionVariableStatement [_ ctx]
                        {:statement-type :set-session-parameter
-                        :parameter (plan2/identifier-sym (.identifier ctx))
+                        :parameter (plan/identifier-sym (.identifier ctx))
                         :value (-> (.literal ctx)
-                                   (.accept (plan2/->ExprPlanVisitor nil nil)))})
+                                   (.accept (plan/->ExprPlanVisitor nil nil)))})
 
                      (visitSetSessionCharacteristicsStatement [this ctx]
                        (let [[^ParserRuleContext sc & more-scs] (.sessionCharacteristic ctx)]
@@ -530,22 +530,22 @@
                               (ZoneId/of (subs region 1 (dec (count region)))))})
 
                      (visitInsertStatement [_ _]
-                       (plan2/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
+                       (plan/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
                        {:statement-type :dml, :dml-type :insert
                         :query sql, :transformed-query sql-trimmed})
 
                      (visitUpdateStatementSearched [_ _]
-                       (plan2/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
+                       (plan/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
                        {:statement-type :dml, :dml-type :update
                         :query sql, :transformed-query sql-trimmed})
 
                      (visitDeleteStatementSearched [_ _]
-                       (plan2/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
+                       (plan/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
                        {:statement-type :dml, :dml-type :delete
                         :query sql, :transformed-query sql-trimmed})
 
                      (visitEraseStatementSearched [_ _]
-                       (plan2/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
+                       (plan/plan-statement sql) ; plan to raise up any SQL errors pre tx-log
                        {:statement-type :dml, :dml-type :erase
                         :query sql, :transformed-query sql-trimmed})
 

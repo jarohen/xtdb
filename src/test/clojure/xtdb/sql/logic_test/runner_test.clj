@@ -2,7 +2,7 @@
   (:require [clojure.test :as t]
             [xtdb.sql.logic-test.runner :as slt]
             [xtdb.sql.logic-test.xtdb-engine :as xtdb-engine]
-            [xtdb.sql.plan2 :as plan2]
+            [xtdb.sql.plan :as plan]
             [xtdb.test-util :as tu]))
 
 (t/use-fixtures :each tu/with-node)
@@ -114,7 +114,7 @@ CREATE UNIQUE INDEX t1i0 ON t1(
 (t/deftest test-insert->doc
   (let [tables {:t1 '[a b c d e]}]
     (letfn [(sql->ops [sql-insert-string]
-              (-> (.accept (plan2/parse-statement sql-insert-string)
+              (-> (.accept (plan/parse-statement sql-insert-string)
                            (xtdb-engine/->InsertOpsVisitor (assoc tu/*node* :tables tables) sql-insert-string))
                   (update-in [0 2] dissoc :xt/id)))]
       (t/is (= [[:put-docs :t1 {:e 103 :c 102 :b 100 :d 101 :a 104}]]
@@ -122,4 +122,3 @@ CREATE UNIQUE INDEX t1i0 ON t1(
 
       (t/is (= [[:put-docs :t1 {:a nil :b -102 :c true :d "101" :e 104.5}]]
                (sql->ops "INSERT INTO t1 VALUES(NULL,-102,TRUE,'101',104.5)"))))))
-

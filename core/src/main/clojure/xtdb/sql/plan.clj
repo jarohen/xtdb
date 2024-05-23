@@ -1,4 +1,4 @@
-(ns xtdb.sql.plan2
+(ns xtdb.sql.plan
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [clojure.tools.logging :as log]

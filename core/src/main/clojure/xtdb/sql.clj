@@ -1,5 +1,5 @@
 (ns xtdb.sql
-  (:require [xtdb.sql.plan2 :as plan]))
+  (:require [xtdb.sql.plan :as plan]))
 
 (defn compile-query
   ([query] (compile-query query {}))
