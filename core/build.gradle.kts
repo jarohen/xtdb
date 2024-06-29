@@ -89,6 +89,8 @@ dependencies {
     implementation(libs.grpc.stub)
     implementation(libs.protobuf.kotlin)
     implementation(libs.grpc.netty)
+    implementation(libs.kotlinx.coroutines)
+    testImplementation(libs.kotlinx.coroutines.test)
 
     testImplementation(project(":"))
     testImplementation(project(":xtdb-http-client-jvm"))
