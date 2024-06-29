@@ -14,6 +14,7 @@ grpc = "1.68.1"
 grpc-kotlin = "1.4.1"
 protobuf = "4.28.3"
 protobuf-plugin = "0.9.4"
+ktx-coroutines = "1.9.0"
 
 [libraries]
 arrow-algorithm={ group="org.apache.arrow", name="arrow-algorithm", version.ref="arrow" }
@@ -82,6 +83,8 @@ grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
 grpc-kotlin-stub = { module = "io.grpc:grpc-kotlin-stub", version.ref = "grpc-kotlin" }
 grpc-netty = { module = "io.grpc:grpc-netty", version.ref = "grpc" }
 protobuf-kotlin = { module = "com.google.protobuf:protobuf-kotlin", version.ref = "protobuf" }
+kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "ktx-coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "ktx-coroutines" }
 
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobuf-plugin" }

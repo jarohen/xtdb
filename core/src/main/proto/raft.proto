@@ -1,0 +1,39 @@
+option java_package = "xtdb.raft.proto";
+
+message AppendEntriesRequest {
+    required int64 term = 1;
+    required bytes leader_id = 2;
+    required int64 prev_log_index = 3;
+    required int64 prev_log_term = 4;
+    repeated LogEntry entries = 5;
+    required int64 leader_commit = 6;
+}
+
+message AppendEntriesResult {
+    required int64 term = 1;
+    required bool success = 2;
+}
+
+message LogEntry {
+    required int64 index = 1;
+    required int64 term = 2;
+    required bytes command = 3;
+}
+
+message RequestVoteRequest {
+    required int64 term = 1;
+    required bytes candidate_id = 2;
+    required int64 last_log_index = 3;
+    required int64 last_log_term = 4;
+}
+
+message RequestVoteResult {
+    required bool vote_granted = 1;
+    required int64 term = 2;
+}
+
+service RaftService {
+    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResult) {}
+
+    rpc RequestVote(RequestVoteRequest) returns (RequestVoteResult) {}
+}
