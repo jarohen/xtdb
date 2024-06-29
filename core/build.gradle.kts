@@ -62,7 +62,7 @@ dependencies {
     implementation("org.antlr:antlr4-runtime:4.13.1")
 
     testImplementation("com.github.seancorfield", "next.jdbc", "1.3.939")
-    testImplementation("io.mockk", "mockk", "1.13.9")
+    testImplementation("io.mockk:mockk:1.13.11")
     testImplementation("org.clojure", "test.check", "1.1.1")
     testImplementation(project(":xtdb-http-client-jvm"))
     testImplementation(project(":xtdb-http-server"))
