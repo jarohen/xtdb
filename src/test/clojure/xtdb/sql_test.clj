@@ -1476,6 +1476,7 @@
   (t/is (= [{:xt/column-1 "xtdb"}]
            (xt/q tu/*node* "SELECT current_user"))))
 
+#_{:clj-kondo/ignore [:xtql/unrecognized-operation]}
 (t/deftest test-nest
   (t/is (=plan-file "test-nest-one"
           (plan-sql "SELECT _id AS order_id, value,
@@ -1506,7 +1507,14 @@
            (set (xt/q tu/*node*
                       "SELECT o._id AS order_id, o.value,
                               NEST_ONE(SELECT c.name FROM customers c WHERE c._id = o.customer_id) AS customer
-                       FROM orders o"))))
+                       FROM orders o"))
+
+           (set (xt/q tu/*node*
+                      '{:match (from :orders [{:xt/id order-id, :customer-id cid}])
+                        :yield [order-id value
+                                {:customer (nest-one {:match [(given cid)
+                                                              (from :customers {:xt/id cid})]
+                                                      :yield [name]})}]}))))
 
   (t/is (= #{{:orders [{:order-id 1, :value 8.99} {:order-id 0, :value 26.20}], :name "bob", :customer-id 0}
              {:orders [{:order-id 2, :value 12.34}], :name "alice", :customer-id 1}}
@@ -1516,7 +1524,14 @@
                                         FROM orders o
                                         WHERE o.customer_id = c._id)
                                 AS orders
-                       FROM customers c")))))
+                       FROM customers c"))
+
+           (set (xt/q tu/*node*
+                      '{:match (from :customers {:xt/id cid})
+                        :yield [{:customer-id cid} name
+                                {:orders (nest-many {:match [(given cid)
+                                                             (from :orders {:xt/id order-id, :customer-id cid})]
+                                                     :yield [order-id value]})}]})))))
 
 (deftest test-invalid-xt-id-in-query-3324
   (xt/submit-tx tu/*node* [[:put-docs :foo {:xt/id 0 :name "bob"}]])
