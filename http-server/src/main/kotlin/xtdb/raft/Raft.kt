@@ -1,12 +1,10 @@
-package xtdb
+package xtdb.raft
 
+import xtdb.raft.ITicker.Ticker
 import java.lang.System.Logger.Level.*
 import java.lang.System.LoggerFinder.getLoggerFinder
 import java.nio.ByteBuffer
 import java.util.*
-import java.util.concurrent.TimeUnit.MILLISECONDS
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 private val LOGGER = getLoggerFinder().getLogger("xtdb.raft", Raft::class.java.module)
 
@@ -15,51 +13,44 @@ data class LogEntry(val term: Long, val command: ByteBuffer)
 data class AppendEntriesResult(val term: Long, val success: Boolean)
 data class RequestVoteResult(val term: Long, val voteGranted: Boolean)
 
-private val UUID.prefix get() = toString().substring(0, 8)
+private typealias NodeId = UUID
+private val NodeId.prefix get() = toString().substring(0, 8)
+
 private typealias Term = Long
 
 interface RaftNode {
     fun appendEntries(
         term: Term,
-        leaderId: UUID,
+        leaderId: NodeId,
         prevLogIdx: Int,
         prevLogTerm: Term,
         entries: List<LogEntry>,
         leaderCommit: Long
     ): AppendEntriesResult
 
-    fun requestVote(term: Term, candidateId: UUID, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult
+    fun requestVote(term: Term, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult
 }
 
-class Raft : RaftNode, AutoCloseable {
+class Raft(private val ticker: ITicker = Ticker()) : RaftNode, AutoCloseable {
 
-    val nodeId: UUID = UUID.randomUUID()
-    private lateinit var otherNodes: Map<UUID, RaftNode>
+    val nodeId: NodeId = UUID.randomUUID()
+    private lateinit var otherNodes: Map<NodeId, RaftNode>
     private var quorum: Int = -1
 
     private var currentTerm: Long = 0
-    private var votedFor: UUID? = null
+    private var votedFor: NodeId? = null
     private val log: MutableList<LogEntry> = mutableListOf()
 
     private var commitIdx = 0L
     private var lastApplied = 0L
 
-    private var leaderId: UUID? = null
-
-    private val random = Random()
-    private val lock = ReentrantLock()
+    private var leaderId: NodeId? = null
 
     private lateinit var followerThread: Thread
-    private val resetElectionTimeout = lock.newCondition()
-    private val restartFollower = lock.newCondition()
 
     private lateinit var candidateThread: Thread
-    private val callElection = lock.newCondition()
-    private val leaderElected = lock.newCondition()
 
     private lateinit var leaderThread: Thread
-    private val resetHeartbeatTimeout = lock.newCondition()
-    private val startHeartbeat = lock.newCondition()
 
     private var votesReceived: Int = 0
 
@@ -68,33 +59,31 @@ class Raft : RaftNode, AutoCloseable {
         if (!sameTerm) {
             currentTerm = term
             votedFor = null
-            resetHeartbeatTimeout.signalAll()
-            restartFollower.signalAll()
+            ticker.resetHeartbeatTimeout()
+            ticker.restartFollower()
         }
         return sameTerm
     }
 
     override fun appendEntries(
         term: Long,
-        leaderId: UUID,
+        leaderId: NodeId,
         prevLogIdx: Int,
         prevLogTerm: Long,
         entries: List<LogEntry>,
         leaderCommit: Long
     ): AppendEntriesResult {
-        lock.withLock {
-            resetElectionTimeout.signalAll()
+        ticker.withLock {
+            ticker.resetElectionTimeout()
+
+            if (term < currentTerm) return AppendEntriesResult(currentTerm, false)
 
             checkTerm(term)
-
-            if (term < currentTerm) {
-                return AppendEntriesResult(currentTerm, false)
-            }
 
             if (this.leaderId != leaderId) {
                 this.leaderId = leaderId
                 LOGGER.log(DEBUG, "${nodeId.prefix} acknowledged new leader: ${leaderId.prefix}")
-                leaderElected.signalAll()
+                ticker.signalLeaderElected()
             }
         }
 
@@ -102,7 +91,7 @@ class Raft : RaftNode, AutoCloseable {
     }
 
     private fun appendEntriesResponse(result: AppendEntriesResult) {
-        lock.withLock {
+        ticker.withLock {
             checkTerm(result.term) || return
 
             if (result.success) {
@@ -111,20 +100,18 @@ class Raft : RaftNode, AutoCloseable {
         }
     }
 
-    override fun requestVote(term: Long, candidateId: UUID, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult {
+    override fun requestVote(term: Long, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult {
         LOGGER.log(TRACE, "${nodeId.prefix} received vote request from ${candidateId.prefix}")
 
-        lock.withLock {
-            if (term < currentTerm) {
-                return RequestVoteResult(currentTerm, false)
-            }
+        ticker.withLock {
+            if (term < currentTerm) return RequestVoteResult(currentTerm, false)
 
             checkTerm(term)
 
             if (votedFor == null || votedFor == candidateId) {
                 if (log.isEmpty() || (lastLogIdx >= log.size && lastLogTerm >= log.last().term)) {
                     votedFor = candidateId
-                    resetElectionTimeout.signalAll()
+                    ticker.resetElectionTimeout()
                     return RequestVoteResult(currentTerm, true)
                 }
             }
@@ -137,18 +124,19 @@ class Raft : RaftNode, AutoCloseable {
         TODO()
     }
 
-    private fun voteResponseReceived(electionTerm: Long, otherId: UUID, result: RequestVoteResult) {
+    private fun voteResponseReceived(electionTerm: Long, otherId: NodeId, result: RequestVoteResult) {
         LOGGER.log(TRACE, "${nodeId.prefix} received vote response from ${otherId.prefix}: ${result.voteGranted}")
-        lock.withLock {
+        ticker.withLock {
             checkTerm(result.term) || return
 
             if (result.voteGranted && electionTerm == currentTerm) {
                 votesReceived++
                 LOGGER.log(TRACE, "${nodeId.prefix} received vote from ${otherId.prefix}")
+
                 if (votesReceived == quorum) {
-                    startHeartbeat.signalAll()
-                    leaderElected.signalAll()
                     leaderId = nodeId
+                    ticker.startHeartbeat()
+                    ticker.signalLeaderElected()
                     LOGGER.log(INFO, "${nodeId.prefix} won the election, term: $currentTerm")
                 }
             }
@@ -156,7 +144,7 @@ class Raft : RaftNode, AutoCloseable {
     }
 
     private fun runElection() {
-        lock.withLock {
+        ticker.withLock {
             currentTerm++
             votedFor = nodeId
             votesReceived = 1
@@ -172,8 +160,8 @@ class Raft : RaftNode, AutoCloseable {
         }
     }
 
-    internal fun start(nodes: Map<UUID, RaftNode>) {
-        lock.withLock {
+    internal fun start(nodes: Map<NodeId, RaftNode>) {
+        ticker.withLock {
             this.otherNodes = nodes.minus(nodeId)
             this.quorum = (nodes.size / 2) + 1
             followerThread = Thread.ofVirtual().name("raft-follower-${nodeId.prefix}").start(::followerLoop)
@@ -185,52 +173,58 @@ class Raft : RaftNode, AutoCloseable {
     private fun followerLoop() =
         try {
             while (true)
-                lock.withLock {
-                    while (resetElectionTimeout.await(random.nextLong(150, 300), MILLISECONDS)) {
+                ticker.withLock {
+                    while (ticker.awaitElectionTimeout()) {
                         // restart timeout
                     }
 
-                    callElection.signalAll()
-                    restartFollower.await()
+                    ticker.callElection()
+                    ticker.awaitRestartFollower()
                 }
         } catch (_: InterruptedException) {
+            LOGGER.log(DEBUG, "${nodeId.prefix} follower thread interrupted")
         }
 
     private fun candidateLoop() =
         try {
-            lock.withLock {
+            ticker.withLock {
                 while (true) {
-                    callElection.await()
+                    ticker.awaitCallElection()
 
                     do {
                         runElection()
-                    } while (!leaderElected.await(random.nextLong(150, 300), MILLISECONDS))
+                    } while (!ticker.awaitLeaderElected())
                 }
             }
 
         } catch (_: InterruptedException) {
+            LOGGER.log(DEBUG, "${nodeId.prefix} candidate thread interrupted")
         }
 
-    private fun sendHeartbeat() {
-        otherNodes.forEach { (otherId, node) ->
+    private fun sendHeartbeat() =
+        otherNodes.forEach { (_, node) ->
             Thread.startVirtualThread {
-                val res = node.appendEntries(currentTerm, nodeId, log.size - 1, log.lastOrNull()?.term ?: 0, emptyList(), commitIdx)
+                val res = node.appendEntries(
+                    currentTerm, nodeId,
+                    log.size - 1, log.lastOrNull()?.term ?: 0,
+                    emptyList(), commitIdx
+                )
+
                 appendEntriesResponse(res)
             }
         }
-    }
 
     private fun leaderLoop() =
         try {
             while (true)
-                lock.withLock {
-                    startHeartbeat.await()
+                ticker.withLock {
+                    ticker.awaitStartHeartbeat()
                     val term = this.currentTerm
 
                     sendHeartbeat()
 
-                    while(this.currentTerm == term) {
-                        while (resetHeartbeatTimeout.await(50, MILLISECONDS)) {
+                    while (this.currentTerm == term) {
+                        while (ticker.awaitHeartbeatTimeout()) {
                             // restart timeout
                         }
 
@@ -238,6 +232,7 @@ class Raft : RaftNode, AutoCloseable {
                     }
                 }
         } catch (_: InterruptedException) {
+            LOGGER.log(DEBUG, "${nodeId.prefix} leader thread interrupted")
         }
 
     override fun close() {
@@ -248,6 +243,7 @@ class Raft : RaftNode, AutoCloseable {
         followerThread.join(100)
         candidateThread.join(100)
         leaderThread.join(100)
+        LOGGER.log(INFO, "${nodeId.prefix} stopped")
     }
 }
 
