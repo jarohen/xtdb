@@ -3,7 +3,8 @@
             [xtdb.protocols :as xtp])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime ZoneId ZonedDateTime)
            java.time.temporal.ChronoUnit
-           (java.util Date)))
+           (java.util Date)
+           (xtdb.time TimestampTzRange)))
 
 (defn ->duration [d]
   (cond
@@ -72,6 +73,21 @@
 
 (def ^java.time.Instant end-of-time
   (micros->instant Long/MAX_VALUE))
+
+(defrecord RTimestampTzRange [from to]
+  TimestampTzRange
+  (getFrom [_] from)
+  (getTo [_] to))
+
+(defmethod print-dup RTimestampTzRange [^TimestampTzRange zp ^TimestampTzRange w]
+  (.write w "#xt/tstz-range ")
+  (print-dup [(.getFrom zp) (.getTo zp)] w))
+
+(defmethod print-method RTimestampTzRange [zp w]
+  (print-dup zp w))
+
+(defn ->tstz-range [from to]
+  (RTimestampTzRange. (->zdt from) (->zdt to)))
 
 (defn max-tx [l r]
   (if (or (nil? l)

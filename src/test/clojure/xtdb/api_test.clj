@@ -744,3 +744,4 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"]])
                                          UNION ALL
                                          (SELECT 1 / 0)")
                    (reduce (fn [acc _] (let [acc (inc acc)] (if (== 10 acc) (reduced acc) acc))) 0)))))
+

@@ -11,6 +11,7 @@ import org.apache.arrow.vector.types.pojo.ArrowType
 import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.RuntimeException
+import xtdb.time.TimestampTzRange
 import xtdb.types.ClojureForm
 import xtdb.types.IntervalDayTime
 import xtdb.types.IntervalMonthDayNano
@@ -349,10 +350,10 @@ abstract class ExtensionVectorWriter(
     ScalarVectorWriter(vector) {
     override var field: Field = vector.field
 
-    internal val inner = writerFor(vector.underlyingVector, {
+    internal val inner = writerFor(vector.underlyingVector) {
         field = Field(field.name, field.fieldType, it.children)
         notify(field)
-    })
+    }
 
     override fun clear() = inner.clear()
     override fun writerPosition() = inner.writerPosition()
@@ -441,7 +442,35 @@ internal class SetVectorWriter(vector: SetVector, notify: FieldChangeListener?) 
     override fun writeValue0(v: IValueReader) = writeObject(v.readObject())
 
     override fun promoteChildren(field: Field) {
-        if (field.type != this.field.type || (field.isNullable && !this.field.isNullable)) throw FieldMismatch(this.field.fieldType, field.fieldType)
+        if (field.type != this.field.type || (field.isNullable && !this.field.isNullable))
+            throw FieldMismatch(this.field.fieldType, field.fieldType)
+        inner.promoteChildren(Field(field.name, inner.field.fieldType, field.children))
+    }
+}
+
+internal class TimestampTzRangeVectorWriter(vector: TimestampTzRangeVector, notify: FieldChangeListener?) :
+    ExtensionVectorWriter(vector, notify) {
+
+    private val elWriter = inner.listElementWriter()
+
+    override fun writeObject0(obj: Any) {
+        when (obj) {
+            is TimestampTzRange -> {
+                inner.startList()
+                elWriter.writeObject(obj.from)
+                elWriter.writeObject(obj.to)
+                inner.endList()
+            }
+
+            else -> throw InvalidWriteObjectException(field, obj)
+        }
+    }
+
+    override fun writeValue0(v: IValueReader) = writeObject(v.readObject())
+
+    override fun promoteChildren(field: Field) {
+        if (field.type != this.field.type || (field.isNullable && !this.field.isNullable))
+            throw FieldMismatch(this.field.fieldType, field.fieldType)
         inner.promoteChildren(Field(field.name, inner.field.fieldType, field.children))
     }
 }
@@ -494,7 +523,7 @@ private object WriterForVectorVisitor : VectorVisitor<IVectorWriter, FieldChange
 
     override fun visit(vec: ListVector, notify: FieldChangeListener?) = ListVectorWriter(vec, notify)
     override fun visit(vec: FixedSizeListVector, notify: FieldChangeListener?): IVectorWriter =
-        throw UnsupportedOperationException()
+        FixedSizeListVectorWriter(vec, notify)
 
     override fun visit(vec: LargeListVector, notify: FieldChangeListener?): IVectorWriter =
         throw UnsupportedOperationException()
@@ -518,6 +547,7 @@ private object WriterForVectorVisitor : VectorVisitor<IVectorWriter, FieldChange
         is UriVector -> UriVectorWriter(vec)
         is TransitVector -> TransitVectorWriter(vec)
         is SetVector -> SetVectorWriter(vec) { notify(vec.field) }
+        is TimestampTzRangeVector -> TimestampTzRangeVectorWriter(vec) { notify(vec.field) }
         else -> throw UnsupportedOperationException("unknown vector: ${vec.javaClass.simpleName}")
     }
 }

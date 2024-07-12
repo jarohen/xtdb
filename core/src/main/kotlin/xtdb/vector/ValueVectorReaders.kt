@@ -71,6 +71,7 @@ object VecToReader : VectorVisitor<IVectorReader, Any?> {
         is UriVector -> uriVector(v)
         is TransitVector -> transitVector(v)
         is SetVector -> setVector(v)
+        is TimestampTzRangeVector -> periodTzVector(v)
         else -> ValueVectorReader(v)
     }
 }

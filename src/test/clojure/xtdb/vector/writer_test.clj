@@ -3,6 +3,7 @@
             [xtdb.api :as xt]
             [xtdb.node :as xtn]
             [xtdb.test-util :as tu]
+            [xtdb.time :as time]
             [xtdb.types :as types]
             [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw])
@@ -413,6 +414,14 @@
                                                 #xt.arrow/field ["type" #xt.arrow/field-type [#xt.arrow/type :keyword false]]]]
         vs [{:data {:type :foo}}
             {:type :bar}]]
+    (with-open [al (RootAllocator.)
+                vec (vw/open-vec al field vs)]
+      (t/is (= vs (tu/vec->vals (vr/vec->reader vec)))))))
+
+(t/deftest writes-period-tzs
+  (let [field (types/col-type->field [:period-tz types/nullable-temporal-type])
+        vs [#xt/tstz-range [#inst "2020" #inst "2021"]
+            #xt/tstz-range [#inst "2020" nil]]]
     (with-open [al (RootAllocator.)
                 vec (vw/open-vec al field vs)]
       (t/is (= vs (tu/vec->vals (vr/vec->reader vec)))))))

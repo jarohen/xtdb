@@ -7,10 +7,9 @@
             [xtdb.util :as util])
   (:import (clojure.lang MapEntry)
            [java.io Writer]
-           [java.lang Math]
-           [java.nio.charset StandardCharsets]
            [java.nio ByteBuffer]
-           [java.time LocalDate LocalDateTime ZonedDateTime ZoneId ZoneOffset OffsetDateTime]
+           [java.nio.charset StandardCharsets]
+           [java.time LocalDate LocalDateTime OffsetDateTime ZoneId ZoneOffset ZonedDateTime]
            [java.time.format DateTimeFormatter DateTimeFormatterBuilder]
            [java.util UUID]
            (org.apache.arrow.vector.types DateUnit FloatingPointPrecision IntervalUnit TimeUnit Types$MinorType UnionMode)
@@ -18,7 +17,7 @@
            xtdb.api.query.IKeyFn
            xtdb.Types
            [xtdb.vector IVectorReader]
-           (xtdb.vector.extensions TransitType KeywordType SetType UriType UuidType)))
+           (xtdb.vector.extensions KeywordType SetType TimestampTzRangeType TransitType UriType UuidType)))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -103,6 +102,7 @@
   ArrowType$Time (<-arrow-type [arrow-type] [:time-local (time-unit->kw (.getUnit arrow-type))])
   ArrowType$Duration (<-arrow-type [arrow-type] [:duration (time-unit->kw (.getUnit arrow-type))])
   ArrowType$Interval (<-arrow-type [arrow-type] [:interval (interval-unit->kw (.getUnit arrow-type))])
+  TimestampTzRangeType (<-arrow-type [_] :period-tz)
 
   ArrowType$Struct (<-arrow-type [_] :struct)
   ArrowType$List (<-arrow-type [_] :list)
@@ -167,6 +167,8 @@
       :time-local (let [[_ time-unit] col-type]
                     (ArrowType$Time. (kw->time-unit time-unit)
                                      (case time-unit (:second :milli) 32, (:micro :nano) 64)))
+
+      :period-tz TimestampTzRangeType/INSTANCE
 
       :duration (let [[_ time-unit] col-type]
                   (ArrowType$Duration. (kw->time-unit time-unit)))
@@ -653,6 +655,12 @@
 
 (defmethod arrow-type->col-type ArrowType$Interval [^ArrowType$Interval arrow-type]
   [:interval (interval-unit->kw (.getUnit arrow-type))])
+
+;;; period
+
+(defmethod col-type->field* :period-tz [col-name nullable? [_tag el-type]]
+  (->field col-name TimestampTzRangeType/INSTANCE nullable?
+           (col-type->field "$data$" el-type)))
 
 ;;; extension types
 

@@ -748,6 +748,38 @@ public class ValueVectorReader implements IVectorReader {
         };
     }
 
+    private class ListValueReader extends BaseValueReader {
+        private final IVectorPosition pos;
+        private final IVectorPosition elPos;
+        private final IValueReader elValueReader;
+
+        public ListValueReader(IVectorPosition pos, IVectorReader elReader) {
+            super(pos);
+            this.pos = pos;
+            this.elPos = IVectorPosition.build();
+            this.elValueReader = elReader.valueReader(elPos);
+        }
+
+        @Override
+        public Object readObject() {
+            var startIdx = getListStartIndex(pos.getPosition());
+            var valueCount = getListCount(pos.getPosition());
+
+            return new IListValueReader() {
+                @Override
+                public int size() {
+                    return valueCount;
+                }
+
+                @Override
+                public IValueReader nth(int elIdx) {
+                    elPos.setPosition(startIdx + elIdx);
+                    return elValueReader;
+                }
+            };
+        }
+    }
+
     private static class ListVectorReader extends ValueVectorReader {
         private final ListVector v;
         private final IVectorReader elReader;
@@ -784,29 +816,7 @@ public class ValueVectorReader implements IVectorReader {
 
         @Override
         public IValueReader valueReader(IVectorPosition pos) {
-            var elPos = IVectorPosition.build();
-            var elValueReader = elReader.valueReader(elPos);
-
-            return new BaseValueReader(pos) {
-                @Override
-                public Object readObject() {
-                    var startIdx = getListStartIndex(pos.getPosition());
-                    var valueCount = getListCount(pos.getPosition());
-
-                    return new IListValueReader() {
-                        @Override
-                        public int size() {
-                            return valueCount;
-                        }
-
-                        @Override
-                        public IValueReader nth(int elIdx) {
-                            elPos.setPosition(startIdx + elIdx);
-                            return elValueReader;
-                        }
-                    };
-                }
-            };
+            return new ListValueReader(pos, elReader);
         }
     }
 
@@ -837,15 +847,77 @@ public class ValueVectorReader implements IVectorReader {
             public int getListCount(int idx) {
                 return listReader.getListCount(idx);
             }
+        };
+    }
+
+    private static class FixedSizeListVectorReader extends ValueVectorReader {
+        private final FixedSizeListVector v;
+        private final IVectorReader elReader;
+
+        public FixedSizeListVectorReader(FixedSizeListVector v) {
+            super(v);
+            this.v = v;
+            this.elReader = from(v.getDataVector());
+        }
+
+        @Override
+        Object getObject0(int idx, IKeyFn<?> keyFn) {
+            var startIdx = getListStartIndex(idx);
+            return PersistentVector.create(
+                    IntStream.range(0, getListCount(idx))
+                            .mapToObj(elIdx -> elReader.getObject(startIdx + elIdx, keyFn))
+                            .toList());
+        }
+
+        @Override
+        public IVectorReader listElementReader() {
+            return elReader;
+        }
+
+        @Override
+        public int getListStartIndex(int idx) {
+            return v.getElementStartIndex(idx);
+        }
+
+        @Override
+        public int getListCount(int idx) {
+            return v.getListSize();
+        }
+
+        @Override
+        public IValueReader valueReader(IVectorPosition pos) {
+            return new ListValueReader(pos, elReader);
+        }
+    }
+
+    public static IVectorReader periodTzVector(TimestampTzRangeVector v) {
+        var underlyingVector = v.getUnderlyingVector();
+        var listReader = new FixedSizeListVectorReader(underlyingVector);
+
+        return new ValueVectorReader(v) {
+            @Override
+            public IVectorReader listElementReader() {
+                return listReader.listElementReader();
+            }
+
+            @Override
+            public int getListStartIndex(int idx) {
+                return listReader.getListStartIndex(idx);
+            }
+
+            @Override
+            public int getListCount(int idx) {
+                return listReader.getListCount(idx);
+            }
+
+            @Override
+            Object getObject0(int idx, IKeyFn<?> keyFn) {
+                return v.getObject0(idx);
+            }
 
             @Override
             public IValueReader valueReader(IVectorPosition pos) {
-                return new BaseValueReader(pos) {
-                    @Override
-                    public Object readObject() {
-                        return PersistentHashSet.create((List<?>) listReader.getObject(pos.getPosition()));
-                    }
-                };
+                return new ListValueReader(pos, listReader.listElementReader());
             }
         };
     }

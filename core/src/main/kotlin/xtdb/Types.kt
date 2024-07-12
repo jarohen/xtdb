@@ -17,6 +17,7 @@ import org.apache.arrow.vector.types.Types.MinorType
 import org.apache.arrow.vector.types.pojo.ArrowType
 import org.apache.arrow.vector.types.pojo.ArrowType.ArrowTypeVisitor
 import org.apache.arrow.vector.types.pojo.FieldType
+import xtdb.time.TimestampTzRange
 import xtdb.types.ClojureForm
 import xtdb.types.IntervalDayTime
 import xtdb.types.IntervalMonthDayNano
@@ -88,6 +89,7 @@ fun ArrowType.toLeg() = accept(object : ArrowTypeVisitor<String> {
         is UuidType -> "uuid"
         is UriType -> "uri"
         is SetType -> "set"
+        is TimestampTzRangeType -> "period-tz"
         else -> throw UnsupportedOperationException("not supported for $type")
     }
 }).asKeyword
@@ -98,7 +100,7 @@ private val DATE_DAY_TYPE = ArrowType.Date(DAY)
 private val DURATION_MICRO_TYPE = ArrowType.Duration(MICROSECOND)
 private val TIME_NANO_TYPE = ArrowType.Time(NANOSECOND, 64)
 
-fun valueToArrowType(obj: Any?) = when (obj) {
+fun valueToArrowType(obj: Any?): ArrowType= when (obj) {
     null -> MinorType.NULL.type
     is Boolean -> MinorType.BIT.type
     is Byte -> MinorType.TINYINT.type
@@ -139,6 +141,8 @@ fun valueToArrowType(obj: Any?) = when (obj) {
     is IntervalYearMonth -> MinorType.INTERVALYEAR.type
     is IntervalDayTime -> MinorType.INTERVALDAY.type
     is IntervalMonthDayNano, is PeriodDuration -> MinorType.INTERVALMONTHDAYNANO.type
+
+    is TimestampTzRange -> TimestampTzRangeType
 
     else -> throw UnsupportedOperationException("unknown object type: ${obj.javaClass}")
 }

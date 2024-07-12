@@ -30,7 +30,6 @@
   ([^TransactionKey tx-key] (->tx-committed (.getTxId tx-key) (.getSystemTime tx-key)))
   ([tx-id system-time] (->TxCommitted tx-id system-time true)))
 
-
 (defrecord TxAborted [tx-id system-time committed? error]
   TransactionAborted
   (getTxId [_] tx-id)
@@ -76,6 +75,10 @@
 
 (defmethod print-method IntervalMonthDayNano [i ^Writer w]
   (print-dup i w))
+
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
+(defn tstz-range-reader [[from to]]
+  (time/->tstz-range from to))
 
 (defn- render-binding [binding]
   (xtql.edn/unparse-binding identity identity binding))
