@@ -51,6 +51,7 @@ dependencies {
     testImplementation("pro.juxt.clojars-mirrors.hato", "hato", "0.8.2")
     // hato uses cheshire for application/json encoding
     testImplementation("cheshire", "cheshire", "5.12.0")
+    testImplementation("io.mockk:mockk:1.13.11")
 }
 
 tasks.javadoc.get().enabled = false

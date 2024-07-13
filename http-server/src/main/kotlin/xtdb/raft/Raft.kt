@@ -31,20 +31,19 @@ interface RaftNode {
     fun requestVote(term: Term, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult
 }
 
-class Raft(private val ticker: ITicker = Ticker()) : RaftNode, AutoCloseable {
+class Raft(private val ticker: ITicker = Ticker(), private var currentTerm: Long = 0) : RaftNode, AutoCloseable {
 
     val nodeId: NodeId = UUID.randomUUID()
     private lateinit var otherNodes: Map<NodeId, RaftNode>
     private var quorum: Int = -1
 
-    private var currentTerm: Long = 0
     private var votedFor: NodeId? = null
     private val log: MutableList<LogEntry> = mutableListOf()
 
     private var commitIdx = 0L
     private var lastApplied = 0L
 
-    private var leaderId: NodeId? = null
+    internal var leaderId: NodeId? = null
 
     private lateinit var followerThread: Thread
 
@@ -124,6 +123,15 @@ class Raft(private val ticker: ITicker = Ticker()) : RaftNode, AutoCloseable {
         TODO()
     }
 
+    private fun checkQuorum() {
+        if (votesReceived == quorum) {
+            leaderId = nodeId
+            ticker.startHeartbeat()
+            ticker.signalLeaderElected()
+            LOGGER.log(INFO, "${nodeId.prefix} won the election, term: $currentTerm")
+        }
+    }
+
     private fun voteResponseReceived(electionTerm: Long, otherId: NodeId, result: RequestVoteResult) {
         LOGGER.log(TRACE, "${nodeId.prefix} received vote response from ${otherId.prefix}: ${result.voteGranted}")
         ticker.withLock {
@@ -133,12 +141,7 @@ class Raft(private val ticker: ITicker = Ticker()) : RaftNode, AutoCloseable {
                 votesReceived++
                 LOGGER.log(TRACE, "${nodeId.prefix} received vote from ${otherId.prefix}")
 
-                if (votesReceived == quorum) {
-                    leaderId = nodeId
-                    ticker.startHeartbeat()
-                    ticker.signalLeaderElected()
-                    LOGGER.log(INFO, "${nodeId.prefix} won the election, term: $currentTerm")
-                }
+                checkQuorum()
             }
         }
     }
@@ -157,6 +160,8 @@ class Raft(private val ticker: ITicker = Ticker()) : RaftNode, AutoCloseable {
                     voteResponseReceived(currentTerm, otherId, result)
                 }
             }
+
+            checkQuorum()
         }
     }
 
