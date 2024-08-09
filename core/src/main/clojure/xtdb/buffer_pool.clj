@@ -20,6 +20,7 @@
            (org.apache.arrow.vector.ipc ArrowFileWriter)
            (org.apache.arrow.vector.ipc.message ArrowBlock ArrowFooter ArrowRecordBatch)
            (xtdb IArrowWriter IBufferPool)
+           (xtdb.arrow Relation Relation$Unloader)
            (xtdb.api.storage ObjectStore Storage Storage$Factory Storage$LocalStorageFactory Storage$RemoteStorageFactory)
            xtdb.api.Xtdb$Config
            (xtdb.multipart IMultipartUpload SupportsMultipart)))
@@ -91,7 +92,7 @@
              (distinct)
              (vec)))))
 
-  (openArrowWriter [this k vsr]
+  (^IArrowWriter openArrowWriter [this ^Path k ^VectorSchemaRoot vsr]
     (let [baos (ByteArrayOutputStream.)]
       (util/with-close-on-catch [write-ch (Channels/newChannel baos)
                                  aw (ArrowFileWriter. vsr nil write-ch)]
@@ -111,6 +112,23 @@
 
           (close [_]
             (close-arrow-writer aw)
+            (when (.isOpen write-ch)
+              (.close write-ch)))))))
+
+  (^Relation$Unloader openArrowWriter [this ^Path k ^Relation rel]
+    (let [baos (ByteArrayOutputStream.)]
+      (util/with-close-on-catch [write-ch (Channels/newChannel baos)
+                                 unl (.startUnload rel write-ch)]
+        (reify Relation$Unloader
+          (writeBatch [_] (.writeBatch unl))
+
+          (endFile [_]
+            (.endFile unl)
+            (.close write-ch)
+            (.putObject this k (ByteBuffer/wrap (.toByteArray baos))))
+
+          (close [_]
+            (.close unl)
             (when (.isOpen write-ch)
               (.close write-ch)))))))
 
@@ -181,7 +199,7 @@
                        (.relativize disk-store path)))))
         [])))
 
-  (openArrowWriter [_ k vsr]
+  (^IArrowWriter openArrowWriter [_ ^Path k ^VectorSchemaRoot vsr]
     (let [tmp-path (create-tmp-path disk-store)]
       (util/with-close-on-catch [file-ch (util/->file-channel tmp-path util/write-truncate-open-opts)
                                  aw (ArrowFileWriter. vsr nil file-ch)]
@@ -341,6 +359,7 @@
                                                                          (-> (.getObject object-store k buffer-cache-path)
                                                                              (.thenApply (fn [path]
                                                                                            {:path path :previously-pinned? false})))))
+
                                                                    (.thenApply (fn [{:keys [path previously-pinned?]}]
                                                                                  (let [file-size (util/size-on-disk path)
                                                                                        nio-buffer (util/->mmap-path path)
@@ -366,7 +385,7 @@
 
   (listObjects [_ dir] (.listObjects object-store dir))
 
-  (openArrowWriter [_ k vsr]
+  (^IArrowWriter openArrowWriter [_ ^Path k ^VectorSchemaRoot vsr]
     (let [tmp-path (create-tmp-path local-disk-cache)]
       (util/with-close-on-catch [file-ch (util/->file-channel tmp-path util/write-truncate-open-opts)
                                  aw (ArrowFileWriter. vsr nil file-ch)]

@@ -66,10 +66,10 @@
           (str/join part)
           (util/->lex-hex-string next-row)))
 
-(defn ->table-data-file-path [^Path table-path trie-key]
+(defn ->table-data-file-path ^Path [^Path table-path trie-key]
   (.resolve table-path (format "data/%s.arrow" trie-key)))
 
-(defn ->table-meta-file-path [^Path table-path trie-key]
+(defn ->table-meta-file-path ^Path [^Path table-path trie-key]
   (.resolve table-path (format "meta/%s.arrow" trie-key)))
 
 (defn list-meta-files [^IBufferPool buffer-pool ^Path table-path]

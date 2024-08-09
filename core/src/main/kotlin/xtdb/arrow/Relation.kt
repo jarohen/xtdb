@@ -34,8 +34,13 @@ class Relation(val vectors: SequencedMap<String, Vector>, var rowCount: Int = 0)
 
     fun endRow() = ++rowCount
 
-    inner class Unloader internal constructor(private val ch: WriteChannel) : AutoCloseable {
+    interface Unloader : AutoCloseable {
+        fun writeBatch()
+        fun endStream()
+        fun endFile()
+    }
 
+    private inner class ChannelUnloader(private val ch: WriteChannel) : Unloader {
         private val vectors = this@Relation.vectors.values
         private val schema = Schema(vectors.map { it.arrowField })
         private val recordBlocks = mutableListOf<ArrowBlock>()
@@ -46,7 +51,7 @@ class Relation(val vectors: SequencedMap<String, Vector>, var rowCount: Int = 0)
             MessageSerializer.serialize(ch, schema)
         }
 
-        fun writeBatch() {
+        override fun writeBatch() {
             val nodes = mutableListOf<ArrowFieldNode>()
             val buffers = mutableListOf<ArrowBuf>()
 
@@ -58,12 +63,12 @@ class Relation(val vectors: SequencedMap<String, Vector>, var rowCount: Int = 0)
             }
         }
 
-        fun endStream() {
+        override fun endStream() {
             ch.writeIntLittleEndian(MessageSerializer.IPC_CONTINUATION_TOKEN)
             ch.writeIntLittleEndian(0)
         }
 
-        fun endFile() {
+        override fun endFile() {
             endStream()
 
             val footerStart = ch.currentPosition
@@ -80,7 +85,7 @@ class Relation(val vectors: SequencedMap<String, Vector>, var rowCount: Int = 0)
         }
     }
 
-    fun startUnload(ch: WritableByteChannel) = Unloader(WriteChannel(ch))
+    fun startUnload(ch: WritableByteChannel): Unloader = ChannelUnloader(WriteChannel(ch))
 
     private fun load(recordBatch: ArrowRecordBatch) {
         val nodes = recordBatch.nodes.toMutableList()
