@@ -250,8 +250,5 @@ class Relation(val vectors: SequencedMap<String, Vector>, var rowCount: Int = 0)
         return vectors.mapValues { it.value.toList() }
     }
 
-    val relReader: RelationReader
-        get() = RelationReader.from(
-            vectors.sequencedValues().map(VectorReader.Companion::Adapter), rowCount
-        )
+    fun asOldReader(): RelationReader = RelationReader.from(vectors.sequencedValues().map(VectorReader::asOldReader), rowCount)
 }

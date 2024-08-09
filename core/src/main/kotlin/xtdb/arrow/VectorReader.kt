@@ -6,7 +6,10 @@ import org.apache.arrow.memory.util.hash.ArrowBufHasher
 import org.apache.arrow.vector.ValueVector
 import org.apache.arrow.vector.types.pojo.Field
 import xtdb.api.query.IKeyFn
-import xtdb.vector.*
+import xtdb.vector.IValueReader
+import xtdb.vector.IVectorPosition
+import xtdb.vector.IVectorReader
+import xtdb.vector.IVectorWriter
 import java.nio.ByteBuffer
 
 interface VectorReader : AutoCloseable {
@@ -41,6 +44,8 @@ interface VectorReader : AutoCloseable {
     fun getLeg(idx: Int): String = unsupported("getLeg")
 
     fun toList(): List<Any?>
+
+    fun asOldReader(): IVectorReader = Adapter(this)
 
     companion object {
         internal class Adapter(private val vector: VectorReader) : IVectorReader {
@@ -114,6 +119,22 @@ interface VectorReader : AutoCloseable {
 
             override fun close() = vector.close()
 
+        }
+
+        @JvmStatic
+        fun fromOldReader(reader: IVectorReader) = object : VectorReader {
+            override val name: String get() = reader.name
+            override val valueCount: Int get() = reader.valueCount()
+            override val nullable: Boolean get() = reader.field.isNullable
+            override val arrowField: Field get() = reader.field
+
+            override fun isNull(idx: Int) = reader.isNull(idx)
+
+            override fun getObject(idx: Int) = reader.getObject(idx)
+
+            override fun toList() = throw UnsupportedOperationException("toList")
+
+            override fun close() = reader.close()
         }
     }
 }

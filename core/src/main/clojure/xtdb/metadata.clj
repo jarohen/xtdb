@@ -26,7 +26,7 @@
                                                ArrowType$Interval ArrowType$List ArrowType$Null ArrowType$Struct
                                                ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union
                                                ArrowType$Utf8 Field FieldType)
-           xtdb.arrow.Relation
+           (xtdb.arrow Relation VectorReader)
            xtdb.IBufferPool
            (xtdb.metadata ITableMetadata PageIndexKey)
            (xtdb.trie ArrowHashTrie HashTrie)
@@ -303,14 +303,14 @@
             (write-col-meta! true col))
           (.endList cols-wtr))))))
 
-(defn ->table-metadata-idxs [^IVectorReader metadata-rdr]
+(defn ->table-metadata-idxs [^VectorReader metadata-rdr]
   (let [page-idx-cache (HashMap.)
-        meta-row-count (.valueCount metadata-rdr)
-        data-page-idx-rdr (.structKeyReader metadata-rdr "data-page-idx")
-        cols-rdr (.structKeyReader metadata-rdr "columns")
-        col-rdr (.listElementReader cols-rdr)
-        column-name-rdr (.structKeyReader col-rdr "col-name")
-        root-col-rdr (.structKeyReader col-rdr "root-col?")
+        meta-row-count (.getValueCount metadata-rdr)
+        data-page-idx-rdr (.keyReader metadata-rdr "data-page-idx")
+        cols-rdr (.keyReader metadata-rdr "columns")
+        col-rdr (.elementReader cols-rdr)
+        column-name-rdr (.keyReader col-rdr "col-name")
+        root-col-rdr (.keyReader col-rdr "root-col?")
         col-names (HashSet.)]
 
     (dotimes [meta-idx meta-row-count]
@@ -333,19 +333,19 @@
 (defrecord TableMetadata [^HashTrie trie
                           ^Relation meta-rel
                           ^ArrowBuf buf
-                          ^IVectorReader metadata-leaf-rdr
+                          ^VectorReader metadata-leaf-rdr
                           col-names
                           ^Map page-idx-cache
                           ^AtomicInteger ref-count]
   ITableMetadata
-  (metadataReader [_] metadata-leaf-rdr)
+  (metadataReader [_] (.asOldReader metadata-leaf-rdr))
   (columnNames [_] col-names)
   (rowIndex [_ col-name page-idx] (.getOrDefault page-idx-cache (PageIndexKey. col-name page-idx) -1))
 
   (iidBloomBitmap [_ page-idx]
-    (let [bloom-rdr (-> (.structKeyReader metadata-leaf-rdr "columns")
-                        (.listElementReader)
-                        (.structKeyReader "bloom"))]
+    (let [bloom-rdr (-> (.keyReader metadata-leaf-rdr "columns")
+                        (.elementReader)
+                        (.keyReader "bloom"))]
 
       (when-let [bloom-vec-idx (.get page-idx-cache (PageIndexKey. "xt$iid" page-idx))]
         (when (.getObject bloom-rdr bloom-vec-idx)
@@ -364,9 +364,8 @@
                                                 (.getSchema loader))]
         (let [nodes-vec (.get rel "nodes")]
           (.loadBatch loader 0 rel)
-          (let [rdr (.getRelReader rel)
-                ^IVectorReader metadata-reader (-> (.readerForName rdr "nodes")
-                                                   (.legReader :leaf))
+          (let [metadata-reader (-> (.get rel "nodes")
+                                    (.legReader "leaf"))
                 {:keys [col-names page-idx-cache]} (->table-metadata-idxs metadata-reader)]
             (->TableMetadata (ArrowHashTrie. nodes-vec) rel buf metadata-reader col-names page-idx-cache (AtomicInteger. 1))))))))
 
