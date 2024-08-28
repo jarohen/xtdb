@@ -14,11 +14,9 @@
             [xtdb.pgwire :as pgwire]
             [xtdb.test-util :as tu]
             [xtdb.util :as util])
-  (:import (com.fasterxml.jackson.databind JsonNode ObjectMapper)
-           (com.fasterxml.jackson.databind.node JsonNodeType)
-           (java.io InputStream)
+  (:import (java.io InputStream)
            (java.lang Thread$State)
-           (java.sql Connection PreparedStatement ResultSet Timestamp Types)
+           (java.sql Connection PreparedStatement Timestamp Types)
            (java.time Clock Instant LocalDate LocalDateTime OffsetDateTime ZoneId ZoneOffset)
            (java.util.concurrent CountDownLatch TimeUnit)
            java.util.List
@@ -27,7 +25,7 @@
            (org.postgresql.util PGobject PSQLException)
            xtdb.JsonSerde))
 
-(set! *warn-on-reflection* false)
+(set! *warn-on-reflection* false) ; ARGH!
 (set! *unchecked-math* false)
 
 (def ^:dynamic ^:private *port* nil)
@@ -1742,3 +1740,11 @@
        (read)
        (send "SELECT * FROM tbl1 WHERE _id = $1 \\bind 'a' \\g")
        (t/is (= [["_id" "foo"] ["a" "b"]] (read)))))))
+
+(t/deftest test-tstzrange-3652
+  (with-open [conn (jdbc-conn)]
+    (jdbc/execute! conn ["INSERT INTO foo (_id) VALUES (1)"])
+    (jdbc/execute! conn ["INSERT INTO foo (_id, _valid_to) VALUES (2, DATE '2022-01-01')"])
+
+    #_ ; FIXME blocked on #3539
+    (t/is (= :bang (q conn ["SELECT _id, _valid_time FROM foo"])))))

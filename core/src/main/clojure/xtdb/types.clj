@@ -16,6 +16,7 @@
            (org.apache.arrow.vector.types.pojo ArrowType ArrowType$Binary ArrowType$Bool ArrowType$Date ArrowType$Decimal ArrowType$Duration ArrowType$FixedSizeBinary ArrowType$FixedSizeList ArrowType$FloatingPoint ArrowType$Int ArrowType$Interval ArrowType$List ArrowType$Map ArrowType$Null ArrowType$Struct ArrowType$Time ArrowType$Time ArrowType$Timestamp ArrowType$Union ArrowType$Utf8 Field FieldType)
            xtdb.api.query.IKeyFn
            (xtdb JsonSerde Types)
+           xtdb.types.ZonedDateTimeRange
            [xtdb.vector IVectorReader]
            (xtdb.vector.extensions KeywordType SetType TransitType TsTzRangeType UriType UuidType RegClassType)))
 
@@ -925,8 +926,7 @@
                                  ;; pgjdbc allows you to return offsets in string format,
                                  ;; seems non-standard, but the standard isn't clear.
                                  (when-let [^ZonedDateTime zdt (.getObject rdr idx)]
-                                   ;; getObject on EOT returns nil but isNull is false
-                                   (-> ^ZonedDateTime zdt
+                                   (-> zdt
                                        (.format iso-offset-date-time-formatter-with-space)
                                        (utf8))))})
    :date (let [typlen 4]
@@ -991,7 +991,19 @@
    :json {:typname "json"
           :oid 114
           :read-text (fn [_env ba]
-                       (JsonSerde/decode (ByteArrayInputStream. ba)))}})
+                       (JsonSerde/decode (ByteArrayInputStream. ba)))}
+
+   :tstz-range {:typname "tstzrange"
+                :oid 3910
+                :write-text (fn [_env ^IVectorReader rdr idx]
+                              (let [^ZonedDateTimeRange zdt-range (.getObject rdr idx)]
+                                (utf8 (format "[%s,%s)"
+                                              (or (some-> (.getFrom zdt-range)
+                                                          (.format iso-offset-date-time-formatter-with-space))
+                                                  "")
+                                              (or (some-> (.getTo zdt-range)
+                                                          (.format iso-offset-date-time-formatter-with-space))
+                                                  "")))))}})
 
 (def pg-types-by-oid (into {} (map #(hash-map (:oid (val %)) (val %))) pg-types))
 
@@ -1021,7 +1033,8 @@
       :null :text
       :regclass :regclass
       [:date :day] :date
-      [:timestamp-local :micro] :timestamp}
+      [:timestamp-local :micro] :timestamp
+      :tstz-range :tstz-range}
      col-type
      :json)))
 
