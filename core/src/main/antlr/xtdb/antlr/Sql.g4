@@ -81,7 +81,7 @@ startField : nonSecondPrimaryDatetimeField ;
 endField : singleDatetimeField ;
 intervalFractionalSecondsPrecision : UNSIGNED_INTEGER ;
 nonSecondPrimaryDatetimeField : 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' ;
-singleDatetimeField : nonSecondPrimaryDatetimeField | 'SECOND' ( '(' intervalFractionalSecondsPrecision ')' )? ;
+singleDatetimeField : nonSecondPrimaryDatetimeField | 'SECOND' ( LPAREN intervalFractionalSecondsPrecision RPAREN )? ;
 
 /// §5.4 Identifiers
 
@@ -117,23 +117,23 @@ windowName : identifier ;
 /// §6.1 Data Types
 
 dataType
-    : ('NUMERIC' | 'DECIMAL' | 'DEC') ('(' precision (',' scale)? ')')? # DecimalType
+    : ('NUMERIC' | 'DECIMAL' | 'DEC') (LPAREN precision (',' scale)? RPAREN)? # DecimalType
     | ('SMALLINT' | 'INTEGER' | 'INT' | 'BIGINT') # IntegerType
-    | 'FLOAT' ('(' precision ')')? # FloatType
+    | 'FLOAT' (LPAREN precision RPAREN)? # FloatType
     | 'REAL' # RealType
     | 'DOUBLE' 'PRECISION' # DoubleType
     | 'BOOLEAN' # BooleanType
     | 'DATE' # DateType
-    | 'TIME' ('(' precision ')')? withOrWithoutTimeZone? # TimeType
-    | 'TIMESTAMP' ('(' precision ')')? withOrWithoutTimeZone? # TimestampType
+    | 'TIME' (LPAREN precision RPAREN)? withOrWithoutTimeZone? # TimeType
+    | 'TIMESTAMP' (LPAREN precision RPAREN)? withOrWithoutTimeZone? # TimestampType
     | 'TIMESTAMPTZ' #TimestampTzType
     | 'INTERVAL' intervalQualifier? # IntervalType
     | ('VARCHAR' | 'TEXT') # CharacterStringType
-    | 'DURATION' ('(' precision ')')? # DurationType
-    | 'ROW' '(' fieldDefinition (',' fieldDefinition)* ')' # RowType
+    | 'DURATION' (LPAREN precision RPAREN)? # DurationType
+    | 'ROW' LPAREN fieldDefinition (',' fieldDefinition)* RPAREN # RowType
     | 'REGCLASS' #RegClassType
     | 'REGPROC' #RegProcType
-    | dataType 'ARRAY' ('[' maximumCardinality ']')? # ArrayType
+    | dataType 'ARRAY' (LBRACK maximumCardinality RBRACK)? # ArrayType
     ;
 
 precision : UNSIGNED_INTEGER ;
@@ -188,10 +188,10 @@ numericExpr
     ;
 
 exprPrimary
-    : '(' expr ')' #WrappedExpr
+    : LPAREN expr RPAREN #WrappedExpr
     | literal # LiteralExpr
     | exprPrimary '.' fieldName #FieldAccess
-    | exprPrimary '[' expr ']' #ArrayAccess
+    | exprPrimary LBRACK expr RBRACK #ArrayAccess
     | exprPrimary '::' dataType #PostgresCastExpr
     | exprPrimary '||' exprPrimary #ConcatExpr
 
@@ -205,110 +205,110 @@ exprPrimary
     | 'NEST_MANY' subquery # NestManySubqueryExpr
     | 'CASE' expr simpleWhenClause+ elseClause? 'END' #SimpleCaseExpr
     | 'CASE' searchedWhenClause+ elseClause? 'END' # SearchedCaseExpr
-    | 'NULLIF' '(' expr ',' expr ')' # NullIfExpr
-    | 'COALESCE' '(' expr (',' expr)* ')' # CoalesceExpr
-    | 'CAST' '(' expr 'AS' dataType ')' # CastExpr
+    | 'NULLIF' LPAREN expr ',' expr RPAREN # NullIfExpr
+    | 'COALESCE' LPAREN expr (',' expr)* RPAREN # CoalesceExpr
+    | 'CAST' LPAREN expr 'AS' dataType RPAREN # CastExpr
     | arrayValueConstructor # ArrayExpr
     | objectConstructor # ObjectExpr
     | generateSeries # GenerateSeriesFunction
 
     | 'EXISTS' subquery # ExistsPredicate
 
-    | (schemaName '.')? 'HAS_ANY_COLUMN_PRIVILEGE' '('
+    | (schemaName '.')? 'HAS_ANY_COLUMN_PRIVILEGE' LPAREN
         ( userString ',' )?
         tableString ','
         privilegeString
-      ')' # HasAnyColumnPrivilegePredicate
+      RPAREN # HasAnyColumnPrivilegePredicate
 
-    | (schemaName '.')? 'HAS_TABLE_PRIVILEGE' '('
+    | (schemaName '.')? 'HAS_TABLE_PRIVILEGE' LPAREN
         ( userString ',' )?
         tableString ','
         privilegeString
-      ')' # HasTablePrivilegePredicate
+      RPAREN # HasTablePrivilegePredicate
 
-    | (schemaName '.')? 'HAS_SCHEMA_PRIVILEGE' '('
+    | (schemaName '.')? 'HAS_SCHEMA_PRIVILEGE' LPAREN
         ( userString ',' )?
         schemaString ','
         privilegeString
-      ')' # HasSchemaPrivilegePredicate
+      RPAREN # HasSchemaPrivilegePredicate
 
-    | (schemaName '.')? 'VERSION' '(' ')' #PostgresVersionFunction
+    | (schemaName '.')? 'VERSION' LPAREN RPAREN #PostgresVersionFunction
 
     // numeric value functions
-    | 'POSITION' '(' expr 'IN' expr ( 'USING' charLengthUnits )? ')' # PositionFunction
-    | 'EXTRACT' '(' extractField 'FROM' extractSource ')' # ExtractFunction
-    | ('CHAR_LENGTH' | 'CHARACTER_LENGTH') '(' expr ('USING' charLengthUnits)? ')' # CharacterLengthFunction
-    | 'OCTET_LENGTH' '(' expr ')' # OctetLengthFunction
-    | 'LENGTH' '(' expr ')' # LengthFunction
-    | 'CARDINALITY' '(' expr ')' # CardinalityFunction
-    | 'ARRAY_UPPER' '(' expr ',' expr ')' # ArrayUpperFunction
-    | 'ABS' '(' expr ')' # AbsFunction
-    | 'MOD' '(' expr ',' expr ')' # ModFunction
-    | trigonometricFunctionName '(' expr ')' # TrigonometricFunction
-    | 'LOG' '(' generalLogarithmBase ',' generalLogarithmArgument ')' # LogFunction
-    | 'LOG10' '(' expr ')' # Log10Function
-    | 'LN' '(' expr ')' # LnFunction
-    | 'EXP' '(' expr ')' # ExpFunction
-    | 'POWER' '(' expr ',' expr ')' # PowerFunction
-    | 'SQRT' '(' expr ')' # SqrtFunction
-    | 'FLOOR' '(' expr ')' # FloorFunction
-    | ( 'CEIL' | 'CEILING' ) '(' expr ')' # CeilingFunction
-    | 'LEAST' '(' expr (',' expr)* ')' # LeastFunction
-    | 'GREATEST' '(' expr (',' expr)* ')' # GreatestFunction
+    | 'POSITION' LPAREN expr 'IN' expr ( 'USING' charLengthUnits )? RPAREN # PositionFunction
+    | 'EXTRACT' LPAREN extractField 'FROM' extractSource RPAREN # ExtractFunction
+    | ('CHAR_LENGTH' | 'CHARACTER_LENGTH') LPAREN expr ('USING' charLengthUnits)? RPAREN # CharacterLengthFunction
+    | 'OCTET_LENGTH' LPAREN expr RPAREN # OctetLengthFunction
+    | 'LENGTH' LPAREN expr RPAREN # LengthFunction
+    | 'CARDINALITY' LPAREN expr RPAREN # CardinalityFunction
+    | 'ARRAY_UPPER' LPAREN expr ',' expr RPAREN # ArrayUpperFunction
+    | 'ABS' LPAREN expr RPAREN # AbsFunction
+    | 'MOD' LPAREN expr ',' expr RPAREN # ModFunction
+    | trigonometricFunctionName LPAREN expr RPAREN # TrigonometricFunction
+    | 'LOG' LPAREN generalLogarithmBase ',' generalLogarithmArgument RPAREN # LogFunction
+    | 'LOG10' LPAREN expr RPAREN # Log10Function
+    | 'LN' LPAREN expr RPAREN # LnFunction
+    | 'EXP' LPAREN expr RPAREN # ExpFunction
+    | 'POWER' LPAREN expr ',' expr RPAREN # PowerFunction
+    | 'SQRT' LPAREN expr RPAREN # SqrtFunction
+    | 'FLOOR' LPAREN expr RPAREN # FloorFunction
+    | ( 'CEIL' | 'CEILING' ) LPAREN expr RPAREN # CeilingFunction
+    | 'LEAST' LPAREN expr (',' expr)* RPAREN # LeastFunction
+    | 'GREATEST' LPAREN expr (',' expr)* RPAREN # GreatestFunction
 
     // string value functions
-    | 'SUBSTRING' '('
+    | 'SUBSTRING' LPAREN
         expr
         'FROM' startPosition
         ( 'FOR' stringLength )?
         ( 'USING' charLengthUnits )?
-      ')' # CharacterSubstringFunction
+      RPAREN # CharacterSubstringFunction
 
-    | 'UPPER' '(' expr ')' # UpperFunction
-    | 'LOWER' '(' expr ')' # LowerFunction
-    | 'TRIM' '(' trimSpecification? trimCharacter? 'FROM'? trimSource ')' # TrimFunction
+    | 'UPPER' LPAREN expr RPAREN # UpperFunction
+    | 'LOWER' LPAREN expr RPAREN # LowerFunction
+    | 'TRIM' LPAREN trimSpecification? trimCharacter? 'FROM'? trimSource RPAREN # TrimFunction
 
-    | 'OVERLAY' '('
+    | 'OVERLAY' LPAREN
         expr
         'PLACING' expr
         'FROM' startPosition
         ( 'FOR' stringLength )?
         ( 'USING' charLengthUnits )?
-      ')' # OverlayFunction
+      RPAREN # OverlayFunction
 
-    | 'REPLACE' '(' expr ',' replaceTarget ',' replacement ')' # ReplaceFunction
+    | 'REPLACE' LPAREN expr ',' replaceTarget ',' replacement RPAREN # ReplaceFunction
 
     | (schemaName '.')? 'CURRENT_USER' # CurrentUserFunction
-    | (schemaName '.')? 'CURRENT_SCHEMA' ('(' ')')? # CurrentSchemaFunction
-    | (schemaName '.')? 'CURRENT_SCHEMAS' '(' expr ')' # CurrentSchemasFunction
-    | (schemaName '.')? 'CURRENT_DATABASE' ('(' ')')? # CurrentDatabaseFunction
-    | (schemaName '.')? 'PG_GET_EXPR' ('(' expr ',' expr (',' expr)? ')')? # PgGetExprFunction
-    | (schemaName '.')? '_PG_EXPANDARRAY' ('(' expr ')')? # PgExpandArrayFunction
+    | (schemaName '.')? 'CURRENT_SCHEMA' (LPAREN RPAREN)? # CurrentSchemaFunction
+    | (schemaName '.')? 'CURRENT_SCHEMAS' LPAREN expr RPAREN # CurrentSchemasFunction
+    | (schemaName '.')? 'CURRENT_DATABASE' (LPAREN RPAREN)? # CurrentDatabaseFunction
+    | (schemaName '.')? 'PG_GET_EXPR' (LPAREN expr ',' expr (',' expr)? RPAREN)? # PgGetExprFunction
+    | (schemaName '.')? '_PG_EXPANDARRAY' (LPAREN expr RPAREN)? # PgExpandArrayFunction
 
     | currentInstantFunction # CurrentInstantFunction0
-    | 'CURRENT_TIME' ('(' precision ')')? # CurrentTimeFunction
-    | 'LOCALTIME' ('(' precision ')')? # LocalTimeFunction
-    | 'DATE_TRUNC' '(' dateTruncPrecision ',' dateTruncSource (',' dateTruncTimeZone)? ')' # DateTruncFunction
-    | 'DATE_BIN' '(' intervalLiteral ',' dateBinSource (',' dateBinOrigin)? ')' # DateBinFunction
-    | 'RANGE_BINS' '(' intervalLiteral ',' rangeBinsSource (',' dateBinOrigin)? ')' #RangeBinsFunction
-    | 'OVERLAPS' '(' expr ( ',' expr )+ ')' # OverlapsFunction
-    | ('PERIOD' | 'TSTZRANGE') '(' expr ',' expr ')' # TsTzRangeConstructor
-    | 'UPPER_INF' '(' expr ')' # UpperInfFunction
-    | 'LOWER_INF' '(' expr ')' # LowerInfFunction
+    | 'CURRENT_TIME' (LPAREN precision RPAREN)? # CurrentTimeFunction
+    | 'LOCALTIME' (LPAREN precision RPAREN)? # LocalTimeFunction
+    | 'DATE_TRUNC' LPAREN dateTruncPrecision ',' dateTruncSource (',' dateTruncTimeZone)? RPAREN # DateTruncFunction
+    | 'DATE_BIN' LPAREN intervalLiteral ',' dateBinSource (',' dateBinOrigin)? RPAREN # DateBinFunction
+    | 'RANGE_BINS' LPAREN intervalLiteral ',' rangeBinsSource (',' dateBinOrigin)? RPAREN #RangeBinsFunction
+    | 'OVERLAPS' LPAREN expr ( ',' expr )+ RPAREN # OverlapsFunction
+    | ('PERIOD' | 'TSTZRANGE') LPAREN expr ',' expr RPAREN # TsTzRangeConstructor
+    | 'UPPER_INF' LPAREN expr RPAREN # UpperInfFunction
+    | 'LOWER_INF' LPAREN expr RPAREN # LowerInfFunction
 
     // interval value functions
-    | 'AGE' '(' expr ',' expr ')' # AgeFunction
+    | 'AGE' LPAREN expr ',' expr RPAREN # AgeFunction
 
-    | 'TRIM_ARRAY' '(' expr ',' expr ')' # TrimArrayFunction
+    | 'TRIM_ARRAY' LPAREN expr ',' expr RPAREN # TrimArrayFunction
     ;
 
 replaceTarget : expr;
 replacement : expr;
 
 currentInstantFunction
-    : 'CURRENT_DATE' ( '(' ')' )? # CurrentDateFunction
-    | ('CURRENT_TIMESTAMP' | 'NOW') ('(' precision ')')? # CurrentTimestampFunction
-    | 'LOCALTIMESTAMP' ('(' precision ')')? # LocalTimestampFunction
+    : 'CURRENT_DATE' ( LPAREN RPAREN )? # CurrentDateFunction
+    | ('CURRENT_TIMESTAMP' | 'NOW') (LPAREN precision RPAREN)? # CurrentTimestampFunction
+    | 'LOCALTIMESTAMP' (LPAREN precision RPAREN)? # LocalTimestampFunction
     ;
 
 booleanValue : 'TRUE' | 'FALSE' | 'UNKNOWN' ;
@@ -316,8 +316,8 @@ booleanValue : 'TRUE' | 'FALSE' | 'UNKNOWN' ;
 // spec addition: objectConstructor
 
 objectConstructor
-    : ('RECORD' | 'OBJECT') '(' (objectNameAndValue (',' objectNameAndValue)*)? ')'
-    | '{' (objectNameAndValue (',' objectNameAndValue)*)? '}'
+    : ('RECORD' | 'OBJECT') LPAREN (objectNameAndValue (',' objectNameAndValue)*)? RPAREN
+    | LBRACE (objectNameAndValue (',' objectNameAndValue)*)? RBRACE
     ;
 
 objectNameAndValue : objectName ':' expr ;
@@ -333,7 +333,7 @@ columnReference : identifierChain ;
 
 /// generate_series function
 
-generateSeries : (schemaName '.')? 'GENERATE_SERIES' '(' seriesStart ',' seriesEnd (',' seriesStep)? ')' ;
+generateSeries : (schemaName '.')? 'GENERATE_SERIES' LPAREN seriesStart ',' seriesEnd (',' seriesStep)? RPAREN ;
 seriesStart: expr;
 seriesEnd: expr;
 seriesStep: expr;
@@ -341,18 +341,18 @@ seriesStep: expr;
 /// §6.10 <window function>
 
 windowFunctionType
-    : rankFunctionType '(' ')' # RankWindowFunction
-    | 'ROW_NUMBER' '(' ')' # RowNumberWindowFunction
+    : rankFunctionType LPAREN RPAREN # RankWindowFunction
+    | 'ROW_NUMBER' LPAREN RPAREN # RowNumberWindowFunction
     | aggregateFunction # AggregateWindowFunction
-    | 'NTILE' '(' numberOfTiles ')' # NtileWindowFunction
+    | 'NTILE' LPAREN numberOfTiles RPAREN # NtileWindowFunction
 
-    | ('LEAD' | 'LAG') '('
+    | ('LEAD' | 'LAG') LPAREN
         leadOrLagExtent
         (',' offset (',' defaultExpression)?)?
-      ')' (nullTreatment)? # LeadOrLagWindowFunction
+      RPAREN (nullTreatment)? # LeadOrLagWindowFunction
 
-    | firstOrLastValue '(' expr ')' nullTreatment? # FirstOrLastValueWindowFunction
-    | 'NTH_VALUE' '(' expr ',' nthRow ')' fromFirstOrLast? nullTreatment? # NthValueWindowFunction
+    | firstOrLastValue LPAREN expr RPAREN nullTreatment? # FirstOrLastValueWindowFunction
+    | 'NTH_VALUE' LPAREN expr ',' nthRow RPAREN fromFirstOrLast? nullTreatment? # NthValueWindowFunction
 ;
 
 rankFunctionType : 'RANK' | 'DENSE_RANK' | 'PERCENT_RANK' | 'CUME_DIST' ;
@@ -382,8 +382,8 @@ windowNameOrSpecification : windowName | windowSpecification ;
 /// §6.11 <nested window function>
 
 nestedWindowFunction
-    : 'ROW_NUMBER' '(' rowMarker ')' # NestedRowNumberFunction
-    | 'VALUE_OF' '(' expr 'AT' rowMarkerExpression (',' valueOfDefaultValue)? ')' # ValueOfExprAtRow
+    : 'ROW_NUMBER' LPAREN rowMarker RPAREN # NestedRowNumberFunction
+    | 'VALUE_OF' LPAREN expr 'AT' rowMarkerExpression (',' valueOfDefaultValue)? RPAREN # ValueOfExprAtRow
     ;
 
 rowMarker : 'BEGIN_PARTITION' | 'BEGIN_FRAME' | 'CURRENT_ROW' | 'FRAME_ROW' | 'END_FRAME' | 'END_PARTITION' ;
@@ -447,7 +447,7 @@ dateBinOrigin : expr ;
 /// §6.38 <array value constructor>
 
 arrayValueConstructor
-    : 'ARRAY'? '[' (expr (',' expr)*)? ']' # ArrayValueConstructorByEnumeration
+    : 'ARRAY'? LBRACK (expr (',' expr)*)? RBRACK # ArrayValueConstructorByEnumeration
     | 'ARRAY' subquery # ArrayValueConstructorByQuery
     ;
 
@@ -466,8 +466,8 @@ generalLogarithmArgument : expr ;
 
 rowValueConstructor
     : expr # SingleExprRowConstructor
-    | '(' ( expr (',' expr)+ )? ')'  # MultiExprRowConstructor
-    | 'ROW' '(' ( expr (',' expr)* )? ')' # MultiExprRowConstructor
+    | LPAREN ( expr (',' expr)+ )? RPAREN  # MultiExprRowConstructor
+    | 'ROW' LPAREN ( expr (',' expr)* )? RPAREN # MultiExprRowConstructor
     ;
 
 /// §7.3 <table value constructor>
@@ -497,16 +497,16 @@ tableReference
     | tableReference 'NATURAL' joinType? 'JOIN' tableReference # NaturalJoinTable
     | subquery tableAlias tableProjection? # DerivedTable
     | 'LATERAL' subquery tableAlias tableProjection? # LateralDerivedTable
-    | 'UNNEST' '(' expr ')' withOrdinality? tableAlias tableProjection? # CollectionDerivedTable
+    | 'UNNEST' LPAREN expr RPAREN withOrdinality? tableAlias tableProjection? # CollectionDerivedTable
     | generateSeries tableAlias tableProjection? # GenerateSeriesTable
-    | 'ARROW_TABLE' '(' characterString ')' tableAlias tableProjection # ArrowTable
-    | '(' tableReference ')' # WrappedTableReference
+    | 'ARROW_TABLE' LPAREN characterString RPAREN tableAlias tableProjection # ArrowTable
+    | LPAREN tableReference RPAREN # WrappedTableReference
     ;
 
 withOrdinality : ('WITH' 'ORDINALITY') ;
 
 tableAlias : 'AS'? correlationName ;
-tableProjection : '(' columnNameList ')' ;
+tableProjection : LPAREN columnNameList RPAREN ;
 
 querySystemTimePeriodSpecification
     : 'FOR' 'SYSTEM_TIME' tableTimePeriodSpecification
@@ -539,7 +539,7 @@ columnNameList : columnName (',' columnName)* ;
 
 joinSpecification
     : 'ON' expr # JoinCondition
-    | 'USING' '(' columnNameList ')' # NamedColumnsJoin
+    | 'USING' LPAREN columnNameList RPAREN # NamedColumnsJoin
     ;
 
 joinType : 'INNER' | outerJoinType 'OUTER'? ;
@@ -555,7 +555,7 @@ groupByClause : 'GROUP' 'BY' (setQuantifier)? groupingElement (',' groupingEleme
 
 groupingElement
     : columnReference # OrdinaryGroupingSet
-    | '(' ')' # EmptyGroupingSet
+    | LPAREN RPAREN # EmptyGroupingSet
     ;
 
 /// §7.10 <having clause>
@@ -569,7 +569,7 @@ windowDefinitionList : windowDefinition (',' windowDefinition)* ;
 windowDefinition : newWindowName 'AS' windowSpecification ;
 newWindowName : windowName ;
 
-windowSpecification : '(' windowSpecificationDetails ')' ;
+windowSpecification : LPAREN windowSpecificationDetails RPAREN ;
 
 windowSpecificationDetails : (existingWindowName)? (windowPartitionClause)? (windowOrderClause)? (windowFrameClause)? ;
 
@@ -603,21 +603,21 @@ qualifiedAsterisk : identifierChain '.' ASTERISK excludeClause? qualifiedRenameC
 
 renameClause
     : 'RENAME' renameColumn
-    | 'RENAME' '(' renameColumn (',' renameColumn )* ')'
+    | 'RENAME' LPAREN renameColumn (',' renameColumn )* RPAREN
     ;
 
 renameColumn : columnReference asClause ;
 
 qualifiedRenameClause
     : 'RENAME' qualifiedRenameColumn
-    | 'RENAME' '(' qualifiedRenameColumn (',' qualifiedRenameColumn )* ')'
+    | 'RENAME' LPAREN qualifiedRenameColumn (',' qualifiedRenameColumn )* RPAREN
     ;
 
 qualifiedRenameColumn : identifier asClause ;
 
 excludeClause
     : 'EXCLUDE' identifier
-    | 'EXCLUDE' '(' identifier (',' identifier )* ')'
+    | 'EXCLUDE' LPAREN identifier (',' identifier )* RPAREN
     ;
 
 derivedColumn : expr asClause? ;
@@ -628,7 +628,7 @@ asClause : 'AS'? columnName ;
 queryExpression : withClause? queryExpressionNoWith ;
 queryExpressionNoWith : queryExpressionBody orderByClause? offsetAndLimit?  ;
 withClause : 'WITH' RECURSIVE? withListElement (',' withListElement)* ;
-withListElement : queryName ('(' columnNameList ')')? 'AS' subquery ;
+withListElement : queryName (LPAREN columnNameList RPAREN)? 'AS' subquery ;
 
 queryExpressionBody
     : queryTerm # QueryBodyTerm
@@ -641,7 +641,8 @@ queryTerm
     | fromClause whereClause? groupByClause? havingClause? selectClause? windowClause? # QuerySpecification
     | tableValueConstructor # ValuesQuery
     | recordsValueConstructor # RecordsQuery
-    | '(' queryExpressionNoWith ')' # WrappedQuery
+    | xtqlForm # XtqlQuery
+    | LPAREN queryExpressionNoWith RPAREN # WrappedQuery
     | queryTerm 'INTERSECT' (ALL | DISTINCT)? queryTerm # IntersectQuery
     ;
 
@@ -664,7 +665,7 @@ fetchFirstRowCount : UNSIGNED_INTEGER | parameterSpecification ;
 
 /// §7.15 <subquery>
 
-subquery : '(' queryExpression ')' ;
+subquery : LPAREN queryExpression RPAREN ;
 
 //// §8 Predicates
 
@@ -688,7 +689,7 @@ compOp : '=' | '!=' | '<>' | '<' | '>' | '<=' | '>=' ;
 
 inPredicateValue
     : subquery # InSubquery
-    | '(' rowValueList ')' # InRowValueList
+    | LPAREN rowValueList RPAREN # InRowValueList
     ;
 
 likePattern : exprPrimary ;
@@ -717,9 +718,9 @@ privilegeString : expr ;
 /// §10.9 <aggregate function>
 
 aggregateFunction
-    : 'COUNT' '(' ASTERISK ')' # CountStarFunction
-    | 'ARRAY_AGG' '(' expr ('ORDER' 'BY' sortSpecificationList)? ')' # ArrayAggFunction
-    | setFunctionType '(' setQuantifier? expr ')' # SetFunction
+    : 'COUNT' LPAREN ASTERISK RPAREN # CountStarFunction
+    | 'ARRAY_AGG' LPAREN expr ('ORDER' 'BY' sortSpecificationList)? RPAREN # ArrayAggFunction
+    | setFunctionType LPAREN setQuantifier? expr RPAREN # SetFunction
     ;
 
 setFunctionType
@@ -760,9 +761,9 @@ eraseStatementSearched : 'ERASE' 'FROM' tableName ( 'AS'? correlationName )? ('W
 
 insertStatement : 'INSERT' 'INTO' tableName insertColumnsAndSource ;
 insertColumnsAndSource
-    : ( '(' columnNameList ')' )? tableValueConstructor # InsertValues
-    | ( '(' columnNameList ')' )? recordsValueConstructor # InsertRecords
-    | ( '(' columnNameList ')' )? queryExpression # InsertFromSubquery
+    : ( LPAREN columnNameList RPAREN )? tableValueConstructor # InsertValues
+    | ( LPAREN columnNameList RPAREN )? recordsValueConstructor # InsertRecords
+    | ( LPAREN columnNameList RPAREN )? queryExpression # InsertFromSubquery
     ;
 
 /// §14.14 <update statement: searched>
@@ -813,3 +814,15 @@ levelOfIsolation
     | 'SERIALIZABLE' # SerializableIsolation
     ;
 
+/// XTQL
+
+xtqlForm
+  : XTQL_SCALAR # XtqlScalar
+  | XTQL_LPAREN (xtqlForm | xtqlDiscard)* XTQL_RPAREN # XtqlList
+  | XTQL_LBRACK (xtqlForm | xtqlDiscard)* XTQL_RBRACK # XtqlVector
+  | XTQL_LBRACE (xtqlForm | xtqlDiscard)* XTQL_RBRACE # XtqlMap
+  | '#{' (xtqlForm | xtqlDiscard)* XTQL_RBRACE # XtqlSet
+  | readerTag=XTQL_READER_TAG xtqlForm # XtqlReaderMacro
+  ;
+
+xtqlDiscard : '#_' xtqlForm ;

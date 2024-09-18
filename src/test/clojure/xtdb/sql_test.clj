@@ -2284,3 +2284,9 @@ UNION ALL
             {:xt/id 1, :x 2}]
            (-> (xt/q tu/*node* "SELECT _id, x FROM foo, generate_series(start, end) xs (x)")))))
 
+(t/deftest inline-xtql
+  (xt/submit-tx tu/*node* [[:sql "INSERT INTO foo RECORDS {_id: 1, x: 'foo'}"]])
+
+  (t/is (= [{:xt/id 1, :x "foo"}] (xt/q tu/*node* "$XTQL$ (from :foo [*]) $XTQL$")))
+  (t/is (= [{:xt/id 1, :x "foo"}] (xt/q tu/*node* "$XTQL$ (from :foo [xt/id x]) $XTQL$")))
+  (t/is (= [{:x "foo"}] (xt/q tu/*node* "$XTQL$ (from :foo [x]) $XTQL$"))))

@@ -341,6 +341,8 @@ WRITE : 'WRITE' ;
 YEAR : 'YEAR' ;
 ZONE : 'ZONE' ;
 
+START_XTQL : '$XTQL$' -> pushMode(XTQL_MODE), skip ;
+
 REGULAR_IDENTIFIER : (LETTER | '$' | '_') (LETTER | DIGIT | '$' | '_' )* ;
 
 DELIMITED_IDENTIFIER
@@ -348,3 +350,40 @@ DELIMITED_IDENTIFIER
     | '`' ('`' '`' | ~'`')* '`'
     ;
 
+mode XTQL_MODE;
+
+END_XTQL : '$XTQL$' -> popMode, skip ;
+
+XTQL_LINE_COMMENT : ';' ~[\r\n]* -> skip ;
+XTQL_WHITESPACE : [ \n\r\t,]+ -> skip ;
+
+XTQL_LPAREN : '(' ;
+XTQL_RPAREN : ')' ;
+XTQL_LBRACK : '[' ;
+XTQL_RBRACK : ']' ;
+XTQL_LBRACE : '{' ;
+XTQL_RBRACE : '}' ;
+XTQL_HASH_BRACE : '#{' ;
+XTQL_DISCARD : '#_' ;
+
+fragment XTQL_FLOAT : SIGN? [1-9] DIGIT* ('.' DIGIT+ EXPONENT? | EXPONENT) ;
+fragment XTQL_INTEGER : SIGN? [1-9] DIGIT* ;
+
+fragment XTQL_IDENT_START : [a-z_$\-<>+*%&!?=] ;
+fragment XTQL_IDENT_PART : XTQL_IDENT_START (XTQL_IDENT_START | [0-9])* ;
+
+fragment XTQL_SYMBOL
+  : XTQL_IDENT_START XTQL_IDENT_PART*
+  | XTQL_IDENT_PART ( '.' XTQL_IDENT_PART )* '/' XTQL_IDENT_PART
+  ;
+
+fragment XTQL_KEYWORD : ':' XTQL_SYMBOL ;
+
+XTQL_READER_TAG : '#' XTQL_SYMBOL ;
+
+XTQL_SCALAR
+  : 'TRUE' | 'FALSE' | 'NIL'
+  | XTQL_SYMBOL | XTQL_KEYWORD
+  | XTQL_FLOAT | XTQL_INTEGER
+  | '"' (~('"'|'\n') | '\\"')* '"'
+  ;
