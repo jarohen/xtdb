@@ -8,7 +8,8 @@
            [java.lang AutoCloseable]
            [java.net Socket]
            [java.nio ByteBuffer]
-           [java.nio.charset StandardCharsets]))
+           [java.nio.charset StandardCharsets]
+           [java.time Clock]))
 
 (def ^:dynamic ^:private *port* nil)
 
@@ -116,44 +117,48 @@
     (.flush out)
     (read-response in)))
 
-(deftest test-startup
-  (let [port *port*
-        user "xtdb"
-        database "xtdb"]
-    (with-open [^AutoCloseable socket (connect port) #_(ssl-negotiation (connect port))]
+(defrecord RecordingFrontend [!msgs]
+  pgwire/Frontend
+  (send-client-msg! [_ msg-def]
+    (swap! !msgs conj [(:name msg-def)]))
 
-      (t/is (= [{:message-type "msg-auth"
-                 :result 0}
-                {:parameter "client_encoding",
-                 :value "UTF8",
-                 :message-type "msg-parameter-status"}
-                {:parameter "TimeZone",
-                 :value "UTC",
-                 :message-type "msg-parameter-status"}
-                {:parameter "user",
-                 :value "xtdb",
-                 :message-type "msg-parameter-status"}
-                {:parameter "integer_datetimes",
-                 :value "on",
-                 :message-type "msg-parameter-status"}
-                {:parameter "database",
-                 :value "xtdb",
-                 :message-type "msg-parameter-status"}
-                {:parameter "server_encoding",
-                 :value "UTF8",
-                 :message-type "msg-parameter-status"}
-                {:parameter "datestyle",
-                 :value "ISO",
-                 :message-type "msg-parameter-status"}
-                {:parameter "server_version",
-                 :value "16",
-                 :message-type "msg-parameter-status"}
-                {:parameter "intervalstyle",
-                 :value "ISO_8601",
-                 :message-type "msg-parameter-status"}
-                {:message-type "msg-backend-key-data" :process-id 2, :secret-key 0}
-                {:message-type "msg-ready", :status :idle}]
-               (startup socket user database))))))
+  (send-client-msg! [_ msg-def data]
+    (swap! !msgs conj [(:name msg-def) data]))
+
+  AutoCloseable
+  (close [_]))
+
+(defn ->recording-frontend []
+  (->RecordingFrontend (atom [])))
+
+(defn ->conn
+  (^java.lang.AutoCloseable [frontend] (->conn frontend {}))
+
+  (^java.lang.AutoCloseable [frontend startup-params]
+   (doto (pgwire/map->Connection {:server {:server-state (atom {:parameters {"server_encoding" "UTF8"
+                                                                             "client_encoding" "UTF8"
+                                                                             "DateStyle" "ISO"
+                                                                             "IntervalStyle" "ISO_8601"}})}
+                                  :conn-state (atom {:session {:clock (Clock/systemUTC)}})
+                                  :frontend frontend
+                                  :port -1
+                                  :cid -1})
+     (pgwire/cmd-startup-pg30 startup-params))))
+
+(deftest test-startup
+  (let [{:keys [!msgs] :as frontend} (->recording-frontend)]
+    (with-open [_ (->conn frontend {"user" "xtdb"
+                                    "database" "xtdb"})]
+      (t/is (= [[:msg-auth {:result 0}]
+                [:msg-parameter-status {:parameter "server_encoding", :value "UTF8"}]
+                [:msg-parameter-status {:parameter "client_encoding", :value "UTF8"}]
+                [:msg-parameter-status {:parameter "datestyle", :value "ISO"}]
+                [:msg-parameter-status {:parameter "intervalstyle", :value "ISO_8601"}]
+                [:msg-parameter-status {:parameter "user", :value "xtdb"}]
+                [:msg-parameter-status {:parameter "database", :value "xtdb"}]
+                [:msg-backend-key-data {:process-id -1, :secret-key 0}]
+                [:msg-ready {:status :idle}]]
+               @!msgs)))))
 
 (deftest test-simple-query
   (let [port *port*
