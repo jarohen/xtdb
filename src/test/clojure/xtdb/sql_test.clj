@@ -2392,3 +2392,17 @@ UNION ALL
               {:xt/id 1, :bar 1, :foo "bar",
                :xt/valid-from #xt.time/zoned-date-time "2020-01-03T00:00Z[UTC]"}]
              (xt/q tu/*node* "SELECT *, _valid_from FROM docs2 FOR ALL VALID_TIME")))))
+
+(t/deftest inline-xtql
+  (xt/submit-tx tu/*node* [[:sql "INSERT INTO foo RECORDS {_id: 1, x: 'foo'}"]
+                           [:sql "INSERT INTO bar RECORDS {_id: 1, y: 'bar'}"]])
+
+  (t/is (= [{:xt/id 1, :x "foo"}] (xt/q tu/*node* "XTQL $$(from :foo [*])$$")))
+  (t/is (= [{:xt/id 1, :x "foo"}] (xt/q tu/*node* "XTQL $$(from :foo [xt/id x])$$")))
+  (t/is (= [{:x "foo"}] (xt/q tu/*node* "XTQL $$ (from :foo [x]) $$")))
+
+  (t/is (= [{:x "foo", :y "bar"}]
+           (xt/q tu/*node* "SELECT * EXCLUDE _id
+                            FROM foo f1
+                              JOIN (XTQL $$(from :bar [_id y])$$) f2
+                                USING (_id)"))))
