@@ -353,6 +353,7 @@ WINDOW : 'WINDOW' ;
 WITH : 'WITH' ;
 WITHOUT : 'WITHOUT' ;
 WRITE : 'WRITE' ;
+XTQL : 'XTQL' ;
 YEAR : 'YEAR' ;
 ZONE : 'ZONE' ;
 

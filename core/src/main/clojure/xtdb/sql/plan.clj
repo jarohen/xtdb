@@ -1,5 +1,6 @@
 (ns xtdb.sql.plan
-  (:require [clojure.set :as set]
+  (:require [clojure.edn :as edn]
+            [clojure.set :as set]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [xtdb.antlr :as antlr]
@@ -10,7 +11,9 @@
             [xtdb.time :as time]
             [xtdb.tx-ops :as tx-ops]
             [xtdb.types :as types]
-            [xtdb.util :as util])
+            [xtdb.util :as util]
+            [xtdb.xtql :as xtql]
+            [xtdb.xtql.edn :as xtql.edn])
   (:import clojure.lang.MapEntry
            (java.time Duration LocalDate LocalDateTime LocalTime OffsetTime Period ZoneOffset ZonedDateTime)
            (java.util Collection HashMap HashSet LinkedHashSet Map SequencedSet Set UUID)
@@ -2319,6 +2322,18 @@
 
                    (->> col-syms
                         (mapv #(->col-sym (str unique-table-alias) (str %)))))))
+
+  (visitXtqlQuery [_ ctx]
+    (let [table-info (->> (:table-info env)
+                          ;; TODO get XTQL using symbol table-info
+                          (into {} (map (fn [[tbl cols]]
+                                          [(str tbl) (into #{} (map str) cols)]))))
+
+          {:keys [ra-plan]} (-> (edn/read-string (.accept (.characterString ctx) string-literal-visitor))
+                                (xtql.edn/parse-query)
+                                (xtql/compile-query* {:table-info table-info}))]
+
+      (->QueryExpr ra-plan (mapv symbol (lp/relation-columns ra-plan)))))
 
   (visitSubquery [this ctx] (-> (.queryExpression ctx) (.accept this)))
 

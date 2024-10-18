@@ -892,11 +892,14 @@
     {:ra-plan [:top {:skip (.length this)} ra-plan]
      :provided-vars provided-vars}))
 
+(defn compile-query* [query {:keys [table-info]}]
+  (binding [*gensym* (util/seeded-gensym "_" 0)
+            *table-info* table-info]
+    (plan-query query)))
+
 (def compile-query
-  (-> (fn [query {:keys [table-info]}]
-        (let [{:keys [ra-plan]} (binding [*gensym* (util/seeded-gensym "_" 0)
-                                          *table-info* table-info]
-                                  (plan-query query))]
+  (-> (fn [query opts]
+        (let [{:keys [ra-plan]} (compile-query* query opts)]
 
           (-> ra-plan
               #_(doto clojure.pprint/pprint)

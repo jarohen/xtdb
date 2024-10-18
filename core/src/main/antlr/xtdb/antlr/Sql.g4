@@ -656,6 +656,7 @@ queryTerm
     | tableValueConstructor # ValuesQuery
     | recordsValueConstructor # RecordsQuery
     | '(' queryExpressionNoWith ')' # WrappedQuery
+    | 'XTQL' characterString # XtqlQuery
     | queryTerm 'INTERSECT' (ALL | DISTINCT)? queryTerm # IntersectQuery
     ;
 
