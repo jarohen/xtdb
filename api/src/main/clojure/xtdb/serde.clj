@@ -13,7 +13,8 @@
            [org.apache.arrow.vector PeriodDuration]
            (xtdb.api TransactionAborted TransactionCommitted TransactionKey)
            (xtdb.api.query Binding IKeyFn IKeyFn$KeyFn XtqlQuery)
-           (xtdb.api.tx TxOp$Call TxOp$DeleteDocs TxOp$EraseDocs TxOp$PutDocs TxOp$Sql TxOp$XtqlAndArgs TxOp$XtqlOp TxOps TxOptions)
+           (xtdb.api.tx TxOp$Call TxOp$Sql TxOp$XtqlAndArgs TxOp$XtqlOp TxOps TxOptions)
+           (xtdb.tx_ops PutDocs DeleteDocs EraseDocs)
            (xtdb.types ClojureForm IntervalDayTime IntervalMonthDayNano IntervalYearMonth ZonedDateTimeRange)))
 
 (defrecord TxKey [tx-id system-time]
@@ -29,7 +30,6 @@
 (defn ->tx-committed
   ([^TransactionKey tx-key] (->tx-committed (.getTxId tx-key) (.getSystemTime tx-key)))
   ([tx-id system-time] (->TxCommitted tx-id system-time true)))
-
 
 (defrecord TxAborted [tx-id system-time committed? error]
   TransactionAborted
@@ -131,46 +131,6 @@
 
 (defn xtql-reader [xtql]
   (tx-ops/parse-tx-op xtql))
-
-(defn- render-put-docs-op [^TxOp$PutDocs op]
-  {:table-name (keyword (.tableName op)), :docs (vec (.docs op))
-   :valid-from (.validFrom op), :valid-to (.validTo op)})
-
-(defmethod print-dup TxOp$PutDocs [op ^Writer w]
-  (.write w (format "#xt.tx/put-docs %s" (pr-str (render-put-docs-op op)))))
-
-(defmethod print-method TxOp$PutDocs [op ^Writer w]
-  (print-dup op w))
-
-(defn put-docs-reader [{:keys [table-name ^List docs valid-from valid-to]}]
-  (-> (TxOps/putDocs (str (symbol table-name)) docs)
-      (.during (time/->instant valid-from) (time/->instant valid-to))))
-
-(defn- render-delete-docs [^TxOp$DeleteDocs op]
-  {:table-name (keyword (.tableName op)), :doc-ids (vec (.docIds op))
-   :valid-from (.validFrom op), :valid-to (.validTo op)})
-
-(defmethod print-dup TxOp$DeleteDocs [op ^Writer w]
-  (.write w (format "#xt.tx/delete-docs %s" (pr-str (render-delete-docs op)))))
-
-(defmethod print-method TxOp$DeleteDocs [op ^Writer w]
-  (print-dup op w))
-
-(defn delete-docs-reader [{:keys [table-name doc-ids valid-from valid-to]}]
-  (-> (TxOps/deleteDocs (str (symbol table-name)) ^List (vec doc-ids))
-      (.during (time/->instant valid-from) (time/->instant valid-to))))
-
-(defn- render-erase-docs [^TxOp$EraseDocs op]
-  {:table-name (keyword (.tableName op)), :doc-ids (vec (.docIds op))})
-
-(defmethod print-dup TxOp$EraseDocs [op ^Writer w]
-  (.write w (format "#xt.tx/erase-docs %s" (pr-str (render-erase-docs op)))))
-
-(defmethod print-method TxOp$EraseDocs [op ^Writer w]
-  (print-dup op w))
-
-(defn erase-docs-reader [{:keys [table-name doc-ids]}]
-  (TxOps/eraseDocs (str (symbol table-name)) ^List (vec doc-ids)))
 
 (defn- render-call-op [^TxOp$Call op]
   {:fn-id (.fnId op), :args (.args op)})
@@ -287,9 +247,9 @@
           "xtdb.query/xtql" (transit/read-handler xtql-query-reader)
           "xtdb.tx/sql" (transit/read-handler sql-op-reader)
           "xtdb.tx/xtql" (transit/read-handler xtql-reader)
-          "xtdb.tx/put" (transit/read-handler put-docs-reader)
-          "xtdb.tx/delete" (transit/read-handler delete-docs-reader)
-          "xtdb.tx/erase" (transit/read-handler erase-docs-reader)
+          "xtdb.tx/put" (transit/read-handler tx-ops/map->PutDocs)
+          "xtdb.tx/delete" (transit/read-handler tx-ops/map->DeleteDocs)
+          "xtdb.tx/erase" (transit/read-handler tx-ops/map->EraseDocs)
           "xtdb.tx/call" (transit/read-handler call-op-reader)
           "xtdb/tx-opts" (transit/read-handler tx-opts-read-fn)
           "f64" (transit/read-handler double)
@@ -337,9 +297,9 @@
           TxOp$XtqlAndArgs (transit/write-handler "xtdb.tx/xtql" render-xtql+args)
           TxOp$XtqlOp (transit/write-handler "xtdb.tx/xtql" render-xtql-op)
 
-          TxOp$PutDocs (transit/write-handler "xtdb.tx/put" render-put-docs-op)
-          TxOp$DeleteDocs (transit/write-handler "xtdb.tx/delete" render-delete-docs)
-          TxOp$EraseDocs (transit/write-handler "xtdb.tx/erase" render-erase-docs)
+          PutDocs (transit/write-handler "xtdb.tx/put" (partial into {}))
+          DeleteDocs (transit/write-handler "xtdb.tx/delete" (partial into {}))
+          EraseDocs (transit/write-handler "xtdb.tx/erase" (partial into {}))
           TxOp$Call (transit/write-handler "xtdb.tx/call" render-call-op)}))
 
 (defn read-transit

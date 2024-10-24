@@ -21,7 +21,8 @@
            (org.apache.arrow.vector.types.pojo ArrowType$Union FieldType Schema)
            org.apache.arrow.vector.types.UnionMode
            (xtdb.api.log Log Log$Factory TxLog$Record TxLog$Subscriber)
-           (xtdb.api.tx TxOp$Abort TxOp$Call TxOp$DeleteDocs TxOp$EraseDocs TxOp$PutDocs TxOp$Sql TxOp$SqlByteArgs TxOp$XtqlAndArgs TxOp$XtqlOp TxOptions)
+           (xtdb.api.tx TxOp$Abort TxOp$Call TxOp$Sql TxOp$SqlByteArgs TxOp$XtqlAndArgs TxOp$XtqlOp TxOptions)
+           (xtdb.tx_ops DeleteDocs EraseDocs PutDocs)
            xtdb.types.ClojureForm
            xtdb.vector.IVectorWriter))
 
@@ -256,15 +257,13 @@
         valid-from-writer (.structKeyWriter put-writer "_valid_from" types/nullable-temporal-field-type)
         valid-to-writer (.structKeyWriter put-writer "_valid_to" types/nullable-temporal-field-type)
         table-doc-writers (HashMap.)]
-    (fn write-put! [^TxOp$PutDocs op]
+    (fn write-put! [{:keys [table-name docs valid-from valid-to]}]
       (.startStruct put-writer)
       (let [^IVectorWriter table-doc-writer
-            (.computeIfAbsent table-doc-writers (-> (.tableName op) (util/with-default-schema))
+            (.computeIfAbsent table-doc-writers (util/with-default-schema table-name)
                               (fn [table]
                                 (doto (.legWriter doc-writer table (FieldType/notNullable #xt.arrow/type :list))
-                                  (.listElementWriter (FieldType/notNullable #xt.arrow/type :struct)))))
-
-            docs (.docs op)]
+                                  (.listElementWriter (FieldType/notNullable #xt.arrow/type :struct)))))]
 
         (.writeObject table-doc-writer docs)
 
@@ -278,8 +277,8 @@
           (.writeBytes iid-writer (trie/->iid eid)))
         (.endList iids-writer))
 
-      (.writeObject valid-from-writer (.validFrom op))
-      (.writeObject valid-to-writer (.validTo op))
+      (.writeObject valid-from-writer valid-from)
+      (.writeObject valid-to-writer valid-to)
 
       (.endStruct put-writer))))
 
@@ -291,19 +290,19 @@
                            (.listElementWriter (FieldType/notNullable #xt.arrow/type [:fixed-size-binary 16])))
         valid-from-writer (.structKeyWriter delete-writer "_valid_from" types/nullable-temporal-field-type)
         valid-to-writer (.structKeyWriter delete-writer "_valid_to" types/nullable-temporal-field-type)]
-    (fn write-delete! [^TxOp$DeleteDocs op]
-      (when-let [doc-ids (not-empty (.docIds op))]
+    (fn write-delete! [{:keys [table-name doc-ids valid-from valid-to]}]
+      (when (seq doc-ids)
         (.startStruct delete-writer)
 
-        (.writeObject table-writer (-> (.tableName op) (util/with-default-schema)))
+        (.writeObject table-writer (-> table-name (util/with-default-schema)))
 
         (.startList iids-writer)
         (doseq [doc-id doc-ids]
           (.writeObject iid-writer (trie/->iid doc-id)))
         (.endList iids-writer)
 
-        (.writeObject valid-from-writer (.validFrom op))
-        (.writeObject valid-to-writer (.validTo op))
+        (.writeObject valid-from-writer valid-from)
+        (.writeObject valid-to-writer valid-to)
 
         (.endStruct delete-writer)))))
 
@@ -313,10 +312,10 @@
         iids-writer (.structKeyWriter erase-writer "iids" (FieldType/notNullable #xt.arrow/type :list))
         iid-writer (some-> iids-writer
                            (.listElementWriter (FieldType/notNullable #xt.arrow/type [:fixed-size-binary 16])))]
-    (fn [^TxOp$EraseDocs op]
-      (when-let [doc-ids (not-empty (.docIds op))]
+    (fn [{:keys [table-name doc-ids]}]
+      (when (seq doc-ids)
         (.startStruct erase-writer)
-        (.writeObject table-writer (-> (.tableName op) (util/with-default-schema)))
+        (.writeObject table-writer (util/with-default-schema table-name))
 
         (.startList iids-writer)
         (doseq [doc-id doc-ids]
@@ -372,9 +371,9 @@
                      (@!write-sql! tx-op)))
 
         TxOp$SqlByteArgs (@!write-sql-byte-args! tx-op)
-        TxOp$PutDocs (@!write-put! tx-op)
-        TxOp$DeleteDocs (@!write-delete! tx-op)
-        TxOp$EraseDocs (@!write-erase! tx-op)
+        PutDocs (@!write-put! tx-op)
+        DeleteDocs (@!write-delete! tx-op)
+        EraseDocs (@!write-erase! tx-op)
         TxOp$Call (@!write-call! tx-op)
         TxOp$Abort (@!write-abort! tx-op)
         (throw (err/illegal-arg :invalid-tx-op {:tx-op tx-op}))))))

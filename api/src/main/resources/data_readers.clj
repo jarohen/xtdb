@@ -19,9 +19,9 @@
 
  xt.tx/sql xtdb.serde/sql-op-reader
  xt.tx/xtql xtdb.serde/xtql-reader
- xt.tx/put-docs xtdb.serde/put-docs-reader
- xt.tx/delete-docs xtdb.serde/delete-docs-reader
- xt.tx/erase-docs xtdb.serde/erase-docs-reader
+ xt.tx/put-docs xtdb.tx-ops/map->PutDocs
+ xt.tx/delete-docs xtdb.tx-ops/map->DeleteDocs
+ xt.tx/erase-docs xtdb.tx-ops/map->EraseDocs
  xt.tx/call xtdb.serde/call-op-reader
 
  xt.time/period xtdb.mirrors.time-literals/period

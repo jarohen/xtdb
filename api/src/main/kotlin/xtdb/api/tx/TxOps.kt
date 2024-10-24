@@ -18,42 +18,9 @@ import xtdb.util.normalForm
 import java.nio.ByteBuffer
 import java.time.Instant
 
-private const val XT_TXS = "xt/tx_fns"
-private const val XT_ID = "_id"
-private const val FN = "fn"
-
 private fun String.withDefaultSchema() = if (this.indexOf('/') < 0) "public/$this" else this
 
 sealed interface TxOp {
-    data class PutDocs(
-        @JvmField val tableName: String,
-        @JvmField val docs: List<Map<String, *>>,
-        @JvmField val validFrom: Instant? = null,
-        @JvmField val validTo: Instant? = null,
-    ) : TxOp {
-
-        fun startingFrom(validFrom: Instant?) = copy(validFrom = validFrom)
-        fun until(validTo: Instant?) = copy(validTo = validTo)
-        fun during(validFrom: Instant?, validTo: Instant?) = copy(validFrom = validFrom, validTo = validTo)
-    }
-
-    data class DeleteDocs(
-        @JvmField val tableName: String,
-        @JvmField val docIds: List<*>,
-        @JvmField val validFrom: Instant? = null,
-        @JvmField val validTo: Instant? = null,
-    ) : TxOp {
-
-        fun startingFrom(validFrom: Instant?) = copy(validFrom = validFrom)
-        fun until(validTo: Instant?) = copy(validTo = validTo)
-        fun during(validFrom: Instant?, validTo: Instant?) = copy(validFrom = validFrom, validTo = validTo)
-    }
-
-    data class EraseDocs(
-        @JvmField val tableName: String,
-        @JvmField val docIds: List<*>,
-    ) : TxOp
-
     @Serializable
     data class Sql(
         @JvmField @SerialName("sql") val sql: String,
@@ -137,28 +104,6 @@ sealed interface TxOp {
 
 object TxOps {
     private val forbiddenSetColumns = setOf("_id", "_valid_from", "_valid_to", "_system_from", "_system_to")
-
-    @JvmStatic
-    fun putDocs(tableName: String, docs: List<Map<String, *>>) = TxOp.PutDocs(tableName.withDefaultSchema(), docs)
-
-    @JvmStatic
-    @SafeVarargs
-    fun putDocs(tableName: String, vararg docs: Map<String, *>) = putDocs(tableName, docs.toList())
-
-    @JvmStatic
-    fun putFn(fnId: Any, fnForm: Any) = putDocs(XT_TXS, listOf(mapOf(XT_ID to fnId, FN to ClojureForm(fnForm))))
-
-    @JvmStatic
-    fun deleteDocs(tableName: String, docIds: List<*>) = TxOp.DeleteDocs(tableName.withDefaultSchema(), docIds)
-
-    @JvmStatic
-    fun deleteDocs(tableName: String, vararg entityIds: Any) = TxOp.DeleteDocs(tableName.withDefaultSchema(), entityIds.toList())
-
-    @JvmStatic
-    fun eraseDocs(tableName: String, entityIds: List<*>) = TxOp.EraseDocs(tableName.withDefaultSchema(), entityIds)
-
-    @JvmStatic
-    fun eraseDocs(tableName: String, vararg entityIds: Any) = TxOp.EraseDocs(tableName.withDefaultSchema(), entityIds.toList())
 
     @JvmStatic
     fun sql(sql: String) = TxOp.Sql(sql)

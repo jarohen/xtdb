@@ -3,9 +3,60 @@
             [xtdb.error :as err]
             [xtdb.time :as time]
             [xtdb.xtql.edn :as xtql.edn])
-  (:import [java.util List]
-           (xtdb.api.tx TxOp$AssertExists TxOp$AssertNotExists TxOp$Delete TxOp$Erase TxOp$Insert TxOp$Update TxOp$XtqlAndArgs TxOps)
+  (:import [java.io Writer]
+           [java.util List]
+           (xtdb.api.tx TxOp TxOp$AssertExists TxOp$AssertNotExists TxOp$Delete TxOp$Erase TxOp$Insert TxOp$Update TxOp$XtqlAndArgs TxOps)
+           xtdb.types.ClojureForm
            xtdb.util.NormalForm))
+
+(defprotocol Unparse
+  (unparse-tx-op [this]))
+
+(defrecord PutDocs [table-name docs valid-from valid-to]
+  TxOp
+  Unparse
+  (unparse-tx-op [_]
+    (into [:put-docs (if (or valid-from valid-to)
+                       {:into table-name
+                        :valid-from valid-from
+                        :valid-to valid-to}
+                       table-name)]
+          docs)))
+
+(defmethod print-dup PutDocs [op ^Writer w]
+  (.write w (format "#xt.tx/put-docs %s" (pr-str (into {} op)))))
+
+(defmethod print-method PutDocs [op ^Writer w]
+  (print-dup op w))
+
+(defrecord DeleteDocs [table-name doc-ids valid-from valid-to]
+  TxOp
+  Unparse
+  (unparse-tx-op [_]
+    (into [:delete-docs (if (or valid-from valid-to)
+                          {:from table-name
+                           :valid-from valid-from
+                           :valid-to valid-to}
+                          table-name)]
+          doc-ids)))
+
+(defmethod print-dup DeleteDocs [op ^Writer w]
+  (.write w (format "#xt.tx/delete-docs %s" (pr-str (into {} op)))))
+
+(defmethod print-method DeleteDocs [op ^Writer w]
+  (print-dup op w))
+
+(defrecord EraseDocs [table-name doc-ids]
+  TxOp
+  Unparse
+  (unparse-tx-op [_]
+    (into [:erase-docs table-name] doc-ids)))
+
+(defmethod print-dup EraseDocs [op ^Writer w]
+  (.write w (format "#xt.tx/erase-docs %s" (pr-str (into {} op)))))
+
+(defmethod print-method EraseDocs [op ^Writer w]
+  (print-dup op w))
 
 (defmulti parse-tx-op
   (fn [tx-op]
@@ -20,9 +71,6 @@
 
       op))
   :default ::default)
-
-(defprotocol Unparse
-  (unparse-tx-op [this]))
 
 (defmethod parse-tx-op ::default [[op]]
   (throw (err/illegal-arg :xtql/unknown-tx-op {:op op})))
@@ -48,6 +96,7 @@
   (when-not (map? doc)
     (throw (err/illegal-arg :xtdb.tx/expected-doc
                             {::err/message "expected doc map", :doc doc})))
+
   (expect-eid (or (:xt/id doc) (get doc "xt/id")))
 
   doc)
@@ -73,9 +122,10 @@
   (let [{table :into, :keys [valid-from valid-to]} (cond
                                                      (map? table-or-opts) table-or-opts
                                                      (keyword? table-or-opts) {:into table-or-opts})]
-    (cond-> (TxOps/putDocs (expect-table-name table) ^List (mapv expect-doc docs))
-      valid-from (.startingFrom (expect-instant valid-from))
-      valid-to (.until (expect-instant valid-to)))))
+    (->PutDocs (expect-table-name table)
+               (mapv expect-doc docs)
+               (some-> valid-from expect-instant)
+               (some-> valid-to expect-instant))))
 
 (defn- expect-fn-id [fn-id]
   (if-not (eid? fn-id)
@@ -90,9 +140,11 @@
   (let [{:keys [fn-id valid-from valid-to]} (if (map? id-or-opts)
                                               id-or-opts
                                               {:fn-id id-or-opts})]
-    (cond-> (TxOps/putFn (expect-fn-id fn-id) (expect-tx-fn tx-fn))
-      valid-from (.startingFrom (expect-instant valid-from))
-      valid-to (.until (expect-instant valid-to)))))
+    (->PutDocs "xt/tx_fns"
+               [{"_id" (expect-fn-id fn-id)
+                 "fn" (ClojureForm. (expect-tx-fn tx-fn))}]
+               (some-> valid-from expect-instant)
+               (some-> valid-to expect-instant))))
 
 (defmethod parse-tx-op :insert-into [[_ table query & arg-rows :as this]]
   (when-not (keyword? table)
@@ -142,9 +194,9 @@
   (let [{table :from, :keys [valid-from valid-to]} (cond
                                                      (map? table-or-opts) table-or-opts
                                                      (keyword? table-or-opts) {:from table-or-opts})]
-    (cond-> (TxOps/deleteDocs (expect-table-name table) ^List (mapv expect-eid doc-ids))
-      valid-from (.startingFrom (expect-instant valid-from))
-      valid-to (.until (expect-instant valid-to)))))
+    (->DeleteDocs (expect-table-name table) (mapv expect-eid doc-ids)
+                  (some-> valid-from expect-instant)
+                  (some-> valid-to expect-instant))))
 
 (defmethod parse-tx-op :erase [[_ {table :from, :keys [bind unify]} & arg-rows :as this]]
   (when-not (keyword? table)
@@ -157,7 +209,7 @@
     (seq arg-rows) (.argRows ^List arg-rows)))
 
 (defmethod parse-tx-op :erase-docs [[_ table & doc-ids]]
-  (TxOps/eraseDocs (expect-table-name table) ^List (mapv expect-eid doc-ids)))
+  (->EraseDocs (expect-table-name table) (mapv expect-eid doc-ids)))
 
 (defmethod parse-tx-op :assert-exists [[_ query & arg-rows]]
   (cond-> (TxOps/assertExists (xtql.edn/parse-query query))
