@@ -83,6 +83,13 @@ dependencies {
     testImplementation(libs.next.jdbc)
     testImplementation(libs.mockk)
     testImplementation(libs.clojure.test.check)
+
+    implementation(libs.grpc.kotlin.stub)
+    implementation(libs.grpc.protobuf)
+    implementation(libs.grpc.stub)
+    implementation(libs.protobuf.kotlin)
+    implementation(libs.grpc.netty)
+
     testImplementation(project(":"))
     testImplementation(project(":xtdb-http-client-jvm"))
     testImplementation(project(":xtdb-http-server"))
@@ -96,6 +103,31 @@ dependencies {
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(21))
 
 tasks.javadoc.get().enabled = false
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.asProvider().get()}"
+    }
+    plugins {
+        create("grpc") {
+            artifact = "io.grpc:protoc-gen-grpc-java:${libs.versions.grpc.asProvider().get()}"
+        }
+        create("grpckt") {
+            artifact = "io.grpc:protoc-gen-grpc-kotlin:${libs.versions.grpc.kotlin.get()}:jdk8@jar"
+        }
+    }
+    generateProtoTasks {
+        all().forEach {
+            it.plugins {
+                create("grpc")
+                create("grpckt")
+            }
+            it.builtins {
+                create("kotlin")
+            }
+        }
+    }
+}
 
 kotlin {
     compilerOptions {

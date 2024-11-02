@@ -5,13 +5,16 @@ arrow-adbc="0.15.0"
 clojure="1.12.0"
 kotlin-coroutines = "1.10.1"
 netty="4.1.117.Final"
-protobuf = "4.28.3"
-protobuf-plugin = "0.9.4"
 reitit="0.5.15"
 muuntaja="0.6.8"
 testcontainers="1.20.3"
 micrometer="1.14.1"
 transit="1.0.329"
+
+protobuf = "4.28.3"
+protobuf-plugin = "0.9.4"
+grpc = "1.68.1"
+grpc-kotlin = "1.4.1"
 
 [libraries]
 arrow-algorithm={ group="org.apache.arrow", name="arrow-algorithm", version.ref="arrow" }
@@ -55,6 +58,10 @@ mockk={ group="io.mockk", name="mockk", version="1.13.9" }
 kaml={ group="com.charleskorn.kaml", name="kaml", version="0.56.0" }
 
 protobuf-kotlin = { module = "com.google.protobuf:protobuf-kotlin", version.ref = "protobuf" }
+grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
+grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
+grpc-kotlin-stub = { module = "io.grpc:grpc-kotlin-stub", version.ref = "grpc-kotlin" }
+grpc-netty = { module = "io.grpc:grpc-netty", version.ref = "grpc" }
 
 jsonista={ group="metosin", name="jsonista", version="0.3.3" }
 muuntaja={ group="metosin", name="muuntaja", version.ref="muuntaja" }
