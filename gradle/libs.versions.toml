@@ -10,6 +10,11 @@ testcontainers="1.20.3"
 micrometer="1.14.1"
 transit="1.0.329"
 
+grpc = "1.68.1"
+grpc-kotlin = "1.4.1"
+protobuf = "4.28.3"
+protobuf-plugin = "0.9.4"
+
 [libraries]
 arrow-algorithm={ group="org.apache.arrow", name="arrow-algorithm", version.ref="arrow" }
 arrow-memory-netty={ group="org.apache.arrow", name="arrow-memory-netty", version.ref="arrow" }
@@ -71,3 +76,12 @@ micrometer-core={ group="io.micrometer", name="micrometer-core", version.ref="mi
 micrometer-registry-prometheus={ group="io.micrometer", name="micrometer-registry-prometheus", version.ref="micrometer" }
 micrometer-registry-cloudwatch2={ group="io.micrometer", name="micrometer-registry-cloudwatch2", version.ref="micrometer" }
 micrometer-registry-azuremonitor={ group="io.micrometer", name="micrometer-registry-azure-monitor", version.ref="micrometer" }
+
+grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
+grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
+grpc-kotlin-stub = { module = "io.grpc:grpc-kotlin-stub", version.ref = "grpc-kotlin" }
+grpc-netty = { module = "io.grpc:grpc-netty", version.ref = "grpc" }
+protobuf-kotlin = { module = "com.google.protobuf:protobuf-kotlin", version.ref = "protobuf" }
+
+[plugins]
+protobuf = { id = "com.google.protobuf", version.ref = "protobuf-plugin" }
