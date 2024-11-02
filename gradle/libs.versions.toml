@@ -1,0 +1,18 @@
+# Versions
+[versions]
+grpc = "1.68.1"
+grpc-kotlin = "1.4.1"
+protobuf = "4.28.3"
+protobuf-plugin = "0.9.4"
+
+# Libraries
+[libraries]
+grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
+grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
+grpc-kotlin-stub = { module = "io.grpc:grpc-kotlin-stub", version.ref = "grpc-kotlin" }
+grpc-netty = { module = "io.grpc:grpc-netty", version.ref = "grpc" }
+protobuf-kotlin = { module = "com.google.protobuf:protobuf-kotlin", version.ref = "protobuf" }
+
+# Plugins
+[plugins]
+protobuf = { id = "com.google.protobuf", version.ref = "protobuf-plugin" }

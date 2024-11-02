@@ -9,6 +9,7 @@ plugins {
     kotlin("plugin.serialization")
     id("org.jetbrains.dokka")
     antlr
+    alias(libs.plugins.protobuf)
 }
 
 publishing {
@@ -61,6 +62,12 @@ dependencies {
     antlr("org.antlr:antlr4:4.13.1")
     implementation("org.antlr:antlr4-runtime:4.13.1")
 
+    implementation(libs.grpc.kotlin.stub)
+    implementation(libs.grpc.protobuf)
+    implementation(libs.grpc.stub)
+    implementation(libs.protobuf.kotlin)
+    implementation(libs.grpc.netty)
+
     testImplementation("com.github.seancorfield", "next.jdbc", "1.3.939")
     testImplementation("io.mockk:mockk:1.13.11")
     testImplementation("org.clojure", "test.check", "1.1.1")
@@ -76,6 +83,31 @@ dependencies {
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(21))
 
 tasks.javadoc.get().enabled = false
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.asProvider().get()}"
+    }
+    plugins {
+        create("grpc") {
+            artifact = "io.grpc:protoc-gen-grpc-java:${libs.versions.grpc.asProvider().get()}"
+        }
+        create("grpckt") {
+            artifact = "io.grpc:protoc-gen-grpc-kotlin:${libs.versions.grpc.kotlin.get()}:jdk8@jar"
+        }
+    }
+    generateProtoTasks {
+        all().forEach {
+            it.plugins {
+                create("grpc")
+                create("grpckt")
+            }
+            it.builtins {
+                create("kotlin")
+            }
+        }
+    }
+}
 
 kotlin {
     compilerOptions {
