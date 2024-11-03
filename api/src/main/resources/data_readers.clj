@@ -21,6 +21,9 @@
  xt.tx/xtql xtdb.serde/xtql-reader
  xt/tx-op xtdb.tx-ops/parse-tx-op
 
+ xtql/expr xtdb.api.xtql/parse-expr
+ xtql/query xtdb.api.xtql/parse-query
+
  time/period xtdb.mirrors.time-literals/period
  time/date xtdb.mirrors.time-literals/date
  time/date-time xtdb.mirrors.time-literals/date-time
