@@ -1,25 +1,45 @@
 package xtdb.raft
 
-import xtdb.raft.ITicker.Ticker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
+import xtdb.raft.proto.Raft.AppendEntriesResult
+import xtdb.raft.proto.Raft.RequestVoteResult
+import xtdb.raft.proto.RaftServiceGrpcKt.RaftServiceCoroutineImplBase
+import xtdb.raft.proto.appendEntriesResult
+import xtdb.raft.proto.requestVoteResult
 import java.lang.System.Logger.Level.*
+import java.lang.System.LoggerFinder
 import java.lang.System.LoggerFinder.getLoggerFinder
 import java.nio.ByteBuffer
 import java.util.*
+import java.util.concurrent.CancellationException
 
 private val LOGGER = getLoggerFinder().getLogger("xtdb.raft", Raft::class.java.module)
 
 data class LogEntry(val term: Long, val command: ByteBuffer)
 
-data class AppendEntriesResult(val term: Long, val success: Boolean)
-data class RequestVoteResult(val term: Long, val voteGranted: Boolean)
-
 internal typealias NodeId = UUID
+
 internal val NodeId.prefix get() = toString().substring(0, 8)
 
 internal typealias Term = Long
 
-interface RaftNode {
-    fun appendEntries(
+interface RaftNode : AutoCloseable {
+    val nodeId: NodeId
+
+    suspend fun appendEntries(
         term: Term,
         leaderId: NodeId,
         prevLogIdx: Int,
@@ -28,12 +48,39 @@ interface RaftNode {
         leaderCommit: Long
     ): AppendEntriesResult
 
-    fun requestVote(term: Term, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult
+    suspend fun requestVote(term: Term, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult
 }
 
-class Raft(private val ticker: ITicker = Ticker(), private val store: RaftStore = RaftStore.InMemory()) : RaftNode, AutoCloseable {
+private fun requestVoteResult(term: Long, voteGranted: Boolean) =
+    requestVoteResult {
+        this.term = term
+        this.voteGranted = voteGranted
+    }
 
-    val nodeId: NodeId = UUID.randomUUID()
+private fun appendEntriesResult(term: Long, success: Boolean) =
+    appendEntriesResult {
+        this.term = term
+        this.success = success
+    }
+
+interface Ticker {
+    suspend fun electionTimeout()
+
+    companion object {
+        operator fun invoke() = object : Ticker {
+            private val rand = Random()
+
+            override suspend fun electionTimeout() = delay(rand.nextLong(150, 300))
+        }
+    }
+}
+
+class Raft(
+    private val store: RaftStore = RaftStore.InMemory(),
+    private val ticker: Ticker = Ticker()
+) : RaftServiceCoroutineImplBase(), RaftNode, AutoCloseable {
+
+    override val nodeId: NodeId = UUID.randomUUID()
     private lateinit var otherNodes: Map<NodeId, RaftNode>
     private var quorum: Int = -1
 
@@ -46,25 +93,26 @@ class Raft(private val ticker: ITicker = Ticker(), private val store: RaftStore 
 
     internal var leaderId: NodeId? = null
 
-    private lateinit var followerThread: Thread
+    private val mutex = Mutex()
+    private val nodeScope = CoroutineScope(Dispatchers.Default)
+    private var currentRole: Job? = null
+    private var timeoutJob: Job? = null
 
-    private lateinit var candidateThread: Thread
-
-    private lateinit var leaderThread: Thread
-
-    private var votesReceived: Int = 0
-
-    private fun checkTerm(term: Term): Boolean {
-        val sameTerm = term == currentTerm
-        if (!sameTerm) {
-            store.setTerm(term, null)
-            ticker.resetHeartbeatTimeout()
-            ticker.restartFollower()
-        }
-        return sameTerm
+    override fun toString(): String {
+        return "<RaftNode ${nodeId.prefix}>"
     }
 
-    override fun appendEntries(
+    private fun resetElectionTimeout() {
+        timeoutJob = nodeScope.launch {
+            ticker.electionTimeout()
+
+            mutex.withLock {
+                currentRole = nodeScope.launch { runElection() }
+            }
+        }
+    }
+
+    override suspend fun appendEntries(
         term: Long,
         leaderId: NodeId,
         prevLogIdx: Int,
@@ -72,51 +120,46 @@ class Raft(private val ticker: ITicker = Ticker(), private val store: RaftStore 
         entries: List<LogEntry>,
         leaderCommit: Long
     ): AppendEntriesResult {
-        ticker.withLock {
-            ticker.resetElectionTimeout()
+        mutex.withLock {
+            if (term < currentTerm) return appendEntriesResult(currentTerm, false)
 
-            if (term < currentTerm) return AppendEntriesResult(currentTerm, false)
-
-            checkTerm(term)
+            timeoutJob?.cancel("received append entries")
+            resetElectionTimeout()
 
             if (this.leaderId != leaderId) {
                 this.leaderId = leaderId
                 LOGGER.log(DEBUG, "${nodeId.prefix} acknowledged new leader: ${leaderId.prefix}")
-                ticker.signalLeaderElected()
             }
-        }
 
-        return AppendEntriesResult(currentTerm, true)
-    }
-
-    private fun appendEntriesResponse(result: AppendEntriesResult) {
-        ticker.withLock {
-            checkTerm(result.term) || return
-
-            if (result.success) {
-                // TODO update commitIdx
-            } else TODO()
+            return appendEntriesResult(currentTerm, true)
         }
     }
 
-    override fun requestVote(term: Long, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult {
+    override suspend fun requestVote(
+        term: Long,
+        candidateId: NodeId,
+        lastLogIdx: Long,
+        lastLogTerm: Long
+    ): RequestVoteResult {
         LOGGER.log(TRACE, "${nodeId.prefix} received vote request from ${candidateId.prefix}")
 
-        ticker.withLock {
-            if (term < currentTerm) return RequestVoteResult(currentTerm, false)
+        mutex.withLock {
+            if (term < currentTerm) return requestVoteResult(currentTerm, false)
 
-            // this also calls setTerm
-            checkTerm(term)
+            if (term > currentTerm) {
+                store.setTerm(term, null)
+                currentRole?.cancel("new term")
+            }
 
             if (votedFor == null || votedFor == candidateId) {
                 if (log.isEmpty() || (lastLogIdx >= log.size && lastLogTerm >= log.last().term)) {
-                    store.setTerm(currentTerm, candidateId)
-                    ticker.resetElectionTimeout()
-                    return RequestVoteResult(currentTerm, true)
+                    timeoutJob?.cancel("granted vote")
+                    store.setTerm(term, candidateId)
+                    resetElectionTimeout()
+                    return requestVoteResult(term, true)
                 }
             }
-
-            return RequestVoteResult(currentTerm, false)
+            return requestVoteResult(currentTerm, false)
         }
     }
 
@@ -124,130 +167,115 @@ class Raft(private val ticker: ITicker = Ticker(), private val store: RaftStore 
         TODO()
     }
 
-    private fun checkQuorum() {
-        if (votesReceived == quorum) {
-            leaderId = nodeId
-            ticker.startHeartbeat()
-            ticker.signalLeaderElected()
-            LOGGER.log(INFO, "${nodeId.prefix} won the election, term: $currentTerm")
-        }
-    }
+    private suspend fun startLeader() {
+        val leaderTerm = currentTerm
+        supervisorScope {
+            val sup = this
 
-    private fun voteResponseReceived(electionTerm: Long, otherId: NodeId, result: RequestVoteResult) {
-        LOGGER.log(TRACE, "${nodeId.prefix} received vote response from ${otherId.prefix}: ${result.voteGranted}")
-        ticker.withLock {
-            checkTerm(result.term) || return
+            otherNodes.forEach { (_, node) ->
+                launch {
+                    while(true) {
+                        val heartbeatJob = launch { delay(20) }
 
-            if (result.voteGranted && electionTerm == currentTerm) {
-                votesReceived++
-                LOGGER.log(TRACE, "${nodeId.prefix} received vote from ${otherId.prefix}")
+                        val res = node.appendEntries(
+                            leaderTerm, nodeId,
+                            log.size - 1, log.lastOrNull()?.term ?: 0,
+                            emptyList(), commitIdx
+                        )
 
-                checkQuorum()
-            }
-        }
-    }
+                        mutex.withLock {
+                            if (res.term > leaderTerm) {
+                                sup.cancel("new term")
+                                currentRole = null
+                                resetElectionTimeout()
+                                yield()
+                            }
 
-    private fun runElection() {
-        ticker.withLock {
-            store.setTerm(currentTerm + 1, nodeId)
-            votesReceived = 1
+                            // TODO update commitIdx
+                        }
 
-            LOGGER.log(INFO, "${nodeId.prefix} calling election, term: $currentTerm")
-
-            otherNodes.forEach { (otherId, node) ->
-                Thread.startVirtualThread {
-                    val result = node.requestVote(currentTerm, nodeId, log.size.toLong(), log.lastOrNull()?.term ?: 0)
-                    voteResponseReceived(currentTerm, otherId, result)
+                        heartbeatJob.join()
+                    }
                 }
             }
+        }
+    }
 
-            checkQuorum()
+    private suspend fun runElection() {
+        mutex.withLock {
+            store.setTerm(currentTerm + 1, nodeId)
+
+            resetElectionTimeout()
+        }
+
+        val term = currentTerm
+        LOGGER.log(INFO, "${nodeId.prefix} calling election, term: $term")
+
+        val results = Channel<RequestVoteResult>(otherNodes.size)
+
+        supervisorScope {
+            otherNodes.forEach { (otherId, node) ->
+                launch {
+                    val result = node.requestVote(term, nodeId, log.size.toLong(), log.lastOrNull()?.term ?: 0)
+
+                    LOGGER.log(
+                        TRACE,
+                        "${nodeId.prefix} received vote response from ${otherId.prefix}: ${result.voteGranted}"
+                    )
+
+                    results.send(result)
+                }
+            }
+        }
+
+        var votes = 1
+
+        while (true) {
+            val res = results.receiveCatching()
+
+            when {
+                res.isClosed -> break
+
+                res.isSuccess -> {
+                    val resp = res.getOrThrow()
+
+                    when {
+                        resp.term > term -> throw CancellationException("new term")
+
+                        resp.voteGranted -> {
+                            votes++
+                            if (votes >= quorum) {
+                                LOGGER.log(INFO, "${nodeId.prefix} elected leader, term: $term")
+
+                                mutex.withLock {
+                                    timeoutJob?.cancel("elected leader")
+                                    timeoutJob = null
+                                    currentRole = nodeScope.launch { startLeader() }
+                                }
+
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun startFollower() {
+        mutex.withLock {
+            resetElectionTimeout()
         }
     }
 
     internal fun start(nodes: Map<NodeId, RaftNode>) {
-        ticker.withLock {
-            this.otherNodes = nodes.minus(nodeId)
-            this.quorum = (nodes.size / 2) + 1
-            followerThread = Thread.ofVirtual().name("raft-follower-${nodeId.prefix}").start(::followerLoop)
-            candidateThread = Thread.ofVirtual().name("raft-candidate-${nodeId.prefix}").start(::candidateLoop)
-            leaderThread = Thread.ofVirtual().name("raft-leader-${nodeId.prefix}").start(::leaderLoop)
-        }
+        this.otherNodes = nodes.minus(nodeId)
+        this.quorum = (nodes.size / 2) + 1
+        runBlocking { startFollower() }
     }
 
-    private fun followerLoop() =
-        try {
-            while (true)
-                ticker.withLock {
-                    while (ticker.awaitElectionTimeout()) {
-                        // restart timeout
-                    }
-
-                    ticker.callElection()
-                    ticker.awaitRestartFollower()
-                }
-        } catch (_: InterruptedException) {
-            LOGGER.log(DEBUG, "${nodeId.prefix} follower thread interrupted")
-        }
-
-    private fun candidateLoop() =
-        try {
-            ticker.withLock {
-                while (true) {
-                    ticker.awaitCallElection()
-
-                    do {
-                        runElection()
-                    } while (!ticker.awaitLeaderElected())
-                }
-            }
-
-        } catch (_: InterruptedException) {
-            LOGGER.log(DEBUG, "${nodeId.prefix} candidate thread interrupted")
-        }
-
-    private fun sendHeartbeat() =
-        otherNodes.forEach { (_, node) ->
-            Thread.startVirtualThread {
-                val res = node.appendEntries(
-                    currentTerm, nodeId,
-                    log.size - 1, log.lastOrNull()?.term ?: 0,
-                    emptyList(), commitIdx
-                )
-
-                appendEntriesResponse(res)
-            }
-        }
-
-    private fun leaderLoop() =
-        try {
-            while (true)
-                ticker.withLock {
-                    ticker.awaitStartHeartbeat()
-                    val term = this.currentTerm
-
-                    sendHeartbeat()
-
-                    while (this.currentTerm == term) {
-                        while (ticker.awaitHeartbeatTimeout()) {
-                            // restart timeout
-                        }
-
-                        sendHeartbeat()
-                    }
-                }
-        } catch (_: InterruptedException) {
-            LOGGER.log(DEBUG, "${nodeId.prefix} leader thread interrupted")
-        }
-
     override fun close() {
-        followerThread.interrupt()
-        candidateThread.interrupt()
-        leaderThread.interrupt()
-
-        followerThread.join(100)
-        candidateThread.join(100)
-        leaderThread.join(100)
+        nodeScope.cancel("closing")
         LOGGER.log(INFO, "${nodeId.prefix} stopped")
     }
 }

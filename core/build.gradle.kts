@@ -67,6 +67,7 @@ dependencies {
     implementation(libs.grpc.stub)
     implementation(libs.protobuf.kotlin)
     implementation(libs.grpc.netty)
+    implementation(libs.kotlinx.coroutines)
 
     testImplementation("com.github.seancorfield", "next.jdbc", "1.3.939")
     testImplementation("io.mockk:mockk:1.13.11")
