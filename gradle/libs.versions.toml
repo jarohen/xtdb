@@ -3,8 +3,8 @@ arrow="17.0.0"
 arrow-adbc="0.14.0"
 clojure="1.12.0"
 netty="4.1.110.Final"
-reitit="0.5.15"
-muuntaja="0.6.8"
+reitit="0.7.2"
+muuntaja="0.6.10"
 
 [libraries]
 arrow-algorithm={ group="org.apache.arrow", name="arrow-algorithm", version.ref="arrow" }
@@ -31,6 +31,9 @@ reitit-http={ group="metosin", name="reitit-http", version.ref="reitit" }
 reitit-sieppari={ group="metosin", name="reitit-sieppari", version.ref="reitit" }
 reitit-swagger={ group="metosin", name="reitit-swagger", version.ref="reitit" }
 reitit-spec={ group="metosin", name="reitit-spec", version.ref="reitit" }
+
+reitit-malli={ group="metosin", name="reitit-malli", version.ref="reitit" }
+malli={ group="metosin", name="malli", version="0.16.4" }
 
 ring-core={ group="ring", name="ring-core", version="1.10.0" }
 ring-jetty9-adapter={ group="info.sunng", name="ring-jetty9-adapter", version="0.22.4" }

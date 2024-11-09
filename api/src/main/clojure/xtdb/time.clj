@@ -1,10 +1,40 @@
 (ns xtdb.time
   (:require [clojure.spec.alpha :as s]
+            [malli.core :as m]
+            [malli.transform :as mt]
+            [malli.registry :as m.reg]
+            [malli.experimental.time :as m.time]
+            [malli.experimental.time.transform :as m.time.xform]
             [xtdb.error :as err]
             [xtdb.protocols :as xtp])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime ZoneId ZoneOffset ZonedDateTime)
            java.time.temporal.ChronoUnit
            (java.util Date)))
+
+(m.reg/set-default-registry!
+ (m.reg/composite-registry
+  (m/default-schemas)
+  (m.reg/var-registry)
+  (m.time/schemas)))
+
+(def time-xform
+  (mt/transformer
+   m.time.xform/time-transformer
+   {:name ::time
+    :decoders {:time/instant (fn [v]
+                               (if (instance? Date v)
+                                 (.toInstant ^Date v)
+                                 (Instant/from v)))
+
+               :time/zoned-date-time (fn [v]
+                                       (if (instance? Date v)
+                                         (.toInstant ^Date v)
+                                         (ZonedDateTime/from v)))
+
+               :time/duration (fn [v]
+                                (if (nat-int? v)
+                                  (Duration/ofMillis v)
+                                  v))}}))
 
 (defn ->duration [d]
   (cond

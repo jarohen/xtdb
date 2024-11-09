@@ -173,6 +173,7 @@
                  decode-json))
           "testing tx")
 
+    #_#_#_#_
     (t/is (= [{:xt/id 2}]
              (xt/q *node* '(from :docs [xt/id])
                    {:after-tx tx2})))

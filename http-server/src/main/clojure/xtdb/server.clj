@@ -2,9 +2,11 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [cognitect.transit :as transit]
+            [malli.util :as mu]
             [muuntaja.core :as m]
             [muuntaja.format.core :as mf]
             [reitit.coercion :as r.coercion]
+            [reitit.coercion.malli :as rc.malli]
             [reitit.coercion.spec :as rc.spec]
             [reitit.core :as r]
             [reitit.http :as http]
@@ -14,7 +16,6 @@
             [reitit.http.interceptors.parameters :as ri.parameters]
             [reitit.interceptor.sieppari :as r.sieppari]
             [reitit.ring :as r.ring]
-            [reitit.swagger :as r.swagger]
             [ring.adapter.jetty9 :as j]
             [ring.util.response :as ring-response]
             [spec-tools.core :as st]
@@ -28,7 +29,6 @@
   (:import (java.io InputStream OutputStream)
            (java.time Duration ZoneId)
            (java.util List Map)
-           [java.util.function Consumer]
            [java.util.stream Stream]
            org.eclipse.jetty.server.Server
            (xtdb JsonSerde)
@@ -68,8 +68,6 @@
       (assoc-in [:http :encode-response-body?] (constantly true))))
 
 (defmulti ^:private route-handler :name, :default ::default)
-
-(s/def ::tx-ops seqable?)
 
 (s/def ::key-fn (s/nilable #(instance? IKeyFn %)))
 
@@ -119,6 +117,17 @@
           {:tx-ops (.getTxOps tx)
            :opts (some-> (.getOpts tx) <-TxOptions)})))))
 
+(def TxReqBody
+  (-> [:map
+       [:tx-ops [:vector :some]]
+       [:opts {:optional true}
+        [:map
+         [:system-time {:optional true} :time/instant]
+         [:default-tz {:optional true} :time/zone-id]]]
+       [:await-tx? {:optional true, :default false} :boolean]]
+
+      (mu/closed-schema)))
+
 (defmethod route-handler :tx [_]
   {:muuntaja (m/create (-> muuntaja-opts
                            (assoc-in [:formats "application/json" :encoder] json-tx-encoder)
@@ -131,8 +140,7 @@
                                 (xtp/execute-tx node tx-ops opts)
                                 (xtp/submit-tx node tx-ops opts))}))
 
-          :parameters {:body (s/keys :req-un [::tx-ops]
-                                     :opt-un [:xtdb.server.tx/opts ::await-tx?])}}})
+          :parameters {:body #'TxReqBody}}})
 
 (defn- throwable->ex-info [^Throwable t]
   (ex-info (.getMessage t) {::err/error-type :unknown-runtime-error
@@ -153,9 +161,8 @@
             (let [writer (transit/writer out :json opts)]
               (try
                 (.forEach res
-                          (reify Consumer
-                            (accept [_ el]
-                              (transit/write writer el))))
+                          (fn [el]
+                            (transit/write writer el)))
                 (catch xtdb.RuntimeException e
                   (transit/write writer e))
                 (catch Throwable t
@@ -177,10 +184,9 @@
           (with-open [^Stream res res]
             (try
               (.forEach res
-                        (reify Consumer
-                          (accept [_ el]
-                            (JsonSerde/encode el out)
-                            (.write out ^byte ascii-newline))))
+                        (fn [el]
+                          (JsonSerde/encode el out)
+                          (.write out ^byte ascii-newline)))
               (catch Throwable t
                 (JsonSerde/encode t out)
                 (.write out ^byte ascii-newline))
@@ -217,24 +223,34 @@
             (finally
               (util/close out))))))))
 
-(s/def ::current-time inst?)
-(s/def ::at-tx (s/nilable #(instance? TransactionKey %)))
-(s/def ::after-tx (s/nilable #(instance? TransactionKey %)))
-(s/def ::basis (s/nilable (s/or :class #(instance? Basis %)
-                                :map (s/keys :opt-un [::current-time ::at-tx]))))
+(def QueryBody
+  (-> [:map
+       [:query [:fn (some-fn string? seq? #(instance? Query %))]]
 
-(s/def ::tx-timeout
-  (st/spec (s/nilable #(instance? Duration %))
-           {:decode/string (fn [_ s] (some-> s Duration/parse))}))
+       [:args {:optional true}
+        [:fn (some-fn #(instance? Map %)
+                      #(instance? List %))]]
 
-(s/def ::query (some-fn string? seq? #(instance? Query %)))
+       [:after-tx {:optional true}
+        [:maybe [:fn #(instance? TransactionKey %)]]]
 
-(s/def ::args (s/nilable (some-fn #(instance? Map %)
-                                  #(instance? List %))))
+       [:basis {:optional true}
+        [:or
+         [:fn #(instance? Basis %)]
+         [:map
+          [:current-time {:optional true} :time/instant]
+          [:at-tx {:optional true}
+           [:fn #(instance? TransactionKey %)]]]]]
 
-(s/def ::query-body
-  (s/keys :req-un [::query],
-          :opt-un [::after-tx ::basis ::tx-timeout ::args ::default-tz ::key-fn ::explain?]))
+       [:tx-timeout {:optional true} [:maybe :time/duration]]
+
+       [:default-tz {:optional true} [:maybe :time/zone-id]]
+
+       [:key-fn {:optional true}
+        [:fn #(instance? IKeyFn %)]]
+
+       [:explain? {:optional true, :default false} :boolean]]
+      (mu/closed-schema)))
 
 (defn- <-QueryOpts [^QueryOptions opts]
   (->> {:args (.getArgs opts)
@@ -255,7 +271,7 @@
         :key-fn (.getKeyFn opts)}
        (into {} (remove (comp nil? val)))))
 
-(defn json-query-decoder []
+(def json-query-decoder
   (reify
     mf/Decode
     (decode [_ data _]
@@ -280,7 +296,7 @@
                            (assoc-in [:formats "application/json" :encoder]
                                      [->json-resultset-encoder {}])
 
-                           (assoc-in [:formats "application/json" :decoder] (json-query-decoder))))
+                           (assoc-in [:formats "application/json" :decoder] json-query-decoder)))
 
    :post {:handler (fn [{:keys [node parameters]}]
                      (let [{{:keys [query] :as query-opts} :body} parameters]
@@ -296,7 +312,7 @@
 
                                 :else (throw (err/illegal-arg :unknown-query-type {:query query, :type (type query)})))}))
 
-          :parameters {:body ::query-body}}})
+          :parameters {:body #'QueryBody}}})
 
 (defmethod route-handler :openapi [_]
   {:get {:handler (fn [_req]
@@ -332,48 +348,44 @@
   [^Exception e _]
   {:status 500 :body (throwable->ex-info e)})
 
-(def router
-  (http/router xtp/http-routes
-               {:expand (fn [{route-name :name, :as route} opts]
-                          (r/expand (cond-> route
-                                      route-name (merge (route-handler route)))
-                                    opts))
-
-                :data {:muuntaja (m/create muuntaja-opts)
-                       :coercion rc.spec/coercion
-                       :interceptors [r.swagger/swagger-feature
-                                      [ri.parameters/parameters-interceptor]
-                                      [ri.muuntaja/format-negotiate-interceptor]
-
-                                      [ri.muuntaja/format-response-interceptor]
-
-                                      [ri.exception/exception-interceptor
-                                       (merge ri.exception/default-handlers
-                                              {::ri.exception/default default-handler
-                                               xtdb.IllegalArgumentException handle-ex-info
-                                               xtdb.RuntimeException handle-ex-info
-                                               ::r.coercion/request-coercion handle-request-coercion-error
-                                               :muuntaja/decode handle-muuntaja-decode-error
-                                               ::ri.exception/wrap (fn [handler e req]
-                                                                     (log/debug e (format "response error (%s): '%s'" (class e) (ex-message e)))
-                                                                     (let [response-format (:raw-format (:muuntaja/response req))]
-                                                                       (cond-> (handler e req)
-                                                                         (#{"application/jsonl"} response-format)
-                                                                         (assoc :muuntaja/content-type "application/json"))))})]
-
-                                      [ri.muuntaja/format-request-interceptor]
-                                      [rh.coercion/coerce-request-interceptor]]}}))
-
 (defn- with-opts [opts]
   {:enter (fn [ctx]
             (update ctx :request merge opts))})
 
 (defn handler [node]
-  (http/ring-handler router
-                     (r.ring/create-default-handler)
-                     {:executor r.sieppari/executor
-                      :interceptors [[with-opts {:node node}]]}))
+  (-> xtp/http-routes
+      (http/router {:expand (fn [{route-name :name, :as route} opts]
+                              (r/expand (cond-> route
+                                          route-name (merge (route-handler route)))
+                                        opts))
 
+                    :data {:muuntaja (m/create muuntaja-opts)
+                           :coercion rc.malli/coercion
+                           :interceptors [[with-opts {:node node}]
+                                          [ri.parameters/parameters-interceptor]
+                                          [ri.muuntaja/format-negotiate-interceptor]
+                                          [ri.muuntaja/format-response-interceptor]
+
+                                          [ri.exception/exception-interceptor
+                                           (merge ri.exception/default-handlers
+                                                  {::ri.exception/default default-handler
+                                                   xtdb.IllegalArgumentException handle-ex-info
+                                                   xtdb.RuntimeException handle-ex-info
+                                                   ::r.coercion/request-coercion handle-request-coercion-error
+                                                   :muuntaja/decode handle-muuntaja-decode-error
+                                                   ::ri.exception/wrap (fn [handler e req]
+                                                                         (log/debug e (format "response error (%s): '%s'" (class e) (ex-message e)))
+                                                                         (let [response-format (:raw-format (:muuntaja/response req))]
+                                                                           (cond-> (handler e req)
+                                                                             (#{"application/jsonl"} response-format)
+                                                                             (assoc :muuntaja/content-type "application/json"))))})]
+
+                                          [ri.muuntaja/format-request-interceptor]
+
+                                          [rh.coercion/coerce-request-interceptor]]}})
+
+      (http/ring-handler (r.ring/create-default-handler)
+                         {:executor r.sieppari/executor})))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-server [node ^HttpServer$Factory module]

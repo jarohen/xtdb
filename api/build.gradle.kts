@@ -31,6 +31,8 @@ dependencies {
     api(libs.arrow.vector)
     api(libs.arrow.memory.netty)
 
+    api(libs.malli)
+
     api(kotlin("stdlib-jdk8"))
     api("org.jetbrains.kotlinx", "kotlinx-serialization-json", "1.6.0")
 

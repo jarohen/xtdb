@@ -39,7 +39,10 @@ dependencies {
     api(libs.reitit.swagger)
     api(libs.reitit.spec)
 
-    api("com.cognitect", "transit-clj", "1.0.329")
+    api(libs.malli)
+    api(libs.reitit.malli)
+
+    api(libs.transit.clj)
 
     api(kotlin("stdlib-jdk8"))
     implementation(kotlin("reflect"))

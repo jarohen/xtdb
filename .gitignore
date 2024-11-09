@@ -19,3 +19,4 @@ build
 .DS_Store
 
 /.calva/
+/.clj-kondo/metosin/
