@@ -7,8 +7,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import xtdb.api.Authenticator.Factory.UserTable
-import xtdb.api.Authenticator.Method.PASSWORD
-import xtdb.api.Authenticator.Method.TRUST
+import xtdb.api.Authenticator.Method.*
 import xtdb.api.Authenticator.MethodRule
 import xtdb.api.log.Kafka
 import xtdb.api.log.Logs.InMemoryLogFactory

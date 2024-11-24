@@ -74,6 +74,8 @@ dependencies {
     antlr("org.antlr:antlr4:4.13.1")
     implementation("org.antlr:antlr4-runtime:4.13.1")
 
+    api("pro.juxt.clojars-mirrors.hato", "hato", "0.8.2")
+
     testImplementation("com.github.seancorfield", "next.jdbc", "1.3.939")
     testImplementation("io.mockk", "mockk", "1.13.9")
     testImplementation("org.clojure", "test.check", "1.1.1")

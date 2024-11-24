@@ -37,6 +37,7 @@
            (org.apache.arrow.vector FieldVector VectorSchemaRoot)
            (org.apache.arrow.vector.ipc ArrowFileWriter)
            (org.apache.arrow.vector.types.pojo Schema)
+           org.testcontainers.containers.GenericContainer
            (xtdb ICursor)
            (xtdb.api TransactionKey)
            xtdb.api.query.IKeyFn
@@ -501,3 +502,12 @@
    (->> (for [i (range (.valueCount rdr))]
           (.getObject rdr i key-fn))
         (into []))))
+
+(defn with-container [^GenericContainer c, f]
+  (if (.getContainerId c)
+    (f c)
+    (try
+      (.start c)
+      (f c)
+      (finally
+        (.stop c)))))

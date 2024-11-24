@@ -7,8 +7,7 @@
             [xtdb.node :as xtn]
             [xtdb.test-util :as tu]
             [xtdb.util :as util])
-  (:import org.testcontainers.containers.GenericContainer
-           org.testcontainers.kafka.ConfluentKafkaContainer
+  (:import org.testcontainers.kafka.ConfluentKafkaContainer
            org.testcontainers.utility.DockerImageName
            [xtdb.api.log Log]
            xtdb.buffer_pool.RemoteBufferPool))
@@ -25,18 +24,9 @@
 
   (.stop container))
 
-(defn with-container [^GenericContainer c, f]
-  (if (.getContainerId c)
-    (f c)
-    (try
-      (.start c)
-      (f c)
-      (finally
-        (.stop c)))))
-
 (t/use-fixtures :once
   (fn [f]
-    (with-container container
+    (tu/with-container container
       (fn [^ConfluentKafkaContainer c]
         (binding [*bootstrap-servers* (.getBootstrapServers c)]
           (f))))))

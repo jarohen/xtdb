@@ -99,6 +99,7 @@ allprojects {
             testRuntimeOnly("org.junit.jupiter", "junit-jupiter-engine", "5.8.1")
             testImplementation(libs.testcontainers)
             testImplementation(libs.testcontainers.kafka)
+            testImplementation(libs.testcontainers.keycloak)
             testImplementation(libs.testcontainers.minio)
         }
 

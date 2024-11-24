@@ -323,6 +323,12 @@
    :sql-state "57014"
    :message msg})
 
+(defn- notice [msg]
+  {:severity "NOTICE"
+   :localized-severity "NOTICE"
+   :sql-state "00000"
+   :message msg})
+
 (defn- notice-warning [msg]
   {:severity "WARNING"
    :localized-severity "WARNING"
@@ -948,7 +954,7 @@
   ;;https://www.postgresql.org/docs/current/config-setting.html#CONFIG-SETTING-NAMES-VALUES
   ;;parameter names are case insensitive, choosing to lossily downcase them for now and store a mapping to a display format
   ;;for any name not typically displayed in lower case.
-  (swap! (:conn-state conn) update-in [:session :parameters] (fnil into {}) (parse-session-params {parameter value}))
+  (swap! (:conn-state conn) update-in [:session :parameters] assoc parameter value)
   (cmd-write-msg conn msg-parameter-status {:parameter (get pg-param-nf->display-format parameter parameter), :value (str value)}))
 
 (defn cmd-send-ready
@@ -1060,6 +1066,7 @@
         user (get startup-params "user")
         db-name (get startup-params "database")
         {:keys [node] :as conn} (assoc conn :node (->node db-name))]
+
     (letfn [(killed-conn [err]
               (doto conn
                 (cmd-send-error err)
@@ -1082,12 +1089,22 @@
               (if (not= :msg-password msg-name)
                 (killed-conn (err-invalid-auth-spec (str "password authentication failed for user: " user)))
 
-                (if (.verifyPassword authn node user (:password msg))
+                (if-let [user (.verifyPassword authn node user (:password msg))]
                   (do
                     (cmd-write-msg conn msg-auth {:result 0})
-                    (startup-ok conn startup-params))
+                    (startup-ok conn (assoc startup-params "user" user)))
 
                   (killed-conn (err-invalid-passwd (str "password authentication failed for user: " user)))))))
+
+          #xt.authn/method :device-auth
+          (let [device-auth-resp (.startDeviceAuth authn user)]
+            (cmd-write-msg conn msg-auth {:result 0})
+            (cmd-send-notice conn (notice (str "\nHello! Please head over here to authenticate:"
+                                               (str "\n\n" (.getUrl device-auth-resp))
+                                               "\n")))
+            (if-let [user (.await device-auth-resp)]
+              (startup-ok conn (assoc startup-params "user" user))
+              (killed-conn (err-invalid-passwd "device authentication failed"))))
 
           (killed-conn (err-invalid-auth-spec (str "no authentication record found for user: " user))))
 
@@ -1142,7 +1159,7 @@
                   (cmd-startup-cancel msg-in))
 
         :30 (-> conn
-                (cmd-startup-pg30 (read-startup-parameters msg-in)))
+                (cmd-startup-pg30 (parse-session-params (read-startup-parameters msg-in))))
 
         (doto conn
           (cmd-startup-err (err-protocol-violation "Unknown protocol version")))))))
@@ -1155,7 +1172,7 @@
 (def supported-param-oids
   (set (map :oid (vals types/pg-types))))
 
-(defn- execute-tx [{:keys [node] :as conn} dml-buf tx-opts]
+(defn- execute-tx [{:keys [node]} dml-buf tx-opts]
   (let [tx-ops (mapv (fn [{:keys [query params]}]
                        [:sql query params])
                      dml-buf)]
