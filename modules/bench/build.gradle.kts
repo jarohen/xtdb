@@ -25,6 +25,8 @@ dependencies {
     api("pro.juxt.clojars-mirrors.hiccup", "hiccup", "2.0.0-alpha2")
 
     api("software.amazon.awssdk", "s3", "2.25.24")
+
+    api(libs.malli)
 }
 
 

@@ -37,6 +37,7 @@ reitit-http={ group="metosin", name="reitit-http", version.ref="reitit" }
 reitit-sieppari={ group="metosin", name="reitit-sieppari", version.ref="reitit" }
 reitit-swagger={ group="metosin", name="reitit-swagger", version.ref="reitit" }
 reitit-spec={ group="metosin", name="reitit-spec", version.ref="reitit" }
+malli={ group="metosin", name="malli", version="0.16.4"}
 
 ring-core={ group="ring", name="ring-core", version="1.10.0" }
 ring-jetty9-adapter={ group="info.sunng", name="ring-jetty9-adapter", version="0.22.4" }
