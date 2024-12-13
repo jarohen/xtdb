@@ -60,8 +60,9 @@
   (with-open [node (tu/->local-node node-opts)]
     (let [open-ids (->> (xt/q node '(from :docs [{:xt/id id}]))
                         (mapv :id))
-          get-item #(xt/q node '(from :docs [{:xt/id $id} foo bar baz foobar barfoo])
-                          {:args {:id (rand-nth open-ids)}})
+          get-item #(xt/q node ['(fn [id]
+                                   (from :docs [{:xt/id id} foo bar baz foobar barfoo]))
+                                (rand-nth open-ids)])
           f-call #(future
                     (dotimes [_ 100]
                       (get-item)))

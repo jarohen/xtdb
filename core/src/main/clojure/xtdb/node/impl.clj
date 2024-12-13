@@ -95,9 +95,9 @@
 
   (execute-tx [this tx-ops opts]
     (let [tx-id (xtp/submit-tx this tx-ops opts)]
-      (with-open [res (xtp/open-sql-query this "SELECT system_time, committed AS \"committed?\", error FROM xt.txs FOR ALL VALID_TIME WHERE _id = ?"
-                                          {:args [tx-id]
-                                           :key-fn (serde/read-key-fn :kebab-case-keyword)})]
+      (with-open [res (xtp/open-sql-query this ["SELECT system_time, committed AS \"committed?\", error FROM xt.txs FOR ALL VALID_TIME WHERE _id = ?"
+                                                tx-id]
+                                          {:key-fn (serde/read-key-fn :kebab-case-keyword)})]
         (let [{:keys [system-time committed? error]} (-> (.findFirst res) (.orElse nil))
               system-time (time/->instant system-time)]
           (if committed?

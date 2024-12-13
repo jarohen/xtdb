@@ -48,8 +48,9 @@
                                      [:put-docs :docs {:xt/id put-id}]])
 
             (->> (xt/q tu/*node*
-                       '(from :docs [{:xt/id id} {:xt/id $id}])
-                       {:args {:id put-id}})
+                       ['(fn [put-id]
+                           (from :docs [{:xt/id id} {:xt/id put-id}]))
+                        put-id])
                  (into #{} (map :id))))]
 
     (t/is (= #{:empty-list} (run-test [] :empty-list)))
@@ -74,8 +75,9 @@
                            [:put-docs :accounts {:xt/id :ivan :balance 200}]
                            [:put-fn :update-balance
                             '(fn [id]
-                               (let [[account] (q '(from :accounts [balance xt/id {:xt/id $id}])
-                                                  {:args {:id id}})]
+                               (let [[account] (q ['(fn [id]
+                                                      (from :accounts [balance xt/id {:xt/id id}]))
+                                                   id])]
                                  (if account
                                    [[:put-docs :accounts (update account :balance inc)]]
                                    [])))]

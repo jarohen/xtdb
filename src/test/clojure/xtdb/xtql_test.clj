@@ -2,6 +2,8 @@
   (:require [clojure.test :as t :refer [deftest]]
             [xtdb.xtql :as xtql]))
 
+  ;; TODO check errors
+
 (defn- roundtrip-expr [expr]
   (xtql/unparse (xtql/parse-expr expr)))
 

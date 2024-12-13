@@ -161,10 +161,6 @@
   (xt/submit-tx *node* devs)
 
   (t/is (= #{{:name "James"} {:name "Matt"}}
-           (set (xt/q *node* "SELECT u.name FROM users u WHERE u.name IN (?, ?)"
-                      {:args ["James" "Matt"]}))))
-
-  (t/is (= #{{:name "James"} {:name "Matt"}}
            (set (xt/q *node* ["SELECT u.name FROM users u WHERE u.name IN (?, ?)"
                               "James" "Matt"])))))
 
@@ -534,7 +530,9 @@ VALUES (2, DATE '2022-01-01', DATE '2021-01-01')"])
   (xt/submit-tx tu/*node* [[:put-docs :docs {:xt/id :petr :name "Petr"}]])
 
   (t/is (= [{:name "Petr"}]
-           (xt/q tu/*node* '(from :docs [{:xt/id $petr} name]) {:args {:petr :petr}}))))
+           (xt/q tu/*node* ['(fn [petr]
+                               (from :docs [{:xt/id petr} name]))
+                            :petr]))))
 
 (t/deftest test-close-node-multiple-times
   (xt/submit-tx tu/*node* [[:put-docs :docs {:xt/id :petr :name "Petr"}]])

@@ -44,19 +44,20 @@
 (defn aggregate-query
   ([sut start end] (aggregate-query sut start end {}))
   ([sut start end opts]
-   (xt/q sut "SELECT AVG(value) AS avg, MIN(VALUE) AS min, MAX(VALUE) AS max
-              FROM readings FOR VALID_TIME BETWEEN ? AND ?
-              GROUP BY _id"
-         (assoc opts :args [start end]))))
+   (xt/q sut ["SELECT AVG(value) AS avg, MIN(VALUE) AS min, MAX(VALUE) AS max
+               FROM readings FOR VALID_TIME BETWEEN ? AND ?
+               GROUP BY _id"
+              start end]
+         opts)))
 
 (defn check-query
   "A query that returns the number 5 min intervals in the range. Good for sanity checking."
   ([sut start end] (aggregate-query sut start end {}))
   ([sut start end opts]
-   (xt/q sut "SELECT COUNT(*) AS cnt, _id AS id
-              FROM readings FOR VALID_TIME BETWEEN ? AND ?
-              GROUP BY _id"
-         (assoc opts :args [start end]))))
+   (xt/q sut ["SELECT COUNT(*) AS cnt, _id AS id
+               FROM readings FOR VALID_TIME BETWEEN ? AND ?
+               GROUP BY _id"
+              start end])))
 
 
 (defn ->query-stage

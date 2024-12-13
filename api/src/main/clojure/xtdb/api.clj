@@ -73,7 +73,6 @@
   - opts:
     - `:snapshot-time`: see 'Transaction Basis'
     - `:current-time`: override wall-clock time to use in functions that require it
-    - `:args`: arguments to pass to the query.
     - `:default-tz`: overrides the default time zone for the query
     - `:authn`: authentication options
 

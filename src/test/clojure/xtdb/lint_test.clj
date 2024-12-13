@@ -571,9 +571,9 @@
                        :xtql/type-mismatch)))
 
     (t/testing "unrecognized parameter"
-      (t/is (= (finding-types '(unify (join (from :docs [xt/id])
-                                            {:bind [xt/id]
-                                             :args [a]})))
+      (t/is (= (finding-types '(unify (join (fn [a]
+                                              (from :docs [xt/id]))
+                                            [xt/id])))
                #{}))
       (t/is (contains? (finding-types '(unify (join (from :docs [xt/id])
                                                     {:bind [xt/id]
@@ -586,14 +586,4 @@
                        :xtql/type-mismatch))
       (t/is (contains? (finding-types '(unify (join (from :docs [xt/id])
                                                     {:bind {:a xt/id}})))
-                       :xtql/type-mismatch)))
-
-    (t/testing ":args must be a vector"
-      (t/is (contains? (finding-types '(unify (join (from :docs [xt/id])
-                                                    {:bind [xt/id]
-                                                     :args xt/id})))
-                       :xtql/type-mismatch))
-      (t/is (contains? (finding-types '(unify (join (from :docs [xt/id])
-                                                    {:bind [xt/id]
-                                                     :args {:a xt/id}})))
                        :xtql/type-mismatch)))))

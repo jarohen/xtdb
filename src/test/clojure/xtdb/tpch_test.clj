@@ -71,8 +71,7 @@
 
 (defn test-ra-query [n res]
   (when (contains? *qs* (inc n))
-    (let [q @(nth tpch-ra/queries n)
-          {::tpch-ra/keys [args]} (meta q)]
+    (let [[q & args] @(nth tpch-ra/queries n)]
       (tu/with-allocator
         (fn []
           (t/is (is-equal? res (tu/query-ra q {:node *node*, :args args, :key-fn :snake-case-keyword}))
@@ -115,7 +114,7 @@
     (when (contains? *xtql-qs* q)
       (let [query @(nth tpch-xtql/queries n)
             {::tpch-xtql/keys [args]} (meta query)]
-        (t/is (is-equal? expected-res (xt/q *node* query {:args args, :key-fn :snake-case-keyword}))
+        (t/is (is-equal? expected-res (xt/q *node* (into [query] args) {:key-fn :snake-case-keyword}))
               (format "Q%02d" (inc n)))))))
 
 (t/deftest test-001-xtql
