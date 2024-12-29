@@ -2,13 +2,13 @@ FROM customer AS c,
      orders AS o,
      lineitem AS l,
      nation AS n
-WHERE c.c_custkey = o.o_custkey
-  AND l.l_orderkey = o.o_orderkey
+WHERE c.custkey = o.custkey
+  AND l.orderkey = o.orderkey
   AND o.o_orderdate >= DATE '1993-10-01'
   AND o.o_orderdate < DATE '1993-10-01' + INTERVAL '3' MONTH
   AND l.l_returnflag = 'R'
-  AND c.c_nationkey = n.n_nationkey
-SELECT c.c_custkey,
+  AND c.nationkey = n.nationkey
+SELECT c.custkey,
        c.c_name,
        SUM(l.l_extendedprice * (1 - l.l_discount)) AS revenue,
        c.c_acctbal,

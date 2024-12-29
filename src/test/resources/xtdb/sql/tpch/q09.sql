@@ -9,12 +9,12 @@ FROM (
          partsupp AS ps,
          orders AS o,
          nation AS n
-    WHERE s.s_suppkey = l.l_suppkey
-      AND ps.ps_suppkey = l.l_suppkey
-      AND ps.ps_partkey = l.l_partkey
-      AND p.p_partkey = l.l_partkey
-      AND o.o_orderkey = l.l_orderkey
-      AND s.s_nationkey = n.n_nationkey
+    WHERE s.suppkey = l.suppkey
+      AND ps.suppkey = l.suppkey
+      AND ps.partkey = l.partkey
+      AND p.partkey = l.partkey
+      AND o.orderkey = l.orderkey
+      AND s.nationkey = n.nationkey
       AND p.p_name LIKE '%green%'
   ) AS profit
 GROUP BY nation, o_year

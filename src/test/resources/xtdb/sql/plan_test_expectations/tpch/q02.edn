@@ -3,82 +3,82 @@
  [:project
   [{s_acctbal s.2/s_acctbal}
    {s_name s.2/s_name}
-   {n_name n.4/n_name}
-   {p_partkey p.1/p_partkey}
-   {p_mfgr p.1/p_mfgr}
    {s_address s.2/s_address}
    {s_phone s.2/s_phone}
-   {s_comment s.2/s_comment}]
+   {s_comment s.2/s_comment}
+   {partkey p.1/partkey}
+   {p_mfgr p.1/p_mfgr}
+   {n_name n.4/n_name}]
   [:order-by
    [[s.2/s_acctbal {:direction :desc, :null-ordering :nulls-first}]
     [n.4/n_name {:direction :asc, :null-ordering :nulls-last}]
     [s.2/s_name {:direction :asc, :null-ordering :nulls-last}]
-    [p.1/p_partkey {:direction :asc, :null-ordering :nulls-last}]]
+    [p.1/partkey {:direction :asc, :null-ordering :nulls-last}]]
    [:project
     [s.2/s_acctbal
      s.2/s_name
-     n.4/n_name
-     p.1/p_partkey
-     p.1/p_mfgr
      s.2/s_address
      s.2/s_phone
-     s.2/s_comment]
+     s.2/s_comment
+     p.1/partkey
+     p.1/p_mfgr
+     n.4/n_name]
     [:map
      [{_sq_6 _min_out_12}]
      [:select
       (= ps.3/ps_supplycost _min_out_12)
       [:group-by
-       [p.1/p_partkey
-        p.1/p_type
+       [p.1/p_type
+        p.1/partkey
         p.1/p_size
         p.1/p_mfgr
         s.2/s_name
+        s.2/nationkey
         s.2/s_acctbal
         s.2/s_address
-        s.2/s_nationkey
         s.2/s_phone
+        s.2/suppkey
         s.2/s_comment
-        s.2/s_suppkey
-        ps.3/ps_partkey
-        ps.3/ps_suppkey
+        ps.3/partkey
+        ps.3/suppkey
         ps.3/ps_supplycost
-        n.4/n_nationkey
+        n.4/nationkey
         n.4/n_name
-        n.4/n_regionkey
+        n.4/regionkey
         r.5/r_name
-        r.5/r_regionkey
+        r.5/regionkey
         _row_number_0
         {_min_out_12 (min ps.7/ps_supplycost)}]
        [:left-outer-join
-        [{p.1/p_partkey ps.7/ps_partkey}]
+        [{p.1/partkey ps.7/partkey}]
         [:map
          [{_row_number_0 (row-number)}]
          [:mega-join
-          [{n.4/n_regionkey r.5/r_regionkey}
-           {s.2/s_nationkey n.4/n_nationkey}
-           {p.1/p_partkey ps.3/ps_partkey}
-           {s.2/s_suppkey ps.3/ps_suppkey}]
+          [{n.4/regionkey r.5/regionkey}
+           {s.2/nationkey n.4/nationkey}
+           {p.1/partkey ps.3/partkey}
+           {s.2/suppkey ps.3/suppkey}]
           [[:rename
             r.5
             [:scan
              {:table public/region}
-             [{r_name (= r_name "EUROPE")} r_regionkey]]]
+             [{r_name (= r_name "EUROPE")} regionkey]]]
            [:rename
             n.4
             [:scan
              {:table public/nation}
-             [n_nationkey n_name n_regionkey]]]
+             [nationkey n_name regionkey]]]
            [:rename
             ps.3
             [:scan
              {:table public/partsupp}
-             [ps_partkey ps_suppkey ps_supplycost]]]
+             [partkey suppkey ps_supplycost]]]
            [:rename
             p.1
             [:scan
              {:table public/part}
-             [p_partkey
-              {p_type (like p_type "%BRASS")}
+             [{p_type (like p_type "%BRASS")}
+              partkey
               {p_size (= p_size 15)}
               p_mfgr]]]
            [:rename
@@ -86,31 +86,31 @@
             [:scan
              {:table public/supplier}
              [s_name
+              nationkey
               s_acctbal
               s_address
-              s_nationkey
               s_phone
-              s_comment
-              s_suppkey]]]]]]
+              suppkey
+              s_comment]]]]]]
         [:mega-join
-         [{n.9/n_regionkey r.10/r_regionkey}
-          {s.8/s_nationkey n.9/n_nationkey}
-          {ps.7/ps_suppkey s.8/s_suppkey}]
+         [{n.9/regionkey r.10/regionkey}
+          {s.8/nationkey n.9/nationkey}
+          {ps.7/suppkey s.8/suppkey}]
          [[:rename
            r.10
            [:scan
             {:table public/region}
-            [{r_name (= r_name "EUROPE")} r_regionkey]]]
+            [{r_name (= r_name "EUROPE")} regionkey]]]
           [:rename
            n.9
-           [:scan {:table public/nation} [n_nationkey n_regionkey]]]
+           [:scan {:table public/nation} [nationkey regionkey]]]
           [:rename
            ps.7
            [:scan
             {:table public/partsupp}
-            [ps_partkey ps_suppkey ps_supplycost]]]
+            [partkey suppkey ps_supplycost]]]
           [:rename
            s.8
            [:scan
             {:table public/supplier}
-            [s_nationkey s_suppkey]]]]]]]]]]]]]
+            [nationkey suppkey]]]]]]]]]]]]]

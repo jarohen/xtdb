@@ -5,12 +5,12 @@ FROM customer AS c,
      nation AS n,
      region AS r
 WHERE
-  c.c_custkey = o.o_custkey
-  AND l.l_orderkey = o.o_orderkey
-  AND l.l_suppkey = s.s_suppkey
-  AND c.c_nationkey = s.s_nationkey
-  AND s.s_nationkey = n.n_nationkey
-  AND n.n_regionkey = r.r_regionkey
+  c.custkey = o.custkey
+  AND l.orderkey = o.orderkey
+  AND l.suppkey = s.suppkey
+  AND c.nationkey = s.nationkey
+  AND s.nationkey = n.nationkey
+  AND n.regionkey = r.regionkey
   AND r.r_name = 'ASIA'
   AND o.o_orderdate >= DATE '1994-01-01'
   AND o.o_orderdate < DATE '1994-01-01' + INTERVAL '1' YEAR

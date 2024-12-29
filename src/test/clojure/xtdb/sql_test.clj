@@ -563,8 +563,6 @@
                             {:table-info {"public/foo" #{"a" "b"}
                                           "public/bar" #{"b" "c"}}}))))
 
-      ;; TODO unable to decorr, need to be able to pull the select over the max-1-row
-      ;; although should be able to do this now, no such thing as max-1-row any more
       (->> "correlated equalty subquery"
            (t/is (=plan-file
                   "subquery-in-join-correlated-equality-subquery"
@@ -1178,7 +1176,7 @@
                                FROM (VALUES (?, ?, ?)) AS bar(_id, name, _valid_from)")))
 
   (t/is (=plan-file "test-sql-insert-plan-309"
-                    (plan-sql "INSERT INTO customer (_id, c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+                    (plan-sql "INSERT INTO customer (_id, custkey, c_name, c_address, nationkey, c_phone, c_acctbal, c_mktsegment, c_comment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"))
         "#309")
 
   (t/is (=plan-file "test-sql-insert-plan-398"

@@ -17,17 +17,36 @@
 ;; 0.05 = 7500 customers, 75000 orders, 299814 lineitems, 10000 part, 40000 partsupp, 500 supplier, 25 nation, 5 region
 
 (def ^:private table->pkey
-  {:part [:p_partkey]
-   :supplier [:s_suppkey]
-   :partsupp [:ps_partkey :ps_suppkey]
-   :customer [:c_custkey]
-   :lineitem [:l_orderkey :l_linenumber]
-   :orders [:o_orderkey]
-   :nation [:n_nationkey]
-   :region [:r_regionkey]})
+  {:part [:partkey]
+   :supplier [:suppkey]
+   :partsupp [:partkey :suppkey]
+   :customer [:custkey]
+   :orders [:orderkey]
+   :lineitem [:orderkey :l_linenumber]
+   :nation [:nationkey]
+   :region [:regionkey]})
+
+(def key-mapping
+  (some-fn {:p_partkey :partkey
+            :s_suppkey :suppkey
+            :s_nationkey :nationkey
+            :ps_partkey :partkey
+            :ps_suppkey :suppkey
+            :c_custkey :custkey
+            :c_nationkey :nationkey
+            :o_custkey :custkey
+            :o_orderkey :orderkey
+            :c_orderkey :orderkey
+            :l_orderkey :orderkey
+            :l_partkey :partkey
+            :l_suppkey :suppkey
+            :n_nationkey :nationkey
+            :n_regionkey :regionkey
+            :r_regionkey :regionkey}
+           identity))
 
 (defn- ->cell-reader [^TpchColumn col]
-  (comp (let [k (keyword (.getColumnName col))]
+  (comp (let [k (key-mapping (keyword (.getColumnName col)))]
           (fn ->map-entry [v]
             (MapEntry/create k v)))
 
@@ -78,7 +97,7 @@
   (format "INSERT INTO %s (%s) VALUES (%s)"
           (.getTableName table)
           (->> (cons "_id" (for [^TpchColumn col (.getColumns table)]
-                             (.getColumnName col)))
+                             (name (key-mapping (keyword (.getColumnName col))))))
                (str/join ", "))
           (->> (repeat (inc (count (.getColumns table))) "?")
                (str/join ", "))))

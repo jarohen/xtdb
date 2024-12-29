@@ -9,39 +9,36 @@
     [:map
      [{_sum_in_8 (* l.3/l_extendedprice (- 1 l.3/l_discount))}]
      [:mega-join
-      [{n.5/n_regionkey r.6/r_regionkey}
-       {s.4/s_nationkey n.5/n_nationkey}
-       {l.3/l_suppkey s.4/s_suppkey}
-       {c.1/c_nationkey s.4/s_nationkey}
-       {o.2/o_orderkey l.3/l_orderkey}
-       {c.1/c_custkey o.2/o_custkey}]
+      [{n.5/regionkey r.6/regionkey}
+       {s.4/nationkey n.5/nationkey}
+       {l.3/suppkey s.4/suppkey}
+       {c.1/nationkey s.4/nationkey}
+       {o.2/orderkey l.3/orderkey}
+       {c.1/custkey o.2/custkey}]
       [[:rename
         r.6
         [:scan
          {:table public/region}
-         [{r_name (= r_name "ASIA")} r_regionkey]]]
+         [{r_name (= r_name "ASIA")} regionkey]]]
        [:rename
         n.5
-        [:scan
-         {:table public/nation}
-         [n_nationkey n_name n_regionkey]]]
+        [:scan {:table public/nation} [nationkey n_name regionkey]]]
        [:rename
         s.4
-        [:scan {:table public/supplier} [s_nationkey s_suppkey]]]
+        [:scan {:table public/supplier} [nationkey suppkey]]]
        [:rename
         l.3
         [:scan
          {:table public/lineitem}
-         [l_discount l_suppkey l_orderkey l_extendedprice]]]
+         [l_discount l_extendedprice suppkey orderkey]]]
        [:rename
         c.1
-        [:scan {:table public/customer} [c_nationkey c_custkey]]]
+        [:scan {:table public/customer} [nationkey custkey]]]
        [:rename
         o.2
         [:scan
          {:table public/orders}
-         [o_custkey
-          {o_orderdate
+         [{o_orderdate
            (and
             (<
              o_orderdate
@@ -49,4 +46,5 @@
               #xt/date "1994-01-01"
               (single-field-interval "1" "YEAR" 2 6)))
             (>= o_orderdate #xt/date "1994-01-01"))}
-          o_orderkey]]]]]]]]]]
+          custkey
+          orderkey]]]]]]]]]]

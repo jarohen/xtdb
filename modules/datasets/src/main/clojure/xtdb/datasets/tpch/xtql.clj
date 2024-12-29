@@ -27,16 +27,16 @@
   '(-> (unify (from :part [{:xt/id p} p-mfgr {:p-size 15} p-type])
               (where (like p-type "%BRASS"))
 
-              (from :partsupp [{:ps-partkey p, :ps-suppkey s} ps-supplycost])
-              (from :supplier [{:xt/id s, :s-nationkey n}
+              (from :partsupp [{:partkey p, :suppkey s} ps-supplycost])
+              (from :supplier [{:xt/id s, :nationkey n}
                                s-acctbal s-address s-name s-phone s-comment])
-              (from :nation [{:xt/id n, :n-regionkey r} n-name])
+              (from :nation [{:xt/id n, :regionkey r} n-name])
               (from :region [{:xt/id r, :r-name "EUROPE"}])
 
               (where (= ps-supplycost
-                        (q (-> (unify (from :partsupp [{:ps-partkey $p, :ps-suppkey s} ps-supplycost])
-                                      (from :supplier [{:xt/id s, :s-nationkey n}])
-                                      (from :nation [{:xt/id n, :n-regionkey r}])
+                        (q (-> (unify (from :partsupp [{:partkey $p, :suppkey s} ps-supplycost])
+                                      (from :supplier [{:xt/id s, :nationkey n}])
+                                      (from :nation [{:xt/id n, :regionkey r}])
                                       (from :region [{:xt/id r, :r-name "EUROPE"}]))
                                (aggregate {:min-supplycost (min ps-supplycost)}))
                            {:args [p]}))))
@@ -47,13 +47,13 @@
 (def q3
   (-> '(-> (unify (from :customer [{:xt/id c, :c-mktsegment segment}])
 
-                  (from :orders [{:xt/id o, :o-custkey c} o-shippriority o-orderdate])
+                  (from :orders [{:xt/id o, :custkey c} o-shippriority o-orderdate])
                   (where (< o-orderdate #xt/date "1995-03-15"))
 
-                  (from :lineitem [{:l-orderkey o} l-discount l-extendedprice l-shipdate])
+                  (from :lineitem [{:orderkey o} l-discount l-extendedprice l-shipdate])
                   (where (> l-shipdate #xt/date "1995-03-15")))
 
-           (aggregate {:l-orderkey o}
+           (aggregate {:orderkey o}
                       {:revenue (sum (* l-extendedprice (- 1 l-discount)))}
                       o-orderdate o-shippriority)
            (order-by {:val revenue, :dir :desc} o-orderdate)
@@ -66,7 +66,7 @@
        (where (>= o-orderdate #xt/date "1993-07-01")
               (< o-orderdate #xt/date "1993-10-01")
 
-              (exists? (-> (from :lineitem [{:l-orderkey $o} l-commitdate l-receiptdate])
+              (exists? (-> (from :lineitem [{:orderkey $o} l-commitdate l-receiptdate])
                            (where (< l-commitdate l-receiptdate)))
                        {:args [o]}))
 
@@ -74,16 +74,16 @@
        (order-by o-orderpriority)))
 
 (def q5
-  (-> '(-> (unify (from :orders [{:xt/id o, :o-custkey c} o-orderdate])
+  (-> '(-> (unify (from :orders [{:xt/id o, :custkey c} o-orderdate])
                   (where (>= o-orderdate #xt/date "1994-01-01")
                          (< o-orderdate #xt/date "1995-01-01"))
 
-                  (from :lineitem [{:l-orderkey o, :l-suppkey s}
+                  (from :lineitem [{:orderkey o, :suppkey s}
                                    l-extendedprice l-discount])
 
-                  (from :supplier [{:xt/id s, :s-nationkey n}])
-                  (from :customer [{:xt/id c, :c-nationkey n}])
-                  (from :nation [{:xt/id n, :n-regionkey r} n-name])
+                  (from :supplier [{:xt/id s, :nationkey n}])
+                  (from :customer [{:xt/id c, :nationkey n}])
+                  (from :nation [{:xt/id n, :regionkey r} n-name])
                   (from :region [{:xt/id r, :r-name region}]))
            (aggregate n-name {:revenue (sum (* l-extendedprice (- 1 l-discount)))})
            (order-by {:val revenue, :dir :desc}))
@@ -101,16 +101,16 @@
        (aggregate {:revenue (sum (* l-extendedprice l-discount))})))
 
 (def q7
-  '(-> (unify (from :orders [{:o-custkey c}])
-              (from :lineitem [{:l-orderkey o, :l-suppkey s}
+  '(-> (unify (from :orders [{:custkey c}])
+              (from :lineitem [{:orderkey o, :suppkey s}
                                l-shipdate l-discount l-extendedprice])
 
               (where (>= l-shipdate #xt/date "1995-01-01")
                      (<= l-shipdate #xt/date "1996-12-31"))
 
-              (from :supplier [{:xt/id s, :s-nationkey n1}])
+              (from :supplier [{:xt/id s, :nationkey n1}])
               (from :nation [{:xt/id n1, :n-name supp-nation}])
-              (from :customer [{:xt/id c, :c-nationkey n2}])
+              (from :customer [{:xt/id c, :nationkey n2}])
               (from :nation [{:xt/id n2, :n-name cust-nation}])
 
               (where (or (and (= "FRANCE" supp-nation)
@@ -125,18 +125,18 @@
        (order-by supp-nation cust-nation l-year)))
 
 (def q8
-  '(-> (unify (from :orders [{:xt/id o, :o-custkey c} o-orderdate])
+  '(-> (unify (from :orders [{:xt/id o, :custkey c} o-orderdate])
               (where (>= o-orderdate #xt/date "1995-01-01")
                      (<= o-orderdate #xt/date "1996-12-31"))
 
-              (from :lineitem [{:xt/id l, :l-orderkey o, :l-suppkey s, :l-partkey p}
+              (from :lineitem [{:xt/id l, :orderkey o, :suppkey s, :partkey p}
                                l-extendedprice l-discount])
 
-              (from :customer [{:xt/id c, :c-nationkey n1}])
-              (from :nation [{:xt/id n1, :n-regionkey r1}])
+              (from :customer [{:xt/id c, :nationkey n1}])
+              (from :nation [{:xt/id n1, :regionkey r1}])
               (from :region [{:xt/id r1, :r-name "AMERICA"}])
 
-              (from :supplier [{:xt/id s, :s-nationkey n2}])
+              (from :supplier [{:xt/id s, :nationkey n2}])
               (from :nation [{:xt/id n2, :n-name nation}])
 
               (from :part [{:xt/id p, :p-type "ECONOMY ANODIZED STEEL"}]))
@@ -157,12 +157,12 @@
 
               (from :orders [{:xt/id o} o-orderdate])
 
-              (from :lineitem [{:l-orderkey o, :l-suppkey s, :l-partkey p}
+              (from :lineitem [{:orderkey o, :suppkey s, :partkey p}
                                l-quantity l-extendedprice l-discount])
 
-              (from :partsupp [{:ps-partkey p, :ps-suppkey s} ps-supplycost])
+              (from :partsupp [{:partkey p, :suppkey s} ps-supplycost])
 
-              (from :supplier [{:xt/id s, :s-nationkey n}])
+              (from :supplier [{:xt/id s, :nationkey n}])
               (from :nation [{:xt/id n, :n-name nation}]))
 
        (with {:o-year (extract "YEAR" o-orderdate)})
@@ -172,17 +172,17 @@
                                        (* ps-supplycost l-quantity)))})))
 
 (def q10
-  '(-> (unify (from :orders [{:xt/id o, :o-custkey c} o-orderdate])
+  '(-> (unify (from :orders [{:xt/id o, :custkey c} o-orderdate])
               (where (>= o-orderdate #xt/date "1993-10-01")
                      (< o-orderdate #xt/date "1994-01-01"))
 
-              (from :customer [{:xt/id c, :c-nationkey n}
+              (from :customer [{:xt/id c, :nationkey n}
                                c-name c-address c-phone
                                c-acctbal c-comment])
 
               (from :nation [{:xt/id n, :n-name n-name}])
 
-              (from :lineitem [{:l-orderkey o, :l-returnflag "R"}
+              (from :lineitem [{:orderkey o, :l-returnflag "R"}
                                l-extendedprice l-discount]))
 
        (aggregate c c-name
@@ -193,26 +193,26 @@
        (limit 20)))
 
 (def q11
-  '(-> (unify (join (-> (unify (from :partsupp [{:ps-suppkey s} ps-availqty ps-supplycost])
-                               (from :supplier [{:xt/id s, :s-nationkey n}])
+  '(-> (unify (join (-> (unify (from :partsupp [{:suppkey s} ps-availqty ps-supplycost])
+                               (from :supplier [{:xt/id s, :nationkey n}])
                                (from :nation [{:xt/id n, :n-name "GERMANY"}]))
                         (aggregate {:total-value (sum (* ps-supplycost ps-availqty))}))
 
                     [total-value])
 
-              (join (-> (unify (from :partsupp [{:ps-suppkey s} ps-availqty ps-supplycost ps-partkey])
-                               (from :supplier [{:xt/id s, :s-nationkey n}])
+              (join (-> (unify (from :partsupp [{:suppkey s} ps-availqty ps-supplycost partkey])
+                               (from :supplier [{:xt/id s, :nationkey n}])
                                (from :nation [{:xt/id n, :n-name "GERMANY"}]))
-                        (aggregate ps-partkey {:value (sum (* ps-supplycost ps-availqty))}))
+                        (aggregate partkey {:value (sum (* ps-supplycost ps-availqty))}))
 
-                    [ps-partkey value]))
+                    [partkey value]))
 
        (where (> value (* 0.0001 total-value)))
-       (return ps-partkey value)
+       (return partkey value)
        (order-by {:val value, :dir :desc})))
 
 (def q12
-  (-> '(-> (unify (from :lineitem [{:l-orderkey o} l-receiptdate l-commitdate l-shipdate l-shipmode])
+  (-> '(-> (unify (from :lineitem [{:orderkey o} l-receiptdate l-commitdate l-shipdate l-shipmode])
                   ;; TODO `in?`
                   (where (in? l-shipmode $ship-modes)
 
@@ -233,7 +233,7 @@
 
 (def q13
   '(-> (unify (from :customer [{:xt/id c}])
-              (left-join (unify (from :orders [{:xt/id o, :o-custkey c} o-comment])
+              (left-join (unify (from :orders [{:xt/id o, :custkey c} o-comment])
                                 (where (not (like o-comment "%special%requests%"))))
                          [c o]))
        (aggregate c {:c-count (count o)})
@@ -241,7 +241,7 @@
        (order-by {:val custdist, :dir :desc} {:val c-count, :dir :desc})))
 
 (def q14
-  '(-> (unify (from :lineitem [{:l-partkey p} l-shipdate l-extendedprice l-discount])
+  '(-> (unify (from :lineitem [{:partkey p} l-shipdate l-extendedprice l-discount])
               (where (>= l-shipdate #xt/date "1995-09-01")
                      (< l-shipdate #xt/date "1995-10-01"))
 
@@ -256,7 +256,7 @@
 
 (def q15
   '(letfn [(revenue []
-             (q (-> (from :lineitem [{:l-suppkey s} l-shipdate l-extendedprice l-discount])
+             (q (-> (from :lineitem [{:suppkey s} l-shipdate l-extendedprice l-discount])
                     (where (>= l-shipdate #xt/date "1996-01-01")
                            (< l-shipdate #xt/date "1996-04-01"))
                     (aggregate s {:total-revenue (sum (* l-extendedprice (- 1 l-discount)))}))))]
@@ -278,7 +278,7 @@
                          (<> p-brand "Brand#45")
                          (not (like p-type "MEDIUM POLISHED%")))
 
-                  (from :partsupp [{:ps-partkey p, :ps-suppkey s}])
+                  (from :partsupp [{:partkey p, :suppkey s}])
 
                   (where (not (exists? (-> (from :supplier [{:xt/id $s} s-comment])
                                            (where (like "%Customer%Complaints%" s-comment)))
@@ -290,9 +290,9 @@
 
 (def q17
   '(-> (unify (from :part [{:xt/id p, :p-brand "Brand#23", :p-container "MED BOX"}])
-              (from :lineitem [{:l-partkey p} l-quantity l-extendedprice])
+              (from :lineitem [{:partkey p} l-quantity l-extendedprice])
 
-              (join (-> (from :lineitem [{:l-partkey $p} l-quantity])
+              (join (-> (from :lineitem [{:partkey $p} l-quantity])
                         (aggregate {:avg-quantity (avg l-quantity)}))
                     {:args [p]
                      :bind [avg-quantity]})
@@ -305,16 +305,16 @@
 
 (def q18
   '(-> (unify (from :customer [{:xt/id c} c-name])
-              (from :orders [{:xt/id o, :o-custkey c} o-orderdate o-totalprice]))
+              (from :orders [{:xt/id o, :custkey c} o-orderdate o-totalprice]))
 
        ;; TODO `in?`
        (where (in? o
-                   (q (-> (from :lineitem [{:l-orderkey o} l-quantity])
+                   (q (-> (from :lineitem [{:orderkey o} l-quantity])
                           (aggregate o {:sum-quantity (sum l-quantity)})
                           (where (> sum-quantity 300.0))
                           (return o)))))
 
-       (return c-name {:c-custkey c} {:o-orderkey o} o-orderdate o-totalprice sum-qty)
+       (return c-name {:custkey c} {:orderkey o} o-orderdate o-totalprice sum-qty)
 
        (order-by {:val o-totalprice, :dir :desc} o-orderdate)
        (limit 100)))
@@ -323,7 +323,7 @@
   (-> '(-> (unify (from :part [{:xt/id p} p-size p-brand p-container])
 
                   (from :lineitem
-                        [{:l-shipinstruct "DELIVER IN PERSON", :l-partkey p}
+                        [{:l-shipinstruct "DELIVER IN PERSON", :partkey p}
                          l-shipmode l-discount l-extendedprice l-quantity])
 
                   ;; TODO `in?`
@@ -361,13 +361,13 @@
   '(-> (unify (from :part [{:xt/id p} p-name])
               (where (like p-name "forest%"))
 
-              (from :partsupp [{:ps-suppkey s, :ps-partkey p} ps-availqty])
-              (from :supplier [{:xt/id s, :s-nationkey n} s-name s-address])
+              (from :partsupp [{:suppkey s, :partkey p} ps-availqty])
+              (from :supplier [{:xt/id s, :nationkey n} s-name s-address])
               (from :nation [{:xt/id n, :n-name "CANADA"}])
 
               (where (> ps-availqty
                         (* 0.5
-                           (q (-> (unify (from :lineitem [{:l-partkey $p, :l-suppkey $s} l-shipdate l-quantity])
+                           (q (-> (unify (from :lineitem [{:partkey $p, :suppkey $s} l-shipdate l-quantity])
                                          (where (>= l-shipdate #xt/date "1994-01-01")
                                                 (< l-shipdate #xt/date "1995-01-01")))
                                   (aggregate {:sum-quantity (sum l-quantity)}))
@@ -378,18 +378,18 @@
 
 (def q21
   '(-> (unify (from :nation [{:xt/id n, :n-name "SAUDI ARABIA"}])
-              (from :supplier [{:xt/id s, :s-nationkey n} s-name])
+              (from :supplier [{:xt/id s, :nationkey n} s-name])
               (from :orders [{:xt/id o, :o-orderstatus "F"}])
 
-              (from :lineitem [{:xt/id l1, :l-suppkey s, :l-orderkey o}
+              (from :lineitem [{:xt/id l1, :suppkey s, :orderkey o}
                                l-receiptdate l-commitdate]))
        (where (> l-receiptdate l-commitdate)
 
-              (exists? (-> (from :lineitem [{:l-orderkey o, :l-suppkey l2s}])
+              (exists? (-> (from :lineitem [{:orderkey o, :suppkey l2s}])
                            (where (<> $s l2s)))
                        {:args [o s]})
 
-              (not (exists? (-> (from :lineitem [{:l-orderkey o, :l-suppkey l3s}
+              (not (exists? (-> (from :lineitem [{:orderkey o, :suppkey l3s}
                                                  l-receiptdate l-commitdate])
                                 (where (<> $s l3s)
                                        (> l-receiptdate l-commitdate)))
@@ -412,7 +412,7 @@
                         (aggregate {:avg-acctbal (avg c-acctbal)}))))
 
               ;; TODO `in?`
-              (not (in? c (q (from :orders [{:o-custkey c}])))))
+              (not (in? c (q (from :orders [{:custkey c}])))))
 
        (aggregate cntrycode
                   {:numcust (count c)}

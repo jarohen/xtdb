@@ -6,15 +6,15 @@
   [:group-by
    [c_count {_row_count_4 (row-count)}]
    [:project
-    [c.1/c_custkey {c_count _count_out_3}]
+    [c.1/custkey {c_count _count_out_3}]
     [:group-by
-     [c.1/c_custkey {_count_out_3 (count o.2/o_orderkey)}]
+     [c.1/custkey {_count_out_3 (count o.2/orderkey)}]
      [:left-outer-join
-      [{c.1/c_custkey o.2/o_custkey}
+      [{c.1/custkey o.2/custkey}
        (not (like o.2/o_comment "%special%requests%"))]
-      [:rename c.1 [:scan {:table public/customer} [c_custkey]]]
+      [:rename c.1 [:scan {:table public/customer} [custkey]]]
       [:rename
        o.2
        [:scan
         {:table public/orders}
-        [o_custkey o_orderkey o_comment]]]]]]]]]
+        [custkey orderkey o_comment]]]]]]]]]

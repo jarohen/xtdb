@@ -3,7 +3,7 @@ SELECT l.l_shipmode,
        SUM(CASE WHEN o.o_orderpriority <> '1-URGENT' AND o.o_orderpriority <> '2-HIGH' THEN 1 ELSE 0 END) AS low_line_count
 FROM orders AS o,
      lineitem AS l
-WHERE o.o_orderkey = l.l_orderkey
+WHERE o.orderkey = l.orderkey
   AND l.l_shipmode IN ('MAIL', 'SHIP')
   AND l.l_commitdate < l.l_receiptdate
   AND l.l_shipdate < l.l_commitdate

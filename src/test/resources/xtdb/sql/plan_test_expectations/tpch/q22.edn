@@ -29,31 +29,31 @@
            [:map
             [{_sq_9 true}]
             [:anti-join
-             [{c.1/c_custkey o_custkey}]
+             [{c.1/custkey custkey}]
              [:rename
               c.1
               [:scan
                {:table public/customer}
-               [c_phone c_custkey c_acctbal]]]
+               [c_phone custkey c_acctbal]]]
              [:project
-              [{o_clerk o.10/o_clerk}
+              [{custkey o.10/custkey}
+               {o_clerk o.10/o_clerk}
                {o_comment o.10/o_comment}
-               {o_custkey o.10/o_custkey}
                {o_orderdate o.10/o_orderdate}
-               {o_orderkey o.10/o_orderkey}
                {o_orderpriority o.10/o_orderpriority}
                {o_orderstatus o.10/o_orderstatus}
                {o_shippriority o.10/o_shippriority}
-               {o_totalprice o.10/o_totalprice}]
+               {o_totalprice o.10/o_totalprice}
+               {orderkey o.10/orderkey}]
               [:rename
                o.10
                [:scan
                 {:table public/orders}
-                [o_custkey
-                 o_shippriority
+                [o_shippriority
                  o_orderdate
+                 custkey
+                 orderkey
                  o_orderstatus
-                 o_orderkey
                  o_clerk
                  o_orderpriority
                  o_totalprice
