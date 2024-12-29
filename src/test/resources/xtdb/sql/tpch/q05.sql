@@ -1,10 +1,9 @@
-FROM
-  customer AS c,
-  orders AS o,
-  lineitem AS l,
-  supplier AS s,
-  nation AS n,
-  region AS r
+FROM customer AS c,
+     orders AS o,
+     lineitem AS l,
+     supplier AS s,
+     nation AS n,
+     region AS r
 WHERE
   c.c_custkey = o.o_custkey
   AND l.l_orderkey = o.o_orderkey
@@ -15,7 +14,5 @@ WHERE
   AND r.r_name = 'ASIA'
   AND o.o_orderdate >= DATE '1994-01-01'
   AND o.o_orderdate < DATE '1994-01-01' + INTERVAL '1' YEAR
-SELECT
-  n.n_name,
-  SUM(l.l_extendedprice * (1 - l.l_discount)) AS revenue
+SELECT n.n_name, SUM(l.l_extendedprice * (1 - l.l_discount)) AS revenue
 ORDER BY revenue DESC
