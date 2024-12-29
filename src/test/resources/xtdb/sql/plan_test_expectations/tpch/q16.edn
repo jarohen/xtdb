@@ -17,35 +17,35 @@
     [p.2/p_brand
      p.2/p_type
      p.2/p_size
-     {_count_distinct_out_7 (count_distinct ps.1/ps_suppkey)}]
+     {_count_distinct_out_7 (count_distinct ps.1/suppkey)}]
     [:map
      [{_sq_5 true}]
      [:map
       [{_sq_3 true}]
       [:mega-join
-       [{ps.1/ps_partkey p.2/p_partkey}]
+       [{ps.1/partkey p.2/partkey}]
        [[:anti-join
-         [{ps.1/ps_suppkey s_suppkey}]
+         [{ps.1/suppkey suppkey}]
          [:rename
           ps.1
-          [:scan {:table public/partsupp} [ps_partkey ps_suppkey]]]
+          [:scan {:table public/partsupp} [partkey suppkey]]]
          [:project
-          [{s_suppkey s.6/s_suppkey}]
+          [{suppkey s.6/suppkey}]
           [:rename
            s.6
            [:scan
             {:table public/supplier}
-            [{s_comment (like s_comment "%Customer%Complaints%")}
-             s_suppkey]]]]]
+            [suppkey
+             {s_comment (like s_comment "%Customer%Complaints%")}]]]]]
         [:semi-join
          [{p.2/p_size xt.values.4/_column_1}]
          [:rename
           p.2
           [:scan
            {:table public/part}
-           [p_partkey
-            {p_type (not (like p_type "MEDIUM POLISHED%"))}
+           [{p_type (not (like p_type "MEDIUM POLISHED%"))}
             {p_brand (<> p_brand "Brand#45")}
+            partkey
             p_size]]]
          [:rename
           xt.values.4

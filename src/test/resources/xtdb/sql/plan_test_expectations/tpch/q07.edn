@@ -27,29 +27,27 @@
        {l_year (extract "YEAR" l.2/l_shipdate)}
        {volume (* l.2/l_extendedprice (- 1 l.2/l_discount))}]
       [:mega-join
-       [{c.4/c_nationkey n2.6/n_nationkey}
+       [{c.4/nationkey n2.6/nationkey}
         (or
          (and (= n1.5/n_name "FRANCE") (= n2.6/n_name "GERMANY"))
          (and (= n1.5/n_name "GERMANY") (= n2.6/n_name "FRANCE")))
-        {s.1/s_nationkey n1.5/n_nationkey}
-        {o.3/o_custkey c.4/c_custkey}
-        {l.2/l_orderkey o.3/o_orderkey}
-        {s.1/s_suppkey l.2/l_suppkey}]
+        {s.1/nationkey n1.5/nationkey}
+        {o.3/custkey c.4/custkey}
+        {l.2/orderkey o.3/orderkey}
+        {s.1/suppkey l.2/suppkey}]
        [[:rename
          n2.6
-         [:scan {:table public/nation} [n_nationkey n_name]]]
+         [:scan {:table public/nation} [nationkey n_name]]]
         [:rename
          n1.5
-         [:scan {:table public/nation} [n_nationkey n_name]]]
+         [:scan {:table public/nation} [nationkey n_name]]]
         [:rename
          c.4
-         [:scan {:table public/customer} [c_nationkey c_custkey]]]
-        [:rename
-         o.3
-         [:scan {:table public/orders} [o_custkey o_orderkey]]]
+         [:scan {:table public/customer} [nationkey custkey]]]
+        [:rename o.3 [:scan {:table public/orders} [custkey orderkey]]]
         [:rename
          s.1
-         [:scan {:table public/supplier} [s_nationkey s_suppkey]]]
+         [:scan {:table public/supplier} [nationkey suppkey]]]
         [:rename
          l.2
          [:scan
@@ -60,6 +58,6 @@
              #xt/date "1995-01-01"
              #xt/date "1996-12-31")}
            l_discount
-           l_suppkey
-           l_orderkey
-           l_extendedprice]]]]]]]]]]]
+           l_extendedprice
+           suppkey
+           orderkey]]]]]]]]]]]

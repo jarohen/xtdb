@@ -145,14 +145,14 @@
   (slurp (io/resource (str "xtdb/sql/tpch/" (format "q%02d.sql" query-no)))))
 
 (def tpch-table-info
-  {"public/customer" #{"c_custkey" "c_name" "c_address" "c_nationkey" "c_phone" "c_acctbal" "c_mktsegment" "c_comment"}
-   "public/lineitem" #{"l_orderkey" "l_partkey" "l_suppkey" "l_linenumber" "l_quantity" "l_extendedprice" "l_discount" "l_tax" "l_returnflag" "l_linestatus" "l_shipdate" "l_commitdate" "l_receiptdate" "l_shipinstruct" "l_shipmode" "l_comment"}
-   "public/nation" #{"n_nationkey" "n_name" "n_regionkey" "n_comment"}
-   "public/orders" #{"o_orderkey" "o_custkey" "o_orderstatus" "o_totalprice" "o_orderdate" "o_orderpriority" "o_clerk" "o_shippriority" "o_comment"}
-   "public/part" #{"p_partkey" "p_name" "p_mfgr" "p_brand" "p_type" "p_size" "p_container" "p_retailprice" "p_comment"}
-   "public/partsupp" #{"ps_partkey" "ps_suppkey" "ps_availqty" "ps_supplycost" "ps_comment"}
-   "public/region" #{"r_regionkey" "r_name" "r_comment"}
-   "public/supplier" #{"s_suppkey" "s_name" "s_address" "s_nationkey" "s_phone" "s_acctbal" "s_comment"}})
+  {"public/customer" #{"custkey" "c_name" "c_address" "nationkey" "c_phone" "c_acctbal" "c_mktsegment" "c_comment"}
+   "public/lineitem" #{"orderkey" "partkey" "suppkey" "l_linenumber" "l_quantity" "l_extendedprice" "l_discount" "l_tax" "l_returnflag" "l_linestatus" "l_shipdate" "l_commitdate" "l_receiptdate" "l_shipinstruct" "l_shipmode" "l_comment"}
+   "public/nation" #{"nationkey" "n_name" "regionkey" "n_comment"}
+   "public/orders" #{"orderkey" "custkey" "o_orderstatus" "o_totalprice" "o_orderdate" "o_orderpriority" "o_clerk" "o_shippriority" "o_comment"}
+   "public/part" #{"partkey" "p_name" "p_mfgr" "p_brand" "p_type" "p_size" "p_container" "p_retailprice" "p_comment"}
+   "public/partsupp" #{"partkey" "suppkey" "ps_availqty" "ps_supplycost" "ps_comment"}
+   "public/region" #{"regionkey" "r_name" "r_comment"}
+   "public/supplier" #{"suppkey" "s_name" "s_address" "nationkey" "s_phone" "s_acctbal" "s_comment"}})
 
 (t/deftest test-sql-plans
   (dotimes [n 22]

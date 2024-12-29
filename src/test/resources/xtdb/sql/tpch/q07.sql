@@ -11,11 +11,11 @@ FROM (
          customer AS c,
          nation AS n1,
          nation AS n2
-    WHERE s.s_suppkey = l.l_suppkey
-      AND o.o_orderkey = l.l_orderkey
-      AND c.c_custkey = o.o_custkey
-      AND s.s_nationkey = n1.n_nationkey
-      AND c.c_nationkey = n2.n_nationkey
+    WHERE s.suppkey = l.suppkey
+      AND o.orderkey = l.orderkey
+      AND c.custkey = o.custkey
+      AND s.nationkey = n1.nationkey
+      AND c.nationkey = n2.nationkey
       AND (
         (n1.n_name = 'FRANCE' AND n2.n_name = 'GERMANY')
         OR (n1.n_name = 'GERMANY' AND n2.n_name = 'FRANCE')

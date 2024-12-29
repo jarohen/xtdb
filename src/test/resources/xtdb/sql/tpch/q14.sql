@@ -5,6 +5,6 @@ SELECT 100.00 * SUM(CASE
                     END) / SUM(l.l_extendedprice * (1 - l.l_discount)) AS promo_revenue
 FROM lineitem AS l,
      part AS p
-WHERE l.l_partkey = p.p_partkey
+WHERE l.partkey = p.partkey
   AND l.l_shipdate >= DATE '1995-09-01'
   AND l.l_shipdate < DATE '1995-09-01' + INTERVAL '1' MONTH

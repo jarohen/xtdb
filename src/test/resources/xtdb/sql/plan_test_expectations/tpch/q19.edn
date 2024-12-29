@@ -53,22 +53,22 @@
          [:mark-join
           {_sq_9 [{l.1/l_shipmode xt.values.10/_column_1}]}
           [:mega-join
-           [{l.1/l_partkey p.2/p_partkey}]
+           [{l.1/partkey p.2/partkey}]
            [[:rename
              l.1
              [:scan
               {:table public/lineitem}
-              [l_partkey
-               l_discount
+              [l_discount
                l_shipinstruct
                l_quantity
+               partkey
                l_extendedprice
                l_shipmode]]]
             [:rename
              p.2
              [:scan
               {:table public/part}
-              [p_partkey p_brand p_size p_container]]]]]
+              [p_brand partkey p_size p_container]]]]]
           [:rename
            xt.values.10
            [:table

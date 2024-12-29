@@ -1,13 +1,13 @@
 [:project
- [{s_suppkey s.4/s_suppkey}
+ [{suppkey s.4/suppkey}
   {s_name s.4/s_name}
   {s_address s.4/s_address}
   {s_phone s.4/s_phone}
   {total_revenue revenue.5/total_revenue}]
  [:order-by
-  [[s.4/s_suppkey {:direction :asc, :null-ordering :nulls-last}]]
+  [[s.4/suppkey {:direction :asc, :null-ordering :nulls-last}]]
   [:project
-   [s.4/s_suppkey
+   [s.4/suppkey
     s.4/s_name
     s.4/s_address
     s.4/s_phone
@@ -17,18 +17,18 @@
     [:single-join
      []
      [:mega-join
-      [{s.4/s_suppkey revenue.5/supplier_no}]
+      [{s.4/suppkey revenue.5/supplier_no}]
       [[:rename
         s.4
         [:scan
          {:table public/supplier}
-         [s_name s_address s_phone s_suppkey]]]
+         [s_name s_address s_phone suppkey]]]
        [:rename
         revenue.5
         [:project
-         [{supplier_no l.1/l_suppkey} {total_revenue _sum_out_2}]
+         [{supplier_no l.1/suppkey} {total_revenue _sum_out_2}]
          [:group-by
-          [l.1/l_suppkey {_sum_out_2 (sum _sum_in_3)}]
+          [l.1/suppkey {_sum_out_2 (sum _sum_in_3)}]
           [:map
            [{_sum_in_3 (* l.1/l_extendedprice (- 1 l.1/l_discount))}]
            [:rename
@@ -44,8 +44,8 @@
                   (single-field-interval "3" "MONTH" 2 6)))
                 (>= l_shipdate #xt/date "1996-01-01"))}
               l_discount
-              l_suppkey
-              l_extendedprice]]]]]]]]]
+              l_extendedprice
+              suppkey]]]]]]]]]
      [:project
       [{_sq_6 _max_out_8}]
       [:group-by
@@ -53,9 +53,9 @@
        [:rename
         revenue.7
         [:project
-         [{supplier_no l.1/l_suppkey} {total_revenue _sum_out_2}]
+         [{supplier_no l.1/suppkey} {total_revenue _sum_out_2}]
          [:group-by
-          [l.1/l_suppkey {_sum_out_2 (sum _sum_in_3)}]
+          [l.1/suppkey {_sum_out_2 (sum _sum_in_3)}]
           [:map
            [{_sum_in_3 (* l.1/l_extendedprice (- 1 l.1/l_discount))}]
            [:rename
@@ -71,5 +71,5 @@
                   (single-field-interval "3" "MONTH" 2 6)))
                 (>= l_shipdate #xt/date "1996-01-01"))}
               l_discount
-              l_suppkey
-              l_extendedprice]]]]]]]]]]]]]]
+              l_extendedprice
+              suppkey]]]]]]]]]]]]]]

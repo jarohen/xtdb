@@ -2,10 +2,10 @@
  {:table public/customer}
  [:project
   [{_id xt.values.1/_id}
-   {c_custkey xt.values.1/c_custkey}
+   {custkey xt.values.1/custkey}
    {c_name xt.values.1/c_name}
    {c_address xt.values.1/c_address}
-   {c_nationkey xt.values.1/c_nationkey}
+   {nationkey xt.values.1/nationkey}
    {c_phone xt.values.1/c_phone}
    {c_acctbal xt.values.1/c_acctbal}
    {c_mktsegment xt.values.1/c_mktsegment}
@@ -14,10 +14,10 @@
    xt.values.1
    [:table
     [_id
-     c_custkey
+     custkey
      c_name
      c_address
-     c_nationkey
+     nationkey
      c_phone
      c_acctbal
      c_mktsegment
@@ -29,5 +29,5 @@
       :c_phone ?_5,
       :c_acctbal ?_6,
       :c_address ?_3,
-      :c_custkey ?_1,
-      :c_nationkey ?_4}]]]]]
+      :custkey ?_1,
+      :nationkey ?_4}]]]]]

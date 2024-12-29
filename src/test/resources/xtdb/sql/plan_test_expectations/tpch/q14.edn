@@ -10,13 +10,12 @@
       (* l.1/l_extendedprice (- 1 l.1/l_discount))
       0)}]
    [:mega-join
-    [{l.1/l_partkey p.2/p_partkey}]
+    [{l.1/partkey p.2/partkey}]
     [[:rename
       l.1
       [:scan
        {:table public/lineitem}
-       [l_partkey
-        {l_shipdate
+       [{l_shipdate
          (and
           (<
            l_shipdate
@@ -25,5 +24,6 @@
             (single-field-interval "1" "MONTH" 2 6)))
           (>= l_shipdate #xt/date "1995-09-01"))}
         l_discount
+        partkey
         l_extendedprice]]]
-     [:rename p.2 [:scan {:table public/part} [p_partkey p_type]]]]]]]]
+     [:rename p.2 [:scan {:table public/part} [p_type partkey]]]]]]]]
