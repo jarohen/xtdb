@@ -1,5 +1,6 @@
 package xtdb.raft
 
+import com.google.protobuf.ByteString
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.nio.file.Files
@@ -9,6 +10,7 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.StandardOpenOption.CREATE
 import java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
 import java.nio.file.StandardOpenOption.WRITE
+import java.util.*
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.moveTo
@@ -40,8 +42,7 @@ interface RaftStore {
             DataOutputStream(Files.newOutputStream(path, CREATE, WRITE, TRUNCATE_EXISTING)).use { out ->
                 out.writeLong(currentTerm)
                 if (votedFor != null) {
-                    out.writeLong(votedFor.mostSignificantBits)
-                    out.writeLong(votedFor.leastSignificantBits)
+                    out.write(votedFor.toByteArray())
                 } else {
                     out.writeLong(0)
                     out.writeLong(0)
@@ -57,7 +58,7 @@ interface RaftStore {
                     currentTerm = it.readLong()
                     val msb = it.readLong()
                     val lsb = it.readLong()
-                    votedFor = if (msb == 0L && lsb == 0L) null else NodeId(msb, lsb)
+                    votedFor = if (msb == 0L && lsb == 0L) null else UUID(msb, lsb).asNodeId
                 }
             } else {
                 currentTerm = 0

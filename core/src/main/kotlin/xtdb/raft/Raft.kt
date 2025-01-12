@@ -1,5 +1,6 @@
 package xtdb.raft
 
+import com.google.protobuf.ByteString
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
@@ -9,19 +10,32 @@ import xtdb.raft.proto.Raft.RequestVoteResult
 import xtdb.raft.proto.RaftServiceGrpcKt.RaftServiceCoroutineImplBase
 import xtdb.raft.proto.appendEntriesResult
 import xtdb.raft.proto.requestVoteResult
+import java.io.DataOutputStream
 import java.lang.System.Logger.Level.*
 import java.lang.System.LoggerFinder.getLoggerFinder
 import java.nio.ByteBuffer
 import java.util.*
+import java.util.UUID.randomUUID
 import java.util.concurrent.CancellationException
 
 private val LOGGER = getLoggerFinder().getLogger("xtdb.raft", Raft::class.java.module)
 
-data class LogEntry(val term: Long, val command: ByteBuffer)
+internal typealias Command = ByteString
 
-internal typealias NodeId = UUID
+data class LogEntry(val term: Long, val command: Command)
 
-internal val NodeId.prefix get() = toString().substring(0, 8)
+internal typealias NodeId = ByteString
+
+internal val UUID.asNodeId
+    get() = NodeId.newOutput(16).use { out ->
+        DataOutputStream(out).also { it.writeLong(mostSignificantBits); it.writeLong(leastSignificantBits) }
+        out.toByteString()
+    }
+
+internal val randomNodeId get() = randomUUID().asNodeId
+
+internal val NodeId.asUuid get() = asReadOnlyByteBuffer().let { UUID(it.long, it.long) }
+internal val NodeId.prefix get() = asUuid.toString().substring(0, 8)
 
 internal typealias Term = Long
 internal typealias LogIdx = Long
@@ -71,7 +85,7 @@ class Raft(
     private val ticker: Ticker = Ticker()
 ) : RaftServiceCoroutineImplBase(), RaftNode, AutoCloseable {
 
-    override val nodeId: NodeId = UUID.randomUUID()
+    override val nodeId: NodeId = randomNodeId
     private lateinit var otherNodes: Map<NodeId, RaftNode>
     private var quorum: Int = -1
 
@@ -180,7 +194,7 @@ class Raft(
             otherNodes.forEach { (_, node) ->
                 launch {
                     var nextIdx = log.size
-                    var matchIdx = 0
+                    var matchIdx = -1L
 
                     while (true) {
                         val heartbeatJob = launch { delay(20) }
@@ -277,7 +291,7 @@ class Raft(
     }
 
     internal fun start(nodes: Map<NodeId, RaftNode>) {
-        this.otherNodes = nodes.minus(nodeId)
+        this.otherNodes = nodes - setOf(nodeId)
         this.quorum = (nodes.size / 2) + 1
         runBlocking { startFollower() }
     }
