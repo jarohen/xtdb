@@ -1,26 +1,15 @@
 package xtdb.raft
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.yield
 import xtdb.raft.proto.Raft.AppendEntriesResult
 import xtdb.raft.proto.Raft.RequestVoteResult
 import xtdb.raft.proto.RaftServiceGrpcKt.RaftServiceCoroutineImplBase
 import xtdb.raft.proto.appendEntriesResult
 import xtdb.raft.proto.requestVoteResult
 import java.lang.System.Logger.Level.*
-import java.lang.System.LoggerFinder
 import java.lang.System.LoggerFinder.getLoggerFinder
 import java.nio.ByteBuffer
 import java.util.*
@@ -35,6 +24,7 @@ internal typealias NodeId = UUID
 internal val NodeId.prefix get() = toString().substring(0, 8)
 
 internal typealias Term = Long
+internal typealias LogIdx = Long
 
 interface RaftNode : AutoCloseable {
     val nodeId: NodeId
@@ -42,10 +32,10 @@ interface RaftNode : AutoCloseable {
     suspend fun appendEntries(
         term: Term,
         leaderId: NodeId,
-        prevLogIdx: Int,
+        prevLogIdx: LogIdx,
         prevLogTerm: Term,
         entries: List<LogEntry>,
-        leaderCommit: Long
+        leaderCommit: LogIdx
     ): AppendEntriesResult
 
     suspend fun requestVote(term: Term, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): RequestVoteResult
@@ -87,10 +77,10 @@ class Raft(
 
     private val currentTerm get() = store.currentTerm
     private val votedFor get() = store.votedFor
-    private val log: MutableList<LogEntry> = mutableListOf()
+    internal val log: MutableList<LogEntry> = mutableListOf()
 
-    private var commitIdx = 0L
-    private var lastApplied = 0L
+    internal var commitIdx = -1L
+    internal var lastApplied = -1L
 
     internal var leaderId: NodeId? = null
 
@@ -99,9 +89,7 @@ class Raft(
     private var currentRole: Job? = null
     private var timeoutJob: Job? = null
 
-    override fun toString(): String {
-        return "<RaftNode ${nodeId.prefix}>"
-    }
+    override fun toString() = "<RaftNode ${nodeId.prefix}>"
 
     private fun resetElectionTimeout() {
         timeoutJob = nodeScope.launch {
@@ -114,15 +102,21 @@ class Raft(
     }
 
     override suspend fun appendEntries(
-        term: Long,
+        term: Term,
         leaderId: NodeId,
-        prevLogIdx: Int,
-        prevLogTerm: Long,
+        prevLogIdx: LogIdx,
+        prevLogTerm: Term,
         entries: List<LogEntry>,
-        leaderCommit: Long
+        leaderCommit: LogIdx
     ): AppendEntriesResult {
         mutex.withLock {
             if (term < currentTerm) return appendEntriesResult(currentTerm, false)
+
+            if (term >= currentTerm) {
+                currentRole?.let { it.cancel("new term"); it.join() }
+
+                if (term > currentTerm) store.setTerm(term, null)
+            }
 
             timeoutJob?.cancel("received append entries")
             resetElectionTimeout()
@@ -133,6 +127,15 @@ class Raft(
                 LOGGER.log(DEBUG, "${nodeId.prefix} acknowledged new leader: ${leaderId.prefix}")
             }
 
+            if (prevLogIdx in log.indices && log[prevLogIdx.toInt()].term != prevLogTerm)
+                while (log.size > prevLogIdx) log.removeLast()
+
+            if (prevLogIdx >= log.size)
+                return appendEntriesResult(currentTerm, false)
+
+            // TODO durable log
+            log.addAll(entries.subList((log.size - prevLogIdx - 1).toInt(), entries.size))
+            commitIdx = leaderCommit.coerceAtMost(log.size.toLong() - 1)
             return appendEntriesResult(currentTerm, true)
         }
     }
@@ -154,7 +157,7 @@ class Raft(
             }
 
             if (votedFor == null || votedFor == candidateId) {
-                if (log.isEmpty() || (lastLogIdx >= log.size && lastLogTerm >= log.last().term)) {
+                if (log.isEmpty() || (lastLogIdx > log.size && lastLogTerm == log.last().term)) {
                     timeoutJob?.cancel("granted vote")
                     store.setTerm(term, candidateId)
                     resetElectionTimeout()
@@ -176,12 +179,15 @@ class Raft(
 
             otherNodes.forEach { (_, node) ->
                 launch {
+                    var nextIdx = log.size
+                    var matchIdx = 0
+
                     while (true) {
                         val heartbeatJob = launch { delay(20) }
 
                         val res = node.appendEntries(
                             leaderTerm, nodeId,
-                            log.size - 1, log.lastOrNull()?.term ?: 0,
+                            log.size.toLong(), log.lastOrNull()?.term ?: 0,
                             emptyList(), commitIdx
                         )
 
