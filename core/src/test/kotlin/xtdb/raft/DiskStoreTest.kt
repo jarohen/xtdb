@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import xtdb.raft.RaftStore.DiskStore
 import java.nio.file.Files
+import java.util.UUID.randomUUID
 
 class DiskStoreTest {
     @Test
@@ -15,7 +16,7 @@ class DiskStoreTest {
         assertEquals(0, store1.currentTerm)
         assertNull(store1.votedFor)
 
-        val votedFor = NodeId.randomUUID()
+        val votedFor = randomNodeId
         store1.setTerm(1, votedFor)
         assertEquals(1, store1.currentTerm)
         assertEquals(votedFor, store1.votedFor)

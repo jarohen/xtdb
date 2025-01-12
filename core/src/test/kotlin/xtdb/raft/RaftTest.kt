@@ -1,5 +1,6 @@
 package xtdb.raft
 
+import com.google.protobuf.ByteString
 import io.mockk.*
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -40,8 +41,8 @@ class RaftTest {
 
         Raft(ticker = ticker, store = InMemory(currentTerm = 1)).use { raft ->
             raft.start(mapOf(raft.nodeId to raft))
-            val winner = randomUUID()
-            val loser = randomUUID()
+            val winner = randomUUID().asNodeId
+            val loser = randomUUID().asNodeId
 
             assertEquals(
                 requestVoteResult(1, false),
@@ -75,7 +76,7 @@ class RaftTest {
             coEvery { electionTimeout() } just awaits
         }
 
-        val leaderId = randomUUID()
+        val leaderId = randomNodeId
 
         Raft(ticker = ticker, store = InMemory(currentTerm = 1)).use { raft ->
             assertEquals(
@@ -90,14 +91,14 @@ class RaftTest {
                 "doesn't have log entry 0 yet"
             )
 
-            val entry0 = LogEntry(1, ByteBuffer.allocate(0))
+            val entry0 = LogEntry(1, Command.copyFromUtf8("entry 0"))
 
             val res0 = raft.appendEntries(1, leaderId, -1, -1, listOf(entry0), -1)
             assertEquals(appendEntriesResult(1, true), res0, "has applied log entry 0")
             assertEquals(listOf(entry0), raft.log)
             assertEquals(-1, raft.commitIdx)
 
-            val entry1 = LogEntry(1, ByteBuffer.allocate(0))
+            val entry1 = LogEntry(1, Command.copyFromUtf8("entry 1"))
             val res1 = raft.appendEntries(1, leaderId, 0, 1, listOf(entry1), 0)
             assertEquals(appendEntriesResult(1, true), res1, "has applied log entry 1")
             assertEquals(listOf(entry0, entry1), raft.log)
@@ -108,13 +109,13 @@ class RaftTest {
             assertEquals(listOf(entry0, entry1), raft.log)
             assertEquals(1, raft.commitIdx)
 
-            val entry2 = LogEntry(1, ByteBuffer.allocate(0))
+            val entry2 = LogEntry(1, Command.copyFromUtf8("entry 2"))
             val res2 = raft.appendEntries(1, leaderId, 1, 1, listOf(entry2), 1)
             assertEquals(appendEntriesResult(1, true), res2, "has applied log entry 2")
             assertEquals(listOf(entry0, entry1, entry2), raft.log)
             assertEquals(1, raft.commitIdx)
 
-            val leaderId2 = randomUUID()
+            val leaderId2 = randomNodeId
 
             val resTruncate = raft.appendEntries(2, leaderId2, 2, 2, emptyList(), 1)
             assertEquals(appendEntriesResult(2, false), resTruncate, "truncates log when prevLogTerm doesn't match")
@@ -122,7 +123,7 @@ class RaftTest {
             assertEquals(leaderId2, raft.leaderId)
             assertEquals(1, raft.commitIdx)
 
-            val entry2Take2 = LogEntry(2, ByteBuffer.allocate(0))
+            val entry2Take2 = LogEntry(2, Command.copyFromUtf8("entry 2 take 2"))
             val resReplace = raft.appendEntries(2, leaderId2, 1, 1, listOf(entry2Take2), 1)
             assertEquals(appendEntriesResult(2, true), resReplace, "replaces log entry 1")
             assertEquals(listOf(entry0, entry1, entry2Take2), raft.log)
