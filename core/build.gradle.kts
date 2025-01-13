@@ -84,6 +84,8 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.clojure.test.check)
 
+    testRuntimeOnly("org.slf4j:slf4j-jdk-platform-logging:2.0.16")
+
     implementation(libs.grpc.kotlin.stub)
     implementation(libs.grpc.protobuf)
     implementation(libs.grpc.stub)
