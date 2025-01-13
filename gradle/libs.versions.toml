@@ -14,7 +14,7 @@ grpc = "1.68.1"
 grpc-kotlin = "1.4.1"
 protobuf = "4.28.3"
 protobuf-plugin = "0.9.4"
-ktx-coroutines = "1.9.0"
+ktx-coroutines = "1.10.1"
 
 [libraries]
 arrow-algorithm={ group="org.apache.arrow", name="arrow-algorithm", version.ref="arrow" }

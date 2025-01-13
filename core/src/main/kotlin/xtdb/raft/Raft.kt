@@ -13,16 +13,23 @@ import xtdb.raft.proto.requestVoteResult
 import java.io.DataOutputStream
 import java.lang.System.Logger.Level.*
 import java.lang.System.LoggerFinder.getLoggerFinder
-import java.nio.ByteBuffer
 import java.util.*
+import java.util.Objects.hash
 import java.util.UUID.randomUUID
-import java.util.concurrent.CancellationException
 
 private val LOGGER = getLoggerFinder().getLogger("xtdb.raft", Raft::class.java.module)
 
 internal typealias Command = ByteString
 
-data class LogEntry(val term: Long, val command: Command)
+class LogEntry(val term: Long, val command: Command, internal val onCommit: (LogIdx) -> Unit = {}) {
+    override fun equals(other: Any?) =
+        this === other || (other is LogEntry && term == other.term && command == other.command)
+
+    override fun hashCode() = hash(term, command)
+
+    @OptIn(ExperimentalStdlibApi::class)
+    override fun toString() = "<LogEntry term=$term command=${command.toByteArray().toHexString()}>"
+}
 
 internal typealias NodeId = ByteString
 
@@ -69,6 +76,8 @@ internal fun appendEntriesResult(term: Long, success: Boolean) =
 
 interface Ticker {
     suspend fun electionTimeout()
+    suspend fun leaderHeartbeat() = Unit
+
     fun leaderElected() = Unit
 
     companion object {
@@ -76,6 +85,7 @@ interface Ticker {
             private val rand = Random()
 
             override suspend fun electionTimeout() = delay(rand.nextLong(150, 300))
+            override suspend fun leaderHeartbeat() = delay(20)
         }
     }
 }
@@ -89,7 +99,7 @@ class Raft(
     private lateinit var otherNodes: Map<NodeId, RaftNode>
     private var quorum: Int = -1
 
-    private val currentTerm get() = store.currentTerm
+    internal val currentTerm get() = store.currentTerm
     private val votedFor get() = store.votedFor
     internal val log: MutableList<LogEntry> = mutableListOf()
 
@@ -182,38 +192,61 @@ class Raft(
         }
     }
 
-    fun submitCommand(command: ByteBuffer) {
-        TODO()
-    }
+    suspend fun submitCommand(command: Command): LogIdx =
+        mutex.withLock {
+            if (leaderId != nodeId) TODO("not leader")
+
+            // TODO durable log
+            CompletableDeferred<LogIdx>().also { fut -> log.add(LogEntry(currentTerm, command, fut::complete)) }
+        }.await()
 
     private suspend fun startLeader() {
         val leaderTerm = currentTerm
         supervisorScope {
             val sup = this
 
-            otherNodes.forEach { (_, node) ->
+            val nextIndex = LongArray(otherNodes.size) { log.size.toLong() }
+            val matchIndex = LongArray(otherNodes.size) { -1L }
+
+            otherNodes.entries.forEachIndexed { nodeIdx, (_, node) ->
                 launch {
-                    var nextIdx = log.size
-                    var matchIdx = -1L
+                    val leaderState = LeaderState(leaderTerm, log, nextIndex, matchIndex, nodeIdx)
 
                     while (true) {
-                        val heartbeatJob = launch { delay(20) }
+                        val heartbeatJob = launch { ticker.leaderHeartbeat() }
 
-                        val res = node.appendEntries(
-                            leaderTerm, nodeId,
-                            log.size.toLong(), log.lastOrNull()?.term ?: 0,
-                            emptyList(), commitIdx
-                        )
+                        try {
+                            val req = mutex.withLock { leaderState.nextReq() }
 
-                        mutex.withLock {
-                            if (res.term > leaderTerm) {
-                                sup.cancel("new term")
-                                currentRole = null
-                                resetElectionTimeout()
-                                yield()
+                            val prevLogIdx = req.nextLogIdx - 1
+                            val res = node.appendEntries(
+                                leaderTerm, nodeId, prevLogIdx,
+                                log.getOrNull(prevLogIdx.toInt())?.term ?: -1,
+                                req.entries, commitIdx
+                            )
+
+                            val action = mutex.withLock {
+                                when (val action = leaderState.handleResp(req, res, commitIdx)) {
+                                    LeaderState.CedeControl -> {
+                                        sup.cancel("new term")
+                                        currentRole = null
+                                        resetElectionTimeout()
+                                        throw CancellationException("new term")
+                                    }
+
+                                    is LeaderState.Commit -> {
+                                        commitIdx = action.newCommitIdx
+                                        action
+                                    }
+                                }
                             }
 
-                            // TODO update commitIdx
+                            action.committedLogEntries.forEach { (entry, logIdx) -> entry.onCommit(logIdx) }
+
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            LOGGER.log(WARNING, "${nodeId.prefix} failed to replicate to ${node.nodeId.prefix}", e)
                         }
 
                         heartbeatJob.join()
@@ -224,13 +257,13 @@ class Raft(
     }
 
     private suspend fun runElection() {
-        mutex.withLock {
+        val term = mutex.withLock {
             store.setTerm(currentTerm + 1, nodeId)
 
             resetElectionTimeout()
+            currentTerm
         }
 
-        val term = currentTerm
         LOGGER.log(INFO, "${nodeId.prefix} calling election, term: $term")
 
         val results = Channel<RequestVoteResult>(otherNodes.size)
@@ -299,32 +332,5 @@ class Raft(
     override fun close() {
         nodeScope.cancel("closing")
         LOGGER.log(INFO, "${nodeId.prefix} stopped")
-    }
-}
-
-fun main() {
-    Raft().use { raft1 ->
-        Raft().use { raft2 ->
-            Raft().use { raft3 ->
-                Raft().use { raft4 ->
-                    Raft().use { raft5 ->
-                        val nodes = mapOf(
-                            raft1.nodeId to raft1,
-                            raft2.nodeId to raft2,
-                            raft3.nodeId to raft3,
-                            raft4.nodeId to raft4,
-                            raft5.nodeId to raft5
-                        )
-
-                        raft1.start(nodes)
-                        raft2.start(nodes)
-                        raft3.start(nodes)
-                        raft4.start(nodes)
-                        raft5.start(nodes)
-                        Thread.sleep(1000)
-                    }
-                }
-            }
-        }
     }
 }
