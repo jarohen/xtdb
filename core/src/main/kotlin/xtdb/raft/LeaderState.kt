@@ -3,8 +3,8 @@ package xtdb.raft
 import xtdb.raft.proto.Raft
 
 internal class LeaderState(
+    private val store: RaftStore,
     private val leaderTerm: Term,
-    private val log: MutableList<LogEntry>,
     val nextIndices: LongArray,
     val matchIndices: LongArray,
     private val nodeIdx: Int,
@@ -15,7 +15,7 @@ internal class LeaderState(
         val nextLogIdx = nextIndices[nodeIdx]
 
         return AppendEntriesReq(
-            nextLogIdx, log.subList(nextLogIdx.toInt(), log.size.coerceAtMost((nextLogIdx + 10).toInt())).toList()
+            nextLogIdx, store.subList(nextLogIdx, store.lastLogIdx.coerceAtMost((nextLogIdx + 10)) + 1).toList()
         )
     }
 
@@ -45,10 +45,8 @@ internal class LeaderState(
 
         return Commit(
             oldCommitIdx, newCommitIdx,
-            log.subList(oldCommitIdx.toInt() + 1, newCommitIdx.toInt() + 1)
-                .mapIndexed { idx, it ->
-                    Pair(it, oldCommitIdx + idx + 1)
-                }
+            store.subList(oldCommitIdx + 1, newCommitIdx + 1)
+                .mapIndexed { idx, it -> Pair(it, oldCommitIdx + idx + 1) }
         )
     }
 }
