@@ -49,4 +49,6 @@ interface RaftNode : AutoCloseable {
     ): Raft.AppendEntriesResult
 
     suspend fun requestVote(term: Term, candidateId: NodeId, lastLogIdx: Long, lastLogTerm: Long): Raft.RequestVoteResult
+
+    suspend fun submitCommand(command: Command): LogIdx
 }
