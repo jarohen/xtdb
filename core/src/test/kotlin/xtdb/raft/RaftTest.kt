@@ -2,17 +2,18 @@ package xtdb.raft
 
 import com.google.protobuf.ByteString
 import io.mockk.*
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import xtdb.raft.RaftStore.InMemory
+import kotlin.time.Duration.Companion.seconds
 
 class RaftTest {
 
     @Test
-    fun `e2e of 5 nodes`() = runTest {
+    fun `e2e of 5 nodes`() = runTest(timeout = 2.seconds) {
         Raft().use { raft1 ->
             Raft().use { raft2 ->
                 Raft().use { raft3 ->
@@ -26,19 +27,21 @@ class RaftTest {
                                 raft5.nodeId to raft5
                             )
 
-                            raft1.start(nodes)
-                            raft2.start(nodes)
-                            raft3.start(nodes)
-                            raft4.start(nodes)
-                            raft5.start(nodes)
+                            raft1.setNodes(nodes).start()
+                            raft2.setNodes(nodes).start()
+                            raft3.setNodes(nodes).start()
+                            raft4.setNodes(nodes).start()
+                            raft5.setNodes(nodes).start()
 
-                            while (raft1.leaderId == null) {
-                                delay(100)
-                            }
+                            while (raft1.leaderId == null) delay(100)
 
                             assertEquals(
                                 0,
                                 nodes[raft1.leaderId!!]!!.submitCommand(ByteString.copyFromUtf8("hello")))
+
+                            while (raft1.commitIdx < 0) delay(100)
+
+                            assertEquals(raft1.store[0], LogEntry(1, ByteString.copyFromUtf8("hello")))
                         }
                     }
                 }
@@ -47,20 +50,19 @@ class RaftTest {
     }
 
     @Test
-    fun `single node awaits election timeout, then elects itself`() = runTest {
+    fun `single node awaits election timeout, then elects itself`() = runTest(timeout = 2.seconds) {
         val electionLatch = CompletableDeferred<Unit>()
-        val leaderElectedLatch = CompletableDeferred<Unit>()
+        val leaderElectedLatch = CompletableDeferred<NodeId>()
 
         val ticker = mockk<Ticker>(relaxUnitFun = true) {
             coEvery { electionTimeout() } coAnswers { electionLatch.await() } andThenJust awaits
-            every { leaderElected() } answers { leaderElectedLatch.complete(Unit) }
+            every { leaderChange(any()) } answers { leaderElectedLatch.complete(firstArg()) }
         }
 
         Raft(ticker = ticker).use { raft ->
-            raft.start(mapOf(raft.nodeId to raft))
+            raft.setNodes(emptyMap()).start()
             electionLatch.complete(Unit)
-            leaderElectedLatch.await()
-
+            assertEquals(raft.nodeId, leaderElectedLatch.await())
             assertEquals(raft.nodeId, raft.leaderId)
         }
     }
@@ -127,32 +129,30 @@ class RaftTest {
     }
 
     @Test
-    fun `test leader loop`() = runTest {
+    fun `test leader loop`() = runTest(timeout = 2.seconds) {
         val leaderElected = CompletableDeferred<Unit>()
 
         val ticker = mockk<Ticker>(relaxUnitFun = true) {
             coEvery { electionTimeout() } returns (Unit) andThenJust awaits
-            coEvery { leaderElected() } answers { leaderElected.complete(Unit) } andThenJust awaits
+            coEvery { leaderChange(any()) } answers { leaderElected.complete(Unit) } andThenJust awaits
         }
 
         val cmds = mutableListOf<List<LogEntry>>()
 
-        Raft(ticker = ticker).use { raft ->
+        Raft(store = InMemory(term = 1), ticker = ticker).use { raft ->
             val nodeId = raft.nodeId
             val id1 = randomNodeId
             val node1 = mockk<RaftNode> {
                 every { this@mockk.nodeId } returns id1
-                coEvery { requestVote(1, nodeId, any(), any()) }
-                    .returns(requestVoteResult(1, true))
                 coEvery { appendEntries(1, nodeId, any(), any(), emptyList(), any()) }
                     .returns(appendEntriesResult(1, true))
                 coEvery { appendEntries(1, nodeId, any(), any(), capture(cmds), any()) }
                     .returns(appendEntriesResult(1, true))
             }
 
-            raft.start(mapOf(raft.nodeId to raft, id1 to node1))
-            leaderElected.await()
-            assertEquals(raft.nodeId, raft.leaderId)
+            raft.setNodes(mapOf(node1.nodeId to node1))
+
+            raft.startLeader(1)
 
             val cmd = Command.copyFromUtf8("hello")
             assertEquals(0, raft.submitCommand(cmd))
@@ -165,18 +165,18 @@ class RaftTest {
     }
 
     @Test
-    fun `leader cedes control`() = runTest {
-        val leaderElected = CompletableDeferred<Unit>()
+    fun `leader cedes control`() = runTest(timeout = 2.seconds) {
+        val leaderElected = Channel<NodeId?>()
 
         val ticker = mockk<Ticker>(relaxUnitFun = true) {
             coEvery { electionTimeout() } returns (Unit) andThenJust awaits
-            coEvery { leaderElected() } answers { leaderElected.complete(Unit) } andThenJust awaits
+            coEvery { leaderChange(any()) } coAnswers { leaderElected.send(firstArg()) }
         }
 
         Raft(ticker = ticker).use { raft ->
             val nodeId = raft.nodeId
-            val id1 = randomNodeId
             val node1 = mockk<RaftNode> {
+                val id1 = randomNodeId
                 every { this@mockk.nodeId } returns id1
                 coEvery { requestVote(1, nodeId, any(), any()) }
                     .returns(requestVoteResult(1, true))
@@ -187,10 +187,9 @@ class RaftTest {
                     )
             }
 
-            raft.start(mapOf(raft.nodeId to raft, id1 to node1))
-            leaderElected.await()
-            delay(500)
-
+            raft.setNodes(mapOf(node1.nodeId to node1)).start()
+            assertEquals(nodeId, leaderElected.receive())
+            assertEquals(null, leaderElected.receive())
             coVerify(exactly = 2) { node1.appendEntries(1, nodeId, any(), any(), emptyList(), any()) }
         }
     }

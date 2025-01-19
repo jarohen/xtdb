@@ -43,27 +43,30 @@ internal sealed class RaftStore {
         }
 
     sealed interface AppendEntriesAction {
+        val term: Term
         val success: Boolean
 
-        data class Success(val newCommitIdx: LogIdx) : AppendEntriesAction {
+        data class Success(override val term: Term, val newCommitIdx: LogIdx) : AppendEntriesAction {
             override val success: Boolean = true
         }
 
-        data object Failure : AppendEntriesAction {
+        data class Failure(override val term: Term) : AppendEntriesAction {
             override val success: Boolean = false
         }
     }
 
     fun appendEntries(
-        prevLogIdx: LogIdx, prevLogTerm: Term, entries: List<LogEntry>, leaderCommit: LogIdx
+        term: Term, prevLogIdx: LogIdx, prevLogTerm: Term, entries: List<LogEntry>, leaderCommit: LogIdx
     ): AppendEntriesAction {
+        if (term < this.term) return AppendEntriesAction.Failure(this.term)
+
         if (prevLogIdx in 0..lastLogIdx && this[prevLogIdx]!!.term != prevLogTerm)
             truncateFrom(prevLogIdx)
 
-        if (prevLogIdx > lastLogIdx) return AppendEntriesAction.Failure
+        if (prevLogIdx > lastLogIdx) return AppendEntriesAction.Failure(term)
 
         this += entries.subList((lastLogIdx - prevLogIdx).toInt(), entries.size)
-        return AppendEntriesAction.Success(leaderCommit.coerceAtMost(lastLogIdx))
+        return AppendEntriesAction.Success(term, leaderCommit.coerceAtMost(lastLogIdx))
     }
 
     class InMemory(term: Term = 0, votedFor: NodeId? = null, log: Iterable<LogEntry> = emptyList()) : RaftStore() {
