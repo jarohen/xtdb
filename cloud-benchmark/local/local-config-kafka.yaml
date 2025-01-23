@@ -2,9 +2,9 @@
 server: 
   port: 0
 
-txLog: !Kafka
+log: !Kafka
   bootstrapServers: !Env KAFKA_BOOTSTRAP_SERVERS
-  txTopic: !Env XTDB_TX_TOPIC
+  topic: !Env XTDB_TX_TOPIC
   filesTopic: !Env XTDB_FILES_TOPIC
 
 storage: !Local

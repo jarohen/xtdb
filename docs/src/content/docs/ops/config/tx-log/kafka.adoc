@@ -46,7 +46,7 @@ To use the Kafka module, include the following in your node configuration:
 
 [source,yaml]
 ----
-txLog: !Kafka
+log: !Kafka
   # -- required
 
   # A comma-separated list of host:port pairs to use for establishing the
@@ -56,7 +56,7 @@ txLog: !Kafka
 
   # Name of the Kafka topic to use for the transaction log.
   # (Can be set as an !Env value)
-  txTopic: "xtdb-tx-log"
+  topic: "xtdb-tx-log"
 
   # Name of the Kafka topic to use for the file notifications.
   # (Can be set as an !Env value)
@@ -93,9 +93,9 @@ The following piece of node configuration demonstrates the following common use 
 
 [source,yaml]
 ----
-txLog: !Kafka
+log: !Kafka
   bootstrapServers: !Env KAFKA_BOOTSTRAP_SERVERS
-  txTopic: !Env XTDB_TX_TOPIC_NAME
+  topic: !Env XTDB_TX_TOPIC_NAME
   filesTopic: !Env XTDB_FILES_TOPIC_NAME
   autoCreateTopic: false
   propertiesMap:
