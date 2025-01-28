@@ -288,7 +288,6 @@ dependencies {
     testImplementation(libs.clojure.`data`.csv)
     testImplementation(libs.clojure.tools.cli)
 
-    devImplementation("mount", "mount", "0.1.20")
     devImplementation("integrant", "repl", "0.3.2")
     devImplementation("com.azure", "azure-identity", "1.9.0")
     devImplementation("com.taoensso", "tufte", "2.6.3")
