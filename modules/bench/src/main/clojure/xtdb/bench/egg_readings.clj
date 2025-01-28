@@ -11,7 +11,7 @@
             [xtdb.time :as time]
             [xtdb.util :as util])
   (:import [java.lang AutoCloseable]
-           (java.time Duration LocalDate Period ZonedDateTime)))
+           (java.time Duration Instant LocalDate Period ZonedDateTime)))
 
 (defn every-5-min [start, ^Period len]
   (let [start (time/->zdt start)
@@ -28,18 +28,15 @@
 
 (defn seed-readings [node {:keys [total-system-count total-readings-range]
                            :or {total-system-count 1000, total-readings-range #xt/period "P1Y"}}]
-  (doseq [id (range total-system-count)]
+  (doseq [[^Instant from, ^Instant to] (->> (every-5-min #inst "2024" total-readings-range)
+                                            (partition 2 1))]
     (when (Thread/interrupted)
       (throw (InterruptedException.)))
 
-    (let [txs (for [[from to] (->> (every-5-min #inst "2024" total-readings-range)
-                                   (partition 2 1))
-                    :let [value (rand-int-between 1000 5000)]]
-                [:put-docs {:into :readings
-                            :valid-from from
-                            :valid-to to}
-                 {:xt/id id, :value value}])]
-      (xt/submit-tx node txs))))
+    (xt/submit-tx node [(into [:put-docs {:into :readings, :valid-from from, :valid-to to}]
+                              (for [id (range total-system-count)]
+                                {:xt/id id, :value (rand-int-between 1000 5000)}))]
+                  {:system-time (.plus to #xt/duration "PT1M")})))
 
 (defn sum-system-readings--sql [{:keys [systems days]}]
   (let [start-date (LocalDate/of 2024 1 1)
