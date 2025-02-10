@@ -107,11 +107,11 @@
                                {:node node}))))))
 
 (t/deftest test-metadata
-  (with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:rows-per-block 20}}))]
+  (util/with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:rows-per-block 20}}))]
     (->> (for [i (range 100)]
            [:put-docs :xt_docs {:xt/id i}])
          (partition-all 20)
-         (mapv #(xt/submit-tx node %)))
+         (mapv #(xt/execute-tx node %)))
 
     (t/is (= (set (concat (for [i (range 20)] {:xt/id i}) (for [i (range 80 100)] {:xt/id i})))
              (set (tu/query-ra '[:scan {:table public/xt_docs} [{_id (or (< _id 20)
@@ -119,7 +119,7 @@
                                {:node node})))
           "testing only getting some trie matches"))
 
-  (with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:rows-per-block 20}}))]
+  (util/with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:rows-per-block 20}}))]
     (xt/submit-tx node (for [i (range 20)] [:put-docs :xt_docs {:xt/id i}]))
     (xt/submit-tx node (for [i (range 20)] [:delete-docs :xt_docs i]))
 
@@ -143,52 +143,52 @@
                           {:node tu/*node*})))))
 
 (t/deftest test-past-point-point-queries
-  (let [tx1 (xt/execute-tx tu/*node* [[:put-docs {:into :xt_docs, :valid-from #inst "2015"}
-                                       {:xt/id :doc1 :v 1}]
-                                      [:put-docs {:into :xt_docs, :valid-from #inst "2015"}
-                                       {:xt/id :doc2 :v 1}]
-                                      [:put-docs {:into :xt_docs, :valid-from #inst "2018"}
-                                       {:xt/id :doc3 :v 1}]])
+  (xt/execute-tx tu/*node* [[:put-docs {:into :xt_docs, :valid-from #inst "2015"}
+                             {:xt/id :doc1 :v 1}]
+                            [:put-docs {:into :xt_docs, :valid-from #inst "2015"}
+                             {:xt/id :doc2 :v 1}]
+                            [:put-docs {:into :xt_docs, :valid-from #inst "2018"}
+                             {:xt/id :doc3 :v 1}]])
 
-        tx2 (xt/execute-tx tu/*node* [[:put-docs {:into :xt_docs, :valid-from #inst "2020"}
-                                       {:xt/id :doc1 :v 2}]
-                                      [:put-docs {:into :xt_docs, :valid-from #inst "2100"}
-                                       {:xt/id :doc2 :v 2}]
-                                      [:delete-docs :xt_docs :doc3]])]
+  (xt/execute-tx tu/*node* [[:put-docs {:into :xt_docs, :valid-from #inst "2020"}
+                             {:xt/id :doc1 :v 2}]
+                            [:put-docs {:into :xt_docs, :valid-from #inst "2100"}
+                             {:xt/id :doc2 :v 2}]
+                            [:delete-docs :xt_docs :doc3]])
 
-    ;; valid-time
-    (t/is (= {{:v 1, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1}
-             (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at #inst "2017"], :for-system-time nil}
-                                         [_id v]]
-                                       {:node tu/*node*}))))
+  ;; valid-time
+  (t/is (= {{:v 1, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1}
+           (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at #inst "2017"], :for-system-time nil}
+                                       [_id v]]
+                                     {:node tu/*node*}))))
 
-    (t/is (= {{:v 1, :xt/id :doc2} 1 {:v 2, :xt/id :doc1} 1}
-             (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at :now], :for-system-time nil}
-                                         [_id v]]
-                                       {:node tu/*node*}))))
+  (t/is (= {{:v 1, :xt/id :doc2} 1 {:v 2, :xt/id :doc1} 1}
+           (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at :now], :for-system-time nil}
+                                       [_id v]]
+                                     {:node tu/*node*}))))
 
-    ;; system-time
-    (t/is (= {{:v 1, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1 {:v 1, :xt/id :doc3} 1}
-             (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-system-time [:at #inst "2020-01-01"]}
-                                         [_id v]]
-                                       {:node tu/*node*}))))
+  ;; system-time
+  (t/is (= {{:v 1, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1 {:v 1, :xt/id :doc3} 1}
+           (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-system-time [:at #inst "2020-01-01"]}
+                                       [_id v]]
+                                     {:node tu/*node*}))))
 
-    (t/is (= {{:v 1, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1}
-             (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at #inst "2017"], :for-system-time [:at #inst "2020-01-01"]}
-                                         [_id v]]
-                                       {:node tu/*node*}))))
+  (t/is (= {{:v 1, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1}
+           (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at #inst "2017"], :for-system-time [:at #inst "2020-01-01"]}
+                                       [_id v]]
+                                     {:node tu/*node*}))))
 
-    (t/is (= {{:v 2, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1}
-             (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at :now], :for-system-time [:at #inst "2020-01-02"]}
-                                         [_id v]]
-                                       {:node tu/*node*}))))
+  (t/is (= {{:v 2, :xt/id :doc1} 1 {:v 1, :xt/id :doc2} 1}
+           (frequencies (tu/query-ra '[:scan {:table public/xt_docs, :for-valid-time [:at :now], :for-system-time [:at #inst "2020-01-02"]}
+                                       [_id v]]
+                                     {:node tu/*node*}))))
 
-    (t/is (= {{:v 2, :xt/id :doc1} 1 {:v 2, :xt/id :doc2} 1}
-             (frequencies (tu/query-ra '[:scan {:table public/xt_docs
-                                                :for-valid-time [:at #inst "2100"]
-                                                :for-system-time [:at #inst "2020-01-02"]}
-                                         [_id v]]
-                                       {:node tu/*node*}))))))
+  (t/is (= {{:v 2, :xt/id :doc1} 1 {:v 2, :xt/id :doc2} 1}
+           (frequencies (tu/query-ra '[:scan {:table public/xt_docs
+                                              :for-valid-time [:at #inst "2100"]
+                                              :for-system-time [:at #inst "2020-01-02"]}
+                                       [_id v]]
+                                     {:node tu/*node*})))))
 
 (t/deftest test-past-point-point-queries-with-valid-time
   (let [tx1 (xt/execute-tx tu/*node* [[:put-docs {:into :xt_docs, :valid-from #inst "2015"}
@@ -530,12 +530,12 @@
                      set))))))
 
 (deftest test-iid-fast-path-multiple-pages
-  (with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:page-limit 16}}))]
+  (util/with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:page-limit 16}}))]
     (let [uuids (tu/uuid-seq 40)
           search-uuid (rand-nth uuids)]
-      (xt/submit-tx node (for [uuid (take 20 uuids)] [:put-docs :xt_docs {:xt/id uuid}]))
+      (xt/execute-tx node (for [uuid (take 20 uuids)] [:put-docs :xt_docs {:xt/id uuid}]))
       (tu/finish-block! node)
-      (xt/submit-tx node (for [uuid (drop 20 uuids)] [:put-docs :xt_docs {:xt/id uuid}]))
+      (xt/execute-tx node (for [uuid (drop 20 uuids)] [:put-docs :xt_docs {:xt/id uuid}]))
       (tu/finish-block! node)
 
       (t/is (= [{:xt/id search-uuid}]
