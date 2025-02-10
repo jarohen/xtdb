@@ -159,10 +159,10 @@
 (defrecord Job [table-name trie-keys ^bytes part out-trie-key]
   Compactor$Job)
 
-(defn- l0->l1-compaction-job [table-name {:keys [l0-tries l1-tries]} {:keys [^long l1-size-limit]}]
+(defn- l0->l1-compaction-job [table-name {:keys [l0-tries l1c-tries]} {:keys [^long l1-size-limit]}]
   (when-let [live-l0 (seq (->> l0-tries
                                (take-while #(= :live (:state %)))))]
-    (let [latest-l1 (->> l1-tries
+    (let [latest-l1 (->> l1c-tries
                          (take-while #(< (:data-file-size %) l1-size-limit))
                          first)]
       (loop [size (:data-file-size latest-l1 0)
@@ -176,8 +176,8 @@
                    ;; TODO recency
                    (trie/->l1-trie-key nil block-idx))))))))
 
-(defn- l1p-compaction-jobs [table-name {:keys [l1-tries ln-tries]} {:keys [^long l1-size-limit]}]
-  (for [[[level part] files] (conj ln-tries [[1 nil] l1-tries])
+(defn- l1p-compaction-jobs [table-name {:keys [l1c-tries ln-tries]} {:keys [^long l1-size-limit]}]
+  (for [[[level part] files] (conj ln-tries [[1 nil] l1c-tries])
         :when (> level 0)
         :let [live-files (-> files
                              (->> (remove #(= :garbage (:state %))))
