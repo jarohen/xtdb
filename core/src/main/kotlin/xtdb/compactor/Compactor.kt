@@ -17,7 +17,6 @@ import xtdb.trie.HashTrie
 import xtdb.trie.HashTrie.Companion.LEVEL_WIDTH
 import xtdb.trie.TrieCatalog
 import xtdb.trie.TrieWriter
-import xtdb.util.debug
 import xtdb.util.logger
 import xtdb.util.trace
 import java.time.Duration
@@ -29,10 +28,7 @@ private typealias Selection = IntArray
 
 interface Compactor : AutoCloseable {
 
-    interface Job {
-        val tableName: String
-        val outputTrieKey: String
-    }
+    interface Job
 
     interface Impl {
         fun availableJobs(): Collection<Job>
@@ -147,17 +143,16 @@ interface Compactor : AutoCloseable {
                 private val idle = Channel<Unit>()
 
                 @Volatile
-                private var availableJobKeys = emptySet<String>()
+                private var availableJobs = emptySet<Job>()
 
-                private val queuedJobs = mutableSetOf<String>()
+                private val queuedJobs = mutableSetOf<Job>()
 
                 init {
                     scope.launch {
                         val doneCh = Channel<Job>()
 
                         while (true) {
-                            val availableJobs = impl.availableJobs()
-                            availableJobKeys = availableJobs.map { it.outputTrieKey }.toSet()
+                            availableJobs = impl.availableJobs().toSet()
 
                             if (availableJobs.isEmpty() && queuedJobs.isEmpty()) {
                                 LOGGER.trace("sending idle")
@@ -165,20 +160,16 @@ interface Compactor : AutoCloseable {
                             }
 
                             availableJobs.forEach {
-                                if (queuedJobs.add(it.outputTrieKey)) {
+                                if (queuedJobs.add(it)) {
                                     jobsScope.launch {
                                         // check it's still required
-                                        if (it.outputTrieKey in availableJobKeys) {
-                                            LOGGER.debug("executing job: ${it.outputTrieKey}")
-
+                                        if (it in availableJobs) {
                                             val res = runInterruptible { impl.executeJob(it) }
 
                                             // add the trie to the catalog eagerly so that it's present
                                             // next time we run `availableJobs` (it's idempotent)
                                             trieCatalog.addTries(res)
                                             log.appendMessage(TriesAdded(res)).await()
-
-                                            LOGGER.debug("done: ${it.outputTrieKey}")
                                         }
 
                                         doneCh.send(it)
@@ -188,8 +179,7 @@ interface Compactor : AutoCloseable {
 
                             select {
                                 doneCh.onReceive {
-                                    queuedJobs.remove(it.outputTrieKey)
-                                    LOGGER.debug("Completed job ${it.outputTrieKey}")
+                                    queuedJobs.remove(it)
                                 }
 
                                 wakeup.onReceive {
