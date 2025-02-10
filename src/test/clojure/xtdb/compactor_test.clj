@@ -120,15 +120,15 @@
                       ["l01-rc-b00" 1] ["l01-rc-b02" 1] ["l01-rc-b09" 1] ["l01-rc-b0d" 1])))
               "up to L3")
 
-        (t/is (= (let [l2-keys ["l03-rc-p03-b0f" "l03-rc-p03-b11f" "l03-rc-p03-b12f" "l03-rc-p03-b13f"]]
-                   #{(job "l04-rc-p030-b13f" l2-keys [0 3 0])
+        (let [l2-keys ["l03-rc-p03-b0f" "l03-rc-p03-b11f" "l03-rc-p03-b12f" "l03-rc-p03-b13f"]]
+          (t/is (= #{(job "l04-rc-p030-b13f" l2-keys [0 3 0])
                      (job "l04-rc-p031-b13f" l2-keys [0 3 1])
                      (job "l04-rc-p032-b13f" l2-keys [0 3 2])
-                     (job "l04-rc-p033-b13f" l2-keys [0 3 3])})
+                     (job "l04-rc-p033-b13f" l2-keys [0 3 3])}
 
-                 (f ["l03-rc-p02-b0f"]
-                    ["l03-rc-p03-b0f"] ["l03-rc-p03-b11f"] ["l03-rc-p03-b12f"] ["l03-rc-p03-b13f"]))
-              "L3 -> L4")))))
+                   (f ["l03-rc-p02-b0f"]
+                      ["l03-rc-p03-b0f"] ["l03-rc-p03-b11f"] ["l03-rc-p03-b12f"] ["l03-rc-p03-b13f"]))
+                "L3 -> L4"))))))
 
 (deftype LiveDataRel [^RelationReader live-rel]
   IDataRel
