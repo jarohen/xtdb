@@ -17,7 +17,7 @@
 
 (def ^:const branch-factor 4)
 
-(def ^:dynamic ^{:tag 'long} *l1-size-limit* (* 100 1024 1024))
+(def ^:dynamic ^{:tag 'long} *file-size-target* (* 100 1024 1024))
 
 (defn ->added-trie ^xtdb.log.proto.AddedTrie [table-name, trie-key, ^long data-file-size]
   (.. (AddedTrie/newBuilder)
@@ -77,14 +77,19 @@
         (stale-l1c-msg? table-tries trie))
     (stale-ln-msg table-tries trie)))
 
-(defn- supersede-partial-l1c-tries [l1c-tries {:keys [^long block-idx]} {:keys [^long l1-size-limit]}]
-  (->> (or l1c-tries {})
-       (map (fn [{^long l1-block-idx :block-idx, ^long l1-size :data-file-size, l1-state :state, :as l1-trie}]
-              (cond-> l1-trie
-                (and (= l1-state :live)
-                     (< l1-size l1-size-limit)
-                     (>= block-idx l1-block-idx))
+(defn- supersede-partial-tries [tries {:keys [^long block-idx]} {:keys [^long file-size-target]}]
+  (->> (or tries {})
+       (map (fn [{^long other-block-idx :block-idx, ^long other-size :data-file-size, other-state :state, :as other-trie}]
+              (cond-> other-trie
+                (and (= other-state :live)
+                     (< other-size file-size-target)
+                     (>= block-idx other-block-idx))
                 (assoc :state :garbage))))))
+
+(defn- conj-levelled-trie [tries trie trie-cat]
+  (-> (or tries '())
+      (supersede-partial-tries trie trie-cat)
+      (conj (assoc trie :state :live))))
 
 (defn- supersede-l0-tries [l0-tries {:keys [^long block-idx]}]
   (->> l0-tries
@@ -92,6 +97,24 @@
               (cond-> l0-trie
                 (<= l0-block-idx block-idx)
                 (assoc :state :garbage))))))
+
+(defn- conj-l1c-trie [table-tries {:keys [^long block-idx] :as trie} trie-cat]
+  (-> table-tries
+      (update :l1h-tries (fn [l1h-tries]
+                           (->> l1h-tries
+                                (map (fn [{^long l1h-block-idx :block-idx, :keys [state] :as trie}]
+                                       (cond-> trie
+                                         (and (not= state :live)
+                                              (= block-idx l1h-block-idx))
+                                         (assoc :state :live)))))))
+      (update :l1c-tries
+              (fnil (fn [l1c-tries trie]
+                      (-> l1c-tries
+                          (supersede-partial-tries trie trie-cat)
+                          (conj (assoc trie :state :live))))
+                    '())
+              trie)
+      (update :l0-tries supersede-l0-tries trie)))
 
 (defn- conj-nascent-ln-trie [ln-tries {:keys [level part] :as trie}]
   (-> ln-tries
@@ -127,20 +150,15 @@
             (for [p (range branch-factor)]
               [level (conj pop-part p)]))))
 
-(defn- supersede-lnm1-tries [table-tries {:keys [^long block-idx, ^long level, part]}]
-  (-> table-tries
-      (update-in (if (= level 2)
-                   [:l1c-tries]
-                   [:ln-tries [(dec level) (pop part)]])
-                 (fn [lnm1-tries]
-                   (->> lnm1-tries
-                        (map (fn [{lnm1-state :state, ^long lnm1-block-idx :block-idx, :as lnm1-trie}]
-                               (cond-> lnm1-trie
-                                 (and (= lnm1-state :live)
-                                      (<= lnm1-block-idx block-idx))
-                                 (assoc :state :garbage)))))))))
+(defn- supersede-lnm1-tries [lnm1-tries {:keys [^long block-idx]}]
+  (->> lnm1-tries
+       (map (fn [{lnm1-state :state, ^long lnm1-block-idx :block-idx, :as lnm1-trie}]
+              (cond-> lnm1-trie
+                (and (= lnm1-state :live)
+                     (<= lnm1-block-idx block-idx))
+                (assoc :state :garbage))))))
 
-(defn- conj-trie [table-tries {:keys [^long level, recency, ^long block-idx] :as trie} trie-cat]
+(defn- conj-trie [table-tries {:keys [^long level, recency, part] :as trie} trie-cat]
   (case (long level)
     0 (-> table-tries
           (update :l0-tries (fnil conj '()) (assoc trie :state :live)))
@@ -150,28 +168,29 @@
             (update :l1h-tries (fnil conj '()) (assoc trie :state :nascent)))
 
         (-> table-tries
-            (update :l1h-tries (fn [l1h-tries]
-                                 (->> l1h-tries
-                                      (map (fn [{^long l1h-block-idx :block-idx, :keys [state] :as trie}]
-                                             (cond-> trie
-                                               (and (not= state :live)
-                                                    (= block-idx l1h-block-idx))
-                                               (assoc :state :live)))))))
-            (update :l1c-tries
-                    (fnil (fn [l1c-tries trie]
-                            (-> l1c-tries
-                                (supersede-partial-l1c-tries trie trie-cat)
-                                (conj (assoc trie :state :live))))
-                          '())
-                    trie)
-            (update :l0-tries supersede-l0-tries trie)))
+            (conj-l1c-trie trie trie-cat)))
 
+    2 (if recency
+        (-> table-tries
+            (update :l1h-tries supersede-lnm1-tries trie)
+            (update :l2h-tries conj-levelled-trie trie trie-cat))
+
+        (-> table-tries
+            (update :ln-tries conj-nascent-ln-trie trie)
+            (as-> table-tries (cond-> table-tries
+                                (completed-ln-group? table-tries trie)
+                                (-> (update :ln-tries mark-ln-group-live trie)
+                                    (update :l1c-tries supersede-lnm1-tries trie)
+                                    (supersede-lnm1-tries trie))))))
+
+    ;; TODO duplication
     (-> table-tries
         (update :ln-tries conj-nascent-ln-trie trie)
         (as-> table-tries (cond-> table-tries
                             (completed-ln-group? table-tries trie)
                             (-> (update :ln-tries mark-ln-group-live trie)
-                                (supersede-lnm1-tries trie)))))))
+                                (update [:ln-tries [(dec level) (pop part)]]
+                                        supersede-lnm1-tries trie)))))))
 
 (defn apply-trie-notification [trie-cat tries trie]
   (let [trie (-> trie
@@ -184,7 +203,7 @@
        (into [] (filter #(= (:state %) :live)))
        (sort-by :block-idx)))
 
-(defrecord TrieCatalog [^Map !table-tries, ^long l1-size-limit]
+(defrecord TrieCatalog [^Map !table-tries, ^long file-size-target]
   xtdb.trie.TrieCatalog
   (addTries [this added-tries]
     (doseq [[table-name added-tries] (->> added-tries
@@ -212,7 +231,7 @@
         opts))
 
 (defmethod ig/init-key :xtdb/trie-catalog [_ {:keys [^BufferPool buffer-pool, ^IMetadataManager metadata-mgr]}]
-  (doto (TrieCatalog. (ConcurrentHashMap.) *l1-size-limit*)
+  (doto (TrieCatalog. (ConcurrentHashMap.) *file-size-target*)
     (.addTries (for [table-name (.allTableNames metadata-mgr)
                      ^ObjectStore$StoredObject obj (.listAllObjects buffer-pool (trie/->table-meta-dir table-name))]
                  (->added-trie table-name

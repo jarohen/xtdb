@@ -11,7 +11,7 @@
       (->> (transduce (map (fn [[trie-key size]]
                              (-> (trie/parse-trie-key trie-key)
                                  (assoc :data-file-size (or size -1)))))
-                      (completing (partial cat/apply-trie-notification {:l1-size-limit 20}))
+                      (completing (partial cat/apply-trie-notification {:file-size-target 20}))
                       {}))
       (cat/current-tries)
       (->> (into #{} (map :trie-key)))))
@@ -31,6 +31,11 @@
            (curr-tries ["l00-rc-b00" 10] ["l00-rc-b01" 10] ["l00-rc-b02" 10]
                        ["l01-r20200101-b01" 5] ["l01-r20200102-b01" 5] ["l01-rc-b01" 15]))
         "seen current, now historical tries are live too")
+
+  (t/is (= #{"l01-r20200101-b01" "l01-rc-b02" "l01-rc-b03"}
+           (curr-tries ["l00-rc-b00" 10] ["l00-rc-b01" 10] ["l00-rc-b02" 10] ["l00-rc-b02" 5]
+                       ["l01-rc-b00" 10] ["l01-r20200101-b01" 15] ["l01-rc-b01" 5] ["l01-rc-b02" 20] ["l01-rc-b03" 5]))
+        "L1C files can oscillate in size until they're full")
 
   (t/is (= #{"l01-rc-b01" "l00-rc-b02"}
            (curr-tries ["l00-rc-b00" 10] ["l00-rc-b01" 10] ["l00-rc-b02" 10] ["l01-rc-b01" 20]))
@@ -57,6 +62,13 @@
                        ["l01-rc-b00" 1] ["l01-rc-b01" 2]
                        ["l02-rc-p0-b01"] ["l02-rc-p1-b01"] ["l02-rc-p2-b01"] ["l02-rc-p3-b01"]))
         "L2 file supersedes L1, L1 supersedes L0, left with a single L0 file"))
+
+(t/deftest test-selects-l2h-tries
+  (t/is (= #{"l02-r20200101-b01" "l01-r20200102-b01" "l01-rc-b01" "l00-rc-b02"}
+           (curr-tries ["l00-rc-b00" 10] ["l00-rc-b01" 10] ["l00-rc-b02" 10]
+                       ["l01-r20200101-b01" 5] ["l01-r20200102-b01" 5] ["l01-rc-b01" 15]
+                       ["l02-r20200101-b01" 5]))
+        "L2H supersedes L1H"))
 
 (t/deftest test-l3+
   (t/is (= #{"l03-rc-p00-b01" "l03-rc-p01-b01" "l03-rc-p02-b01" "l03-rc-p03-b01"

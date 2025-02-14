@@ -28,9 +28,9 @@
   ([out in part] {:trie-keys in, :out-trie-key out, :part part}))
 
 (t/deftest test-compaction-jobs
-  (binding [cat/*l1-size-limit* 16]
+  (binding [cat/*file-size-target* 16]
     (letfn [(f [& tries]
-              (let [opts {:l1-size-limit cat/*l1-size-limit*}]
+              (let [opts {:file-size-target cat/*file-size-target*}]
                 (-> tries
                     (->> (transduce (map (fn [[trie-key size]]
                                            (-> (trie/parse-trie-key trie-key)
@@ -104,7 +104,7 @@
                    (job "l02-rc-p2-b0f" ["l01-rc-b0c" "l01-rc-b0d" "l01-rc-b0e" "l01-rc-b0f"] [2])
                    (job "l02-rc-p3-b0b" ["l01-rc-b08" "l01-rc-b09" "l01-rc-b0a" "l01-rc-b0b"] [3])}
 
-                 (binding [cat/*l1-size-limit* 2]
+                 (binding [cat/*file-size-target* 2]
                    (f ["l03-rc-p02-b0f"]
                       ["l03-rc-p03-b0f"]
                       ["l02-rc-p0-b03"] ["l02-rc-p2-b03"] ["l02-rc-p3-b03"] ; missing [1]
@@ -244,7 +244,7 @@
     (util/delete-dir node-dir)
 
     (binding [c/*page-size* 32
-              cat/*l1-size-limit* (* 16 1024)
+              cat/*file-size-target* (* 16 1024)
               c/*ignore-signal-block?* true]
       (util/with-open [node (tu/->local-node {:node-dir node-dir, :rows-per-block 10})]
         (letfn [(submit! [xs]
@@ -285,7 +285,7 @@
     (util/delete-dir node-dir)
 
     (binding [c/*page-size* 8
-              cat/*l1-size-limit* (* 16 1024)
+              cat/*file-size-target* (* 16 1024)
               c/*ignore-signal-block?* true]
       (util/with-open [node (tu/->local-node {:node-dir node-dir, :rows-per-block 10})]
         (letfn [(submit! [xs]
@@ -326,7 +326,7 @@
     (util/delete-dir node-dir)
 
     (binding [c/*page-size* 8
-              cat/*l1-size-limit* (* 16 1024)
+              cat/*file-size-target* (* 16 1024)
               c/*ignore-signal-block?* true]
       (util/with-open [node (tu/->local-node {:node-dir node-dir, :rows-per-block 10})]
         (let [^BufferPool bp (tu/component node :xtdb/buffer-pool)
@@ -358,7 +358,7 @@
     (util/delete-dir node-dir)
 
     (binding [c/*page-size* 8
-              cat/*l1-size-limit* (* 16 1024)
+              cat/*file-size-target* (* 16 1024)
               c/*ignore-signal-block?* true]
       (util/with-open [node (tu/->local-node {:node-dir node-dir, :rows-per-block 10})]
         (letfn [(submit! [xs]
@@ -393,7 +393,7 @@
 
 (t/deftest losing-data-when-compacting-3459
   (binding [c/*page-size* 8
-            cat/*l1-size-limit* (* 16 1024)
+            cat/*file-size-target* (* 16 1024)
             c/*ignore-signal-block?* true]
     (let [node-dir (util/->path "target/compactor/lose-data-on-compaction")]
       (util/delete-dir node-dir)
