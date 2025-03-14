@@ -1,12 +1,14 @@
-(ns xtdb.migration-test)
+(ns xtdb.migration-test
+  (:require [clojure.test :as t]
+            [xtdb.migration :as mig]
+            [xtdb.util :as util]))
 
 ;; to regenerate the test files, run this against 2.0.0-beta6
 (comment
   (require '[xtdb.api :as xt]
            '[xtdb.compactor :as c]
            '[xtdb.test-util :as tu]
-           '[xtdb.time :as time]
-           '[xtdb.util :as util])
+           '[xtdb.time :as time])
 
   (let [node-dir (util/->path "src/test/resources/xtdb/migration-test/v05/")]
     (util/delete-dir node-dir)
@@ -30,3 +32,9 @@
                          {:system-time tick-at}))
 
         (c/compact-all! node #xt/duration "PT1S")))))
+
+(t/deftest test-mig
+  (util/delete-dir (util/->path "src/test/resources/xtdb/migration-test/v05/objects/v06"))
+  (mig/migrate-from 5 {:storage [:local {:path "src/test/resources/xtdb/migration-test/v05/objects"}]})
+
+  )
