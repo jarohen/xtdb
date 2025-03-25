@@ -11,7 +11,8 @@
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.writer :as vw])
-  (:import (java.util.function IntPredicate)
+  (:import java.util.Date
+           (java.util.function IntPredicate)
            xtdb.vector.RelationReader))
 
 (t/use-fixtures :each tu/with-mock-clock tu/with-allocator tu/with-node)
@@ -818,3 +819,54 @@
                            (tu/query-ra '[:scan {:table public/docs :for-valid-time [:between #inst "2026" #inst "2027"]}
                                           [_id _valid_from _valid_to]]
                                         (assoc query-opts :snapshot-time (:system-time tx-key3))))))))))))))
+
+(t/deftest test-page-filtering
+  (doseq [[interval from1 to1 from2 to2]
+          [["precedes" #inst "2020" #inst "2021", #inst "2022" #inst "2023"]
+           ["meets" #inst "2020" #inst "2021", #inst "2021" #inst "2022"]
+           ["overlaps" #inst "2020" #inst "2022", #inst "2021" #inst "2023"]
+           ["starts" #inst "2020" #inst "2022", #inst "2020" #inst "2023"]
+           ["during" #inst "2020" #inst "2023", #inst "2021" #inst "2022"]
+           ["finishes" #inst "2020" #inst "2022", #inst "2021" #inst "2022"]
+           ["equals" #inst "2020" #inst "2022", #inst "2020" #inst "2022"]]
+
+          dir [:normal :inverse]
+
+          :let [[from1 to1 from2 to2]
+                (case dir
+                  :normal [from1 to1 from2 to2]
+                  :inverse [from2 to2 from1 to1])]]
+
+    (t/testing (format "%s interval: '%s'" (name dir) interval)
+      (util/with-open [n1 (xtn/start-node)
+                       n2 (xtn/start-node)]
+        (let [tx1 [[:put-docs {:into :foo
+                               :valid-from from1
+                               :valid-to to1}
+                    {:xt/id :foo, :version 1}]]
+              tx2 [[:put-docs {:into :foo
+                               :valid-from from2
+                               :valid-to to2}
+                    {:xt/id :foo, :version 2}]]]
+
+          (xt/execute-tx n1 tx1)
+          (xt/execute-tx n2 tx1)
+          (tu/finish-block! n2)
+          (c/compact-all! n2)
+          (xt/execute-tx n1 tx2)
+          (xt/execute-tx n2 tx2)
+          (tu/finish-block! n2)
+          (c/compact-all! n2)
+
+          (doseq [vt (->> [from1 from2 to1 to2]
+                          (into #{(Date. Long/MIN_VALUE)
+                                  (Date. Long/MAX_VALUE)}
+                                (mapcat (fn [^Date date]
+                                          (for [^long delta (range -2 3)]
+                                            (Date. (+ (.getTime date) delta)))))))]
+            (t/testing (format "date: '%s'" (pr-str vt))
+              (doseq [q ["SELECT * FROM foo FOR VALID_TIME AS OF ?"
+                         "SELECT *, _valid_from, _valid_to FROM foo FOR VALID_TIME AS OF ?"]]
+                (t/testing (format "query: '%s'" q)
+                  (t/is (= (xt/q n1 [q vt])
+                           (xt/q n2 [q vt]))))))))))))
