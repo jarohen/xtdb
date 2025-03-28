@@ -2,11 +2,12 @@ package xtdb.arrow
 
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.vector.extensions.UuidType
 import java.nio.ByteBuffer
 import java.util.*
 
-class UuidVector(override val inner: FixedSizeBinaryVector) : ExtensionVector() {
+class UuidVector(override val inner: FixedSizeBinaryVector) : ExtensionVector(), MetadataFlavour.Bytes {
 
     override val type = UuidType
 

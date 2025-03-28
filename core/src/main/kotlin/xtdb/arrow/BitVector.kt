@@ -20,7 +20,7 @@ class BitVector private constructor(
     ) : this(name, nullable, 0, ExtensibleBuffer(al), ExtensibleBuffer(al))
 
     override val type: ArrowType = BIT_TYPE
-    override val children: Iterable<Vector> = emptyList()
+    override val vectors: Iterable<Vector> = emptyList()
 
     override fun isNull(idx: Int) = !validityBuffer.getBit(idx)
 

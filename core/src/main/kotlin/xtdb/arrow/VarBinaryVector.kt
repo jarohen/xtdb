@@ -6,6 +6,8 @@ import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
 import java.nio.ByteBuffer
 
+internal val VAR_BINARY: ArrowType = Types.MinorType.VARBINARY.type
+
 class VarBinaryVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: ExtensibleBuffer,
@@ -16,7 +18,7 @@ class VarBinaryVector private constructor(
     constructor(al: BufferAllocator, name: String, nullable: Boolean) :
             this(name, nullable, 0, ExtensibleBuffer(al), ExtensibleBuffer(al), ExtensibleBuffer(al))
 
-    override val type: ArrowType = Types.MinorType.VARBINARY.type
+    override val type = VAR_BINARY
 
     override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getByteArray(idx)
 

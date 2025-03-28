@@ -21,7 +21,7 @@ class FixedSizeListVector(
 
     override val type = ArrowType.FixedSizeList(listSize)
 
-    override val children get() = listOf(elVector)
+    override val vectors: Iterable<Vector> get() = listOf(elVector)
 
     private val validityBuffer = ExtensibleBuffer(allocator)
 

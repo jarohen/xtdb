@@ -239,8 +239,8 @@ class StructVectorTest {
             assertEquals(els, structVec.toList())
 
             assertEquals(
-                Field("struct", FieldType(false, STRUCT_TYPE, null), listOf(
-                    Field("i32", FieldType(true, I32_TYPE, null), emptyList()),
+                Field("struct", FieldType(false, STRUCT, null), listOf(
+                    Field("i32", FieldType(true, I32, null), emptyList()),
                     Field("utf8", FieldType(true, UTF8_TYPE, null), emptyList())
                 )),
                 structVec.field
@@ -260,8 +260,8 @@ class StructVectorTest {
             )
 
             assertEquals(
-                Field("struct", FieldType(true, STRUCT_TYPE, null), listOf(
-                    Field("i32", FieldType(false, I32_TYPE, null), emptyList()),
+                Field("struct", FieldType(true, STRUCT, null), listOf(
+                    Field("i32", FieldType(false, I32, null), emptyList()),
                     Field("utf8", FieldType(false, UTF8_TYPE, null), emptyList())
                 )),
                 structVec.field
@@ -278,9 +278,9 @@ class StructVectorTest {
             assertEquals(els, structVec.toList())
 
             assertEquals(
-                Field("struct", FieldType(false, STRUCT_TYPE, null), listOf(
+                Field("struct", FieldType(false, STRUCT, null), listOf(
                     Field("a", FieldType(false, UNION_TYPE, null), listOf(
-                        Field("i32", FieldType(false, I32_TYPE, null), emptyList()),
+                        Field("i32", FieldType(false, I32, null), emptyList()),
                         Field("utf8", FieldType(false, UTF8_TYPE, null), emptyList())
                     ))
                 )),

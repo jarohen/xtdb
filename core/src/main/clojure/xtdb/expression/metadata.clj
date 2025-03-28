@@ -49,17 +49,12 @@
                        :bloom-hash-sym (gensym 'bloom-hashes)}))
 
                   (simplify-and-or-expr
-                   {:op :call
-                    :f :or
-                    ;; TODO this seems like it could make better use
-                    ;; of the polymorphic expr patterns?
+                   {:op :call, :f :or
                     :args (vec
                            (for [col-type (cond
-                                            (isa? types/col-type-hierarchy value-type :num)
-                                            (filterv types/num-types base-col-types)
-
-                                            (and (vector? value-type) (isa? types/col-type-hierarchy (first value-type) :date-time))
-                                            (filterv (comp types/date-time-types types/col-type-head) base-col-types)
+                                            (or (isa? types/col-type-hierarchy value-type :num)
+                                                (isa? types/col-type-hierarchy (types/col-type-head value-type) :date-time))
+                                            [:f64]
 
                                             (contains? base-col-types value-type)
                                             [value-type])]

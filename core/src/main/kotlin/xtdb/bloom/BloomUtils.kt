@@ -3,6 +3,7 @@
 package xtdb.bloom
 
 import org.apache.arrow.memory.util.ArrowBufPointer
+import org.roaringbitmap.ImmutableBitmapDataProvider
 import org.roaringbitmap.RoaringBitmap
 import org.roaringbitmap.buffer.ImmutableRoaringBitmap
 import xtdb.arrow.VectorReader
@@ -10,9 +11,11 @@ import xtdb.arrow.VectorWriter
 import xtdb.util.Hasher
 import java.nio.ByteBuffer
 
-const val BLOOM_BITS = 1 shl 24
-const val BLOOM_BIT_MASK = BLOOM_BITS - 1
+const val BLOOM_BITS = 24
+const val BLOOM_BIT_MASK = (1 shr BLOOM_BITS) - 1
 const val BLOOM_K = 3
+
+typealias BloomFilter = ImmutableBitmapDataProvider
 
 fun bloomToBitmap(bloomRdr: VectorReader, idx: Int): ImmutableRoaringBitmap {
     val pointer = ArrowBufPointer().apply {
@@ -43,10 +46,10 @@ fun RoaringBitmap.toByteBuffer(): ByteBuffer =
     }
 
 fun writeBloom(bloomWtr: VectorWriter, col: VectorReader) {
-    val bloomBuilder = BloomBuilder(col)
+    val bloomBuilder = BloomBuilder()
     for (idx in 0 until col.valueCount) {
         if (!col.isNull(idx)) {
-            bloomBuilder.add(idx)
+            bloomBuilder.add(col, idx)
         }
     }
 

@@ -6,10 +6,9 @@ import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
 import xtdb.indexer.TrieMetadataCalculator
 import xtdb.log.proto.TrieMetadata
-import xtdb.metadata.PageMetadataWriter
+import xtdb.metadata.ColumnMetadata
 import xtdb.trie.Trie.metaFilePath
 import xtdb.trie.Trie.metaRelSchema
-import xtdb.util.requiringResolve
 
 class MetadataFileWriter(
     al: BufferAllocator, private val bp: BufferPool,
@@ -37,10 +36,8 @@ class MetadataFileWriter(
     private val leafWtr = nodeWtr["leaf"]
     private val pageIdxWtr = leafWtr["data-page-idx"]
 
-    private val pageMetaWriter =
-        requiringResolve("xtdb.metadata/->page-meta-wtr")
-            .invoke(leafWtr["columns"])
-            .let { it as PageMetadataWriter }
+    private val colsVec = leafWtr["columns"]
+    private val colMetaWriter = ColumnMetadata(colsVec.listElements)
 
     private var pageIdx = 0
 
@@ -68,15 +65,20 @@ class MetadataFileWriter(
     fun writeLeaf(): RowIndex {
         val metaPos = nodeWtr.valueCount
 
-        val temporalCols = listOf(systemFromVec, validFromVec, validToVec, iidVec)
+        colMetaWriter.writeMetadata(iidVec)
+        colMetaWriter.writeMetadata(validFromVec)
+        colMetaWriter.writeMetadata(validToVec)
+        colMetaWriter.writeMetadata(systemFromVec)
 
         trieMetaCalc?.update(0, dataRel.rowCount)
 
-        val contentCols = writeContentMetadata.takeIf { it }
-            ?.let { putReader?.keyNames?.mapNotNull { putReader.vectorForOrNull(it) } }
-            .orEmpty()
+        if (writeContentMetadata) {
+            for (contentCol in putReader?.keyNames?.mapNotNull { putReader.vectorForOrNull(it) }.orEmpty()) {
+                colMetaWriter.writeMetadata(contentCol)
+            }
+        }
 
-        pageMetaWriter.writeMetadata(temporalCols + contentCols)
+        colsVec.endList()
 
         pageIdxWtr.writeInt(pageIdx++)
         leafWtr.endStruct()

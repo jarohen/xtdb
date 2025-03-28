@@ -4,6 +4,7 @@ import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.types.Types.MinorType
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.types.IntervalDayTime
 import xtdb.types.IntervalMonthDayNano
 import xtdb.types.IntervalYearMonth
@@ -24,13 +25,15 @@ class IntervalYearMonthVector private constructor(
             : this(name, nullable, 0, ExtensibleBuffer(al), ExtensibleBuffer(al))
 
     override fun getInt(idx: Int) = getInt0(idx)
-    override fun writeInt(value: Int) = writeInt0(value)
+    override fun writeInt(v: Int) = writeInt0(v)
 
     override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = IntervalYearMonth(Period.ofMonths(getInt(idx)))
 
     override fun writeObject0(value: Any) =
         if (value is IntervalYearMonth) writeInt(value.period.toTotalMonths().toInt())
         else throw InvalidWriteObjectException(fieldType, value)
+
+    override val metadataFlavours = emptyList<MetadataFlavour>()
 
     override fun openSlice(al: BufferAllocator) =
         IntervalYearMonthVector(name, nullable, valueCount, validityBuffer.openSlice(al), dataBuffer.openSlice(al))
@@ -71,6 +74,8 @@ class IntervalDayTimeVector private constructor(
             }
         } else throw InvalidWriteObjectException(fieldType, value)
 
+    override val metadataFlavours = emptyList<MetadataFlavour>()
+
     override fun openSlice(al: BufferAllocator) =
         IntervalDayTimeVector(name, nullable, valueCount, validityBuffer.openSlice(al), dataBuffer.openSlice(al))
 }
@@ -108,6 +113,8 @@ class IntervalMonthDayNanoVector private constructor(
                 flip()
                 writeBytes(this)
             }
+
+    override val metadataFlavours = emptyList<MetadataFlavour>()
 
     override fun openSlice(al: BufferAllocator) =
         IntervalMonthDayNanoVector(name, nullable, valueCount, validityBuffer.openSlice(al), dataBuffer.openSlice(al))
