@@ -1034,7 +1034,6 @@
 (defn bind-stmt [{:keys [conn-state allocator] :as conn} {:keys [statement-type prepared-query args result-format] :as stmt}]
   (let [{:keys [session transaction watermark-tx-id]} @conn-state
         {:keys [^Clock clock], {:strs [fallback_output_format]} :parameters} session
-
         query-opts {:snapshot-time (or (:snapshot-time stmt) (:snapshot-time transaction))
                     :current-time (or (:current-time stmt)
                                       (:current-time transaction)
