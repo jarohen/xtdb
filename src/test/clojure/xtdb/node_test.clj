@@ -883,9 +883,9 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
     (t/is (= 1 (xt/submit-tx node [[:put-docs :foo {:xt/id 1, :version 1}]])))
     (t/is (= 2 (xt/submit-tx node [[:put-docs :foo {:xt/id 1, :version 2}]])))
 
-    (t/is (= [{:xt/id 0, :system-time #xt/zoned-date-time "2020-01-01T00:00Z[UTC]"}
+    (t/is (= [{:xt/id 0, :system-time #xt/zoned-date-time "2020-01-01Z[UTC]"}
               {:xt/id 1, :system-time #xt/zoned-date-time "2020-01-01T00:00:00.000001Z[UTC]"}
-              {:xt/id 2, :system-time #xt/zoned-date-time "2021-01-01T00:00Z[UTC]"}]
+              {:xt/id 2, :system-time #xt/zoned-date-time "2021-01-01Z[UTC]"}]
              (xt/q node "SELECT _id, system_time FROM xt.txs ORDER BY _id")))))
 
 (t/deftest startup-error-doesnt-output-integrant-system
@@ -1148,3 +1148,21 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
     (c/compact-all! tu/*node* nil)
 
     (t/is (= res (xt/q tu/*node* "SELECT * FROM table ORDER BY _id")))))
+
+(t/deftest sets-and-resets-default-tz
+  (with-open [conn (jdbc/get-connection tu/*node*)]
+    (letfn [(jdbc-tz []
+              (:timezone (jdbc/execute-one! conn ["SHOW TIME ZONE"])))
+            (xtq-tz []
+              (:timezone (first (xt/q conn "SHOW TIME ZONE"))))]
+      (jdbc/execute-one! conn ["SET TIME ZONE 'America/New_York'"])
+
+      (t/is (= "America/New_York" (jdbc-tz)))
+      (t/is (= "America/New_York" (xtq-tz)))
+
+      (t/is (= [{:timezone "Asia/Tokyo"}]
+               (xt/q conn "SHOW TIME ZONE"
+                     {:default-tz #xt/zone "Asia/Tokyo"})))
+
+      (t/is (= "America/New_York" (jdbc-tz)))
+      (t/is (= "America/New_York" (xtq-tz))))))
