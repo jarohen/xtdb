@@ -2945,11 +2945,10 @@ FROM dates"))))
 
   (t/testing "params"
     (t/is (= [{:xt/id 2, :y "baz"}]
-             (xt/q tu/*node* [(format "XTQL $$ %s $$" (pr-str '#(from :bar [{:xt/id %} *])))
-                              2])))
+             (xt/q tu/*node* ['#(from :bar [{:xt/id %} *]) 2])))
 
     (t/is (= [{:xt/id 2, :y "baz", :x "x"}]
-             (xt/q tu/*node* [(format "FROM (XTQL $$ %s $$) t SELECT *, ? AS x"
+             (xt/q tu/*node* [(format "FROM (XTQL ($$ %s $$, ?)) t SELECT *, ? AS x"
                                       (pr-str '#(from :bar [{:xt/id %} *])))
                               2 "x"])))
 
