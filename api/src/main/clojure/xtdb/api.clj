@@ -31,11 +31,11 @@
   (print-dup clj-form w))
 
 (defn- begin-ro-sql [{:keys [default-tz after-tx-id snapshot-time current-time]}]
-  (let [kvs (->> [["WATERMARK = ?" after-tx-id]
-                  ["TIMEZONE = ?" (some-> default-tz str)]
+  (let [kvs (->> [["TIMEZONE = ?" (some-> default-tz str)]
                   ["SNAPSHOT_TIME = ?" snapshot-time]
                   ["CLOCK_TIME = ?" current-time]]
-                 (into [] (filter (comp some? second))))]
+                 (into [["WATERMARK = ?" after-tx-id]]
+                       (filter (comp some? second))))]
     (into [(format "BEGIN READ ONLY WITH (%s)"
                    (str/join ", " (map first kvs)))]
           (map second)
@@ -76,6 +76,7 @@
                  (string? query) query
                  (seq? query) (xtql->sql query)
                  :else (throw (err/illegal-arg :unknown-query-type {:query query, :type (type query)})))
+         ;; TODO to be removed when execute-tx goes to pgwire
          opts (-> opts
                   (update :after-tx-id (fnil identity (xtp/latest-submitted-tx-id connectable))))]
      (reify IReduceInit
@@ -215,15 +216,33 @@
        (throw (or error (ex-info "Transaction failed." {})))))))
 
 (defn status
-  "Returns the status of this node as a map,
-  including details of both the latest submitted and completed tx
+  "Returns the status of this node as a map"
 
-  Optionally takes a map of options:
-  - :auth-opts
-    a map of user and password if the node requires authentication"
+  ([connectable]
+   (let [was-conn? (instance? Connection connectable)
+         conn (jdbc/get-connection connectable)]
+     (letfn [(status-q [conn query+args]
+               (jdbc/execute! conn query+args
+                              {:builder-fn xt-jdbc/builder-fn}))]
+       (try
+         (jdbc/execute! conn ["BEGIN READ ONLY WITH (watermark = NULL)"])
+         (try
+           {:metrics (-> (concat (status-q conn ["SELECT * FROM xt.metrics_counters"])
+                                 (status-q conn ["SELECT * FROM xt.metrics_timers"])
+                                 (status-q conn ["SELECT * FROM xt.metrics_gauges"]))
+                         (->> (group-by :name))
+                         (update-vals (fn [metrics]
+                                        (mapv #(dissoc % :name) metrics))))
+            :latest-completed-tx (some-> (first (status-q conn ["SHOW LATEST_COMPLETED_TX"]))
+                                         (serde/map->TxKey))
 
-  ([node] (xtp/status node))
-  ([node opts] (xtp/status node opts)))
+            :latest-submitted-tx (:watermark (first (status-q conn ["SHOW WATERMARK"])))}
+
+           (finally
+             (jdbc/execute! conn ["ROLLBACK"])))
+         (finally
+           (when-not was-conn?
+             (.close conn))))))))
 
 (defmacro template
   "This macro quotes the given query, but additionally allows you to use Clojure's unquote (`~`) and unquote-splicing (`~@`) forms within the quoted form.
