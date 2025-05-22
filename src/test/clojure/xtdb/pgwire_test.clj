@@ -2696,7 +2696,9 @@ ORDER BY 1,2;")
 
     (t/is (= {:sql-state "08P01",
               :message "Queries are unsupported in a DML transaction",
-              :detail nil}
+              :detail #xt/error [:incorrect :xtdb/queries-in-read-write-tx
+                                 "Queries are unsupported in a DML transaction"
+                                 {:query "SELECT a FROM foo"}]}
              (reading-ex
                (jdbc/with-transaction [tx conn]
                  (q tx ["INSERT INTO foo(_id, a) values(42, 42)"])

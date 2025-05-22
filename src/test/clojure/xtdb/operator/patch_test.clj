@@ -115,8 +115,8 @@
   (t/is (anomalous? [:incorrect nil "Cannot PATCH (_valid_from _valid_to) column"]
                     (xt/execute-tx tu/*node*
                                    ["PATCH INTO docs RECORDS {_id: 1,
-                                                                         _valid_from: TIMESTAMP '2020-01-01 00:00:00+00:00',
-                                                                         _valid_to: TIMESTAMP '2030-01-01 00:00:00+00:00'}"]))
+                                                              _valid_from: TIMESTAMP '2020-01-01 00:00:00+00:00',
+                                                              _valid_to: TIMESTAMP '2030-01-01 00:00:00+00:00'}"]))
         "patching with forbidden columns directly")
 
   (t/is (anomalous? [:incorrect nil "Cannot PATCH (_valid_from _valid_to) column"]

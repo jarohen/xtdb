@@ -61,7 +61,7 @@
                         (Thread/sleep 250)
                         (recur))
                   200 (do
-                        (t/is (= {"X-XTDB-Target-Message-Id" "2097", "X-XTDB-Current-Message-Id" "2097"}
+                        (t/is (= {"X-XTDB-Target-Message-Id" "2113", "X-XTDB-Current-Message-Id" "2113"}
                                  (-> (:headers resp)
                                      (select-keys ["X-XTDB-Target-Message-Id" "X-XTDB-Current-Message-Id"]))))
                         (t/is (= "Started." (:body resp)))))))))))))

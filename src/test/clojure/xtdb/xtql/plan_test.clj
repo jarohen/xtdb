@@ -1565,11 +1565,11 @@
             "Case 8: Application-time sequenced and system-time nonsequenced"))))
 
 (deftest scalar-sub-queries-test
-  (xt/submit-tx tu/*node* [[:put-docs :customer {:xt/id 0, :firstname "bob", :lastname "smith"}]
-                           [:put-docs :customer {:xt/id 1, :firstname "alice" :lastname "carrol"}]
-                           [:put-docs :order {:xt/id 0, :customer 0, :items [{:sku "eggs", :qty 1}]}]
-                           [:put-docs :order {:xt/id 1, :customer 0, :items [{:sku "cheese", :qty 3}]}]
-                           [:put-docs :order {:xt/id 2, :customer 1, :items [{:sku "bread", :qty 1} {:sku "eggs", :qty 2}]}]])
+  (xt/execute-tx tu/*node* [[:put-docs :customer {:xt/id 0, :firstname "bob", :lastname "smith"}]
+                            [:put-docs :customer {:xt/id 1, :firstname "alice" :lastname "carrol"}]
+                            [:put-docs :order {:xt/id 0, :customer 0, :items [{:sku "eggs", :qty 1}]}]
+                            [:put-docs :order {:xt/id 1, :customer 0, :items [{:sku "cheese", :qty 3}]}]
+                            [:put-docs :order {:xt/id 2, :customer 1, :items [{:sku "bread", :qty 1} {:sku "eggs", :qty 2}]}]])
 
   (letfn [(q [query]
             (set (xt/q tu/*node* query)))]

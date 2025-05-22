@@ -5,6 +5,7 @@
             [next.jdbc :as jdbc]
             [xtdb.api :as xt]
             [xtdb.compactor :as c]
+            [xtdb.error :as err]
             [xtdb.logging :as logging]
             [xtdb.next.jdbc :as xt-jdbc]
             [xtdb.node :as xtn]
@@ -16,7 +17,6 @@
             [xtdb.time :as time]
             [xtdb.util :as util])
   (:import [java.time ZonedDateTime]
-           [java.time.format DateTimeParseException]
            [xtdb.api ServerConfig Xtdb$Config]
            [xtdb.query IQuerySource]
            xtdb.types.RegClass))
@@ -291,9 +291,8 @@ WHERE foo._id = 1"]])
   (t/is (= [{:xt/id 1, :xt/valid-from #xt/zdt "2018-01-01Z[UTC]"}]
            (xt/q tu/*node* "SELECT _id, _valid_from FROM foo")))
 
-  (t/is (thrown-with-msg? DateTimeParseException
-                          #"Text 'nope-01-01' could not be parsed"
-                          (xt/execute-tx tu/*node* [[:sql "INSERT INTO foo (_id, _valid_from) VALUES (1, 'nope-01-01')"]]))))
+  (t/is (anomalous? [:incorrect ::err/date-time-parse #"Text 'nope-01-01' could not be parsed"]
+                    (xt/execute-tx tu/*node* [[:sql "INSERT INTO foo (_id, _valid_from) VALUES (1, 'nope-01-01')"]]))))
 
 (t/deftest test-vector-type-mismatch-245
   (t/is (= [{:a [4 "2"]}]

@@ -620,11 +620,12 @@
                       (into #{} (map :trie-key)))))))))
 
 (t/deftest dont-lose-erases-during-compaction
-  (xt/submit-tx tu/*node* [[:put-docs :foo {:xt/id 1 :xt/valid-to #inst "2050"} {:xt/id 2 :xt/valid-to #inst "2050"}]])
+  (xt/execute-tx tu/*node* [[:put-docs :foo {:xt/id 1 :xt/valid-to #inst "2050"} {:xt/id 2 :xt/valid-to #inst "2050"}]])
   (tu/finish-block! tu/*node*)
   (c/compact-all! tu/*node* #xt/duration "PT1S")
 
-  (xt/submit-tx tu/*node* [[:erase-docs :foo 1 2]])
+  ;; TODO move this check to pgwire rather than in the main query engine?
+  (xt/execute-tx tu/*node* [[:erase-docs :foo 1 2]])
 
   (t/is (= [] (xt/q tu/*node* "SELECT _id FROM foo")))
 

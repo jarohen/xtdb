@@ -2292,7 +2292,7 @@ SELECT PERIOD(DATE '2022-12-31', TIMESTAMP '2023-01-02') CONTAINS (DATE '2023-01
                             [:sql "INSERT INTO bar RECORDS ?, {_id: 4, x: 5}"
                              [{:_id 5, :x 6.0}]]
 
-                            [:sql "INSERT INTO bar RECORDS $1"
+                            [:sql "INSERT INTO bar RECORDS ?"
                              [{:_id 7, :x "8"}]]])
 
   (t/is (= [{:xt/id 2, :x 3} {:xt/id 3, :x 4.0} {:xt/id 4, :x 5} {:xt/id 5, :x 6.0} {:xt/id 7, :x "8"}]

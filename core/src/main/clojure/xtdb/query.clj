@@ -139,7 +139,8 @@
        (log/debug "error conforming LP"
                   (pr-str {:plan query
                            :explain (s/explain-data ::lp/logical-plan query)}))
-       (throw (err/illegal-arg :malformed-query {::err/message "internal error conforming query plan", :plan query})))
+       (throw (err/fault :malformed-query "internal error conforming query plan"
+                         {:plan query})))
 
      (let [tables (filter (comp #{:scan} :op) (lp/child-exprs conformed-query))
            scan-cols (->> tables
@@ -204,9 +205,13 @@
                      ;;especially given our "per path schema" principal.
                      (when-not (= relevant-schema-at-prepare-time
                                   (select-keys table-info-at-execution-time (keys relevant-schema-at-prepare-time)))
-                       ;;TODO consider adding the schema diff to the error, potentially quite large.
                        (throw (err/conflict :prepared-query-out-of-date
-                                            "Relevant table schema has changed since preparing query, please prepare again")))))
+                                            "Relevant table schema has changed since preparing query, please prepare again"
+                                            {:prepare-time-schema (-> relevant-schema-at-prepare-time
+                                                                      (update-vals types/field->col-type))
+                                             :execution-time-schema (-> table-info-at-execution-time
+                                                                        (select-keys (keys relevant-schema-at-prepare-time))
+                                                                        (update-vals types/field->col-type))})))))
                  (.acquire ref-ctr)
                  (try
                    (util/with-close-on-catch [^BufferAllocator allocator

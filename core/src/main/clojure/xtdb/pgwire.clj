@@ -36,7 +36,7 @@
            (xtdb.antlr Sql$DirectlyExecutableStatementContext SqlVisitor)
            (xtdb.api DataSource DataSource$ConnectionBuilder ServerConfig Xtdb$Config)
            xtdb.api.module.XtdbModule
-           (xtdb.error Anomaly Conflict Incorrect)
+           (xtdb.error Anomaly Conflict Incorrect Interrupted)
            (xtdb.query BoundQuery PreparedQuery)
            [xtdb.vector RelationReader]))
 
@@ -238,7 +238,10 @@
       (instance? Incorrect ex)
       (case (::err/code data)
         :xtdb/unindexed-tx {::error-code "0B000", ::severity :error}
-
+        ::invalid-arg-representation {::severity :error
+                                      ::error-code (case (:arg-format data)
+                                                     :text "22P02"
+                                                     :binary "22P03")}
         {::severity :error, ::error-code "08P01"})
 
       :else
@@ -412,24 +415,26 @@
             arg-format (or (nth arg-format arg-idx nil)
                            (nth arg-format arg-idx :text))
             {:keys [read-binary, read-text]} (or (get pg-types/pg-types-by-oid param-oid)
-                                                 (throw (pgio/err-protocol-violation "Unsupported param type provided for read")))]
+                                                 (throw (pgio/err-protocol-violation (str "Unsupported param type provided for read: " param-oid))))]
 
         (if (= :binary arg-format)
           (read-binary session arg)
           (read-text session arg))))))
 
-(defn- invalid-text-representation [msg] (ex-info msg {::severity :error, ::error-code "22P02"}))
-(defn- invalid-binary-representation [msg] (ex-info msg {::severity :error, ::error-code "22P03"}))
-
 (defn- xtify-args [{:keys [conn-state] :as _conn} args {:keys [arg-format] :as stmt}]
-  (try
-    (vec (map-indexed (->xtify-arg (:session @conn-state) stmt) args))
-    (catch Exception e
-      (let [ex-msg (or (ex-message e) (str "invalid arg representation - " e))]
-        (throw (if (= arg-format :binary)
-                 (invalid-binary-representation ex-msg)
-                 (invalid-text-representation ex-msg)))))))
-
+  (let [xtify-arg (->xtify-arg (:session @conn-state) stmt)]
+    (->> args
+         (into [] (map-indexed
+                   (fn [idx arg]
+                     (try
+                       (xtify-arg idx arg)
+                       (catch Exception e
+                         (let [ex-msg (or (ex-message e) (str "invalid arg representation - " e))]
+                           (throw (err/incorrect ::invalid-arg-representation ex-msg
+                                                 {:idx idx
+                                                  :arg-format (case (long (nth arg-format idx))
+                                                                0 :text
+                                                                1 :binary)})))))))))))
 (defn- apply-args [expr args]
   (if (symbol? expr)
     (let [args-map (zipmap (map (fn [idx]
@@ -493,22 +498,23 @@
       (throw (pgio/err-protocol-violation "transaction failed"))
 
       (try
-        (when (= :read-write access-mode)
-          (let [tx-opts {:default-tz default-tz
-                         :system-time (some-> system-time (time/->instant {:default-tz default-tz}))
-                         :authn {:user (get parameters "user")}}]
-            (if async?
-              (let [tx-id (xtp/submit-tx node dml-buf tx-opts)]
-                (swap! conn-state assoc :watermark-tx-id tx-id, :latest-submitted-tx {:tx-id tx-id}))
+        (err/wrap-anomaly {}
+          (when (= :read-write access-mode)
+            (let [tx-opts {:default-tz default-tz
+                           :system-time (some-> system-time (time/->instant {:default-tz default-tz}))
+                           :authn {:user (get parameters "user")}}]
+              (if async?
+                (let [tx-id (xtp/submit-tx node dml-buf tx-opts)]
+                  (swap! conn-state assoc :watermark-tx-id tx-id, :latest-submitted-tx {:tx-id tx-id}))
 
-              (let [{:keys [tx-id error] :as tx} (xtp/execute-tx node dml-buf tx-opts)]
-                (swap! conn-state assoc :watermark-tx-id tx-id, :latest-submitted-tx tx)
+                (let [{:keys [tx-id error] :as tx} (xtp/execute-tx node dml-buf tx-opts)]
+                  (swap! conn-state assoc :watermark-tx-id tx-id, :latest-submitted-tx tx)
 
-                (when error
-                  (throw error))))))
-        (catch InterruptedException e (throw e))
-        (catch Exception e
-          (throw e))
+                  (when error
+                    (throw error)))))))
+
+        (catch Interrupted e (throw e))
+
         (finally
           (swap! conn-state dissoc :transaction)
           (close-all-portals conn))))))
@@ -693,20 +699,24 @@
   ;; need to allow this one in RW transactions
   "SELECT pg_type.oid, typname FROM pg_catalog.pg_type LEFT JOIN (select ns.oid as nspoid, ns.nspname, r.r from pg_namespace as ns join ( select s.r, (current_schemas(false))[s.r] as nspname from generate_series(1, array_upper(current_schemas(false), 1)) as s(r) ) as r using ( nspname ) ) as sp ON sp.nspoid = typnamespace WHERE typname = $1 ORDER BY sp.r, pg_type.oid DESC LIMIT 1")
 
-(defn- permissibility-err
-  "Returns an error if the given statement, which is otherwise valid - is not permitted (say due to the access mode, transaction state)."
+(defn- verify-permissibility
   [{:keys [conn-state server]} {:keys [statement-type] :as stmt}]
   (let [{:keys [access-mode]} (:transaction @conn-state)]
-    (cond
-      (and (= :dml statement-type) (:read-only? server))
-      (pgio/err-protocol-violation "DML is not allowed on the READ ONLY server")
+    (when (and (= :dml statement-type) (:read-only? server))
+      (throw (err/incorrect :xtdb/dml-in-read-only-server
+                            "DML is not allowed on the READ ONLY server"
+                            {:query (:query stmt)})))
 
-      (and (= :dml statement-type) (= :read-only access-mode))
-      (pgio/err-protocol-violation "DML is not allowed in a READ ONLY transaction")
+    (when (and (= :dml statement-type) (= :read-only access-mode))
+      (throw (err/incorrect :xtdb/dml-in-read-only-tx
+                            "DML is not allowed in a READ ONLY transaction"
+                            {:query (:query stmt)})))
 
-      (and (= :query statement-type) (= :read-write access-mode)
-           (not= pgjdbc-type-query (str/replace (:query stmt) #"  +" " ")))
-      (pgio/err-protocol-violation "Queries are unsupported in a DML transaction"))))
+    (when (and (= :query statement-type) (= :read-write access-mode)
+               (not= pgjdbc-type-query (str/replace (:query stmt) #"  +" " ")))
+      (throw (err/incorrect :xtdb/queries-in-read-write-tx
+                            "Queries are unsupported in a DML transaction"
+                            {:query (:query stmt)})))))
 
 (defmethod handle-msg* :msg-sync [{:keys [conn-state] :as conn} _]
   ;; Sync commands are sent by the client to commit transactions
@@ -930,10 +940,10 @@
             (log/debug e "Error parsing SQL")
             (throw e))))))
 
-(defn- prep-stmt [{:keys [node, conn-state] :as conn} {:keys [statement-type param-oids] :as stmt}]
+(defn- prep-stmt [{:keys [node, conn-state] :as conn} {:keys [statement-type param-oids query] :as stmt}]
   (case statement-type
     (:query :execute :show-variable)
-    (try
+    (err/wrap-anomaly {:stage :prepare, :sql query}
       (let [{:keys [^Sql$DirectlyExecutableStatementContext parsed-query explain?]} stmt
 
             {:keys [session watermark-tx-id]} @conn-state
@@ -983,6 +993,7 @@
                                                                          (map-indexed (fn [idx field]
                                                                                         (types/field-with-name field (str "?_" idx))))))))
                                 (mapv (partial pg-types/field->pg-type fallback-output-format)))))))
+      #_#_#_
       (catch IllegalArgumentException e
         (log/debug e "Error preparing statement")
         (throw e))
@@ -1131,8 +1142,7 @@
     (pgio/cmd-write-msg conn pgio/msg-bind-complete)))
 
 (defn execute-portal [{:keys [conn-state] :as conn} {:keys [statement-type canned-response parameter value session-characteristics tx-characteristics] :as portal}]
-  (when-let [err (permissibility-err conn portal)]
-    (throw err))
+  (verify-permissibility conn portal)
 
   (swap! conn-state (fn [{:keys [transaction] :as cs}]
                       (cond-> cs
@@ -1237,13 +1247,14 @@
 
 (defn handle-msg [{:keys [cid conn-state] :as conn} {:keys [msg-name] :as msg}]
   (try
-    (log/trace "Read client msg" {:cid cid, :msg msg})
+    (err/wrap-anomaly {}
+      (log/trace "Read client msg" {:cid cid, :msg msg})
 
-    (if (and (skip-until-sync? conn) (not= :msg-sync msg-name))
-      (log/trace "Skipping msg until next sync due to error in extended protocol" {:cid cid, :msg msg})
-      (handle-msg* conn msg))
+      (if (and (skip-until-sync? conn) (not= :msg-sync msg-name))
+        (log/trace "Skipping msg until next sync due to error in extended protocol" {:cid cid, :msg msg})
+        (handle-msg* conn msg)))
 
-    (catch InterruptedException e (throw e))
+    (catch Interrupted e (throw e))
 
     (catch Throwable e
       (log/debug e "error processing message: " (ex-message e))

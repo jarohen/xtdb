@@ -217,7 +217,11 @@
                    :localized-severity "ERROR",
                    :sql-state "22P02",
                    :message "invalid timestamp: Text 'alan' could not be parsed at index 0"
-                   :detail nil}}]
+                   :detail {:category "cognitect.anomalies/incorrect",
+                            :arg-format "text",
+                            :code "xtdb.pgwire/invalid-arg-representation",
+                            :idx 0,
+                            :message "invalid timestamp: Text 'alan' could not be parsed at index 0"}}}]
                 [:msg-ready {:status :idle}]]
                @!in-msgs)))))
 

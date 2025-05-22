@@ -79,7 +79,7 @@
 (def magic-last-tx-id
   "This value will change if you vary the structure of log entries, such
   as adding new legs to the tx-ops vector, as in memory the tx-id is a byte offset."
-  4753)
+  4769)
 
 (t/deftest can-build-block-as-arrow-ipc-file-format
   (binding [c/*ignore-signal-block?* true]
@@ -550,16 +550,13 @@
                           (.resolve node-dir "objects")))))))
 
 (t/deftest ingestion-stopped-query-as-tx-op-3265
-  (let [ex (t/is (thrown? RuntimeException
-                          (xt/execute-tx tu/*node* [[:sql "SELECT _id, foo FROM docs"]])))]
-    (t/is (= #xt/error [:incorrect :xtdb.indexer/invalid-sql-tx-op
-                        "Invalid SQL query sent as transaction operation"
-                        {:query "SELECT _id, foo FROM docs"}]
-             ex))))
+  (t/is (anomalous? [:incorrect :xtdb/queries-in-read-write-tx
+                     "Queries are unsupported in a DML transaction"
+                     {:query "SELECT _id, foo FROM docs"}]
+                    (xt/execute-tx tu/*node* [[:sql "SELECT _id, foo FROM docs"]]))))
 
 (t/deftest above-max-long-halts-ingestion-3495
-  (t/is (anomalous? [:incorrect nil
-                     #"Cannot parse integer: 9223372036854775808"]
+  (t/is (anomalous? [:incorrect :xtdb/sql-error #"Cannot parse integer: 9223372036854775808"]
                     (xt/execute-tx tu/*node* [[:sql "INSERT INTO docs (_id, foo) VALUES (9223372036854775808, 'bar')"]]))))
 
 (t/deftest hyphen-in-struct-key-halts-ingestion-3388
