@@ -10,10 +10,13 @@
             [xtdb.test-util :as tu]
             [xtdb.time :as time]
             [xtdb.tx-ops :as tx-ops]
+            [xtdb.types :as types]
             [xtdb.util :as util])
   (:import [java.time Instant]
+           org.apache.arrow.vector.types.pojo.Schema
            [xtdb.api.tx TxOp]
            [xtdb.api.log Log]
+           [xtdb.arrow Relation]
            [xtdb.util TxIdUtil]))
 
 (t/use-fixtures :each tu/with-allocator)
@@ -110,6 +113,17 @@
                          {:system-time (time/->instant #inst "2021")
                           :default-tz #xt/zone "Europe/London"
                           :authn {:user "xtdb"}}))
+
+(t/deftest can-submit-arrow-bytes-as-put-docs
+  (test-serialize-tx-ops (io/resource "xtdb/tx-log-test/can-write-arrow-bytes.json")
+                         [(tx-ops/map->PutDocs
+                           {:table-name :foo
+                            :docs (with-open [rel (Relation. tu/*allocator* (Schema. [(types/col-type->field "_id" :utf8)
+                                                                                      (types/col-type->field "v" [:union #{:utf8 :i64}])]))]
+                                    (.writeRow rel {:xt/id "foo", :v 1})
+                                    (.writeRow rel {:xt/id "bar", :v 2})
+                                    (.writeRow rel {:xt/id "baz", :v "3"})
+                                    (.getAsArrowFile rel))})]))
 
 (t/deftest validate-offset-returns-proper-errors
   (letfn [(->simulated-log [epoch latest-submitted-offset]

@@ -12,7 +12,8 @@
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.writer :as vw])
-  (:import (java.time Duration Instant)
+  (:import [java.nio ByteBuffer]
+           (java.time Duration Instant)
            (java.util ArrayList HashMap)
            [java.util.concurrent TimeUnit]
            org.apache.arrow.memory.BufferAllocator
@@ -22,7 +23,7 @@
            (xtdb.api TransactionKey Xtdb$Config)
            (xtdb.api.log Log Log$Factory Log$Message$Tx)
            (xtdb.api.tx TxOp TxOp$Sql)
-           (xtdb.arrow Relation VectorWriter)
+           (xtdb.arrow Relation RowCopier VectorReader VectorWriter)
            xtdb.catalog.BlockCatalog
            xtdb.indexer.LogProcessor
            (xtdb.tx_ops DeleteDocs EraseDocs PatchDocs PutDocs SqlByteArgs)
@@ -97,7 +98,42 @@
 
       (.endStruct sql-writer))))
 
-(defn- ->docs-op-writer [^VectorWriter op-writer]
+(defn- write-docs-bytes! [^BufferAllocator al, ^VectorWriter table-doc-writer, ^VectorWriter iids-writer, ^VectorWriter iid-writer,
+                          ^bytes docs]
+  (with-open [loader (Relation/loader al (util/->seekable-byte-channel (ByteBuffer/wrap docs)))
+              rel (Relation. al (.getSchema loader))]
+    (let [in-cols (.getVectors rel)
+          col-mapping (->> in-cols
+                           (group-by (fn [^VectorReader v]
+                                       (util/->normal-form-str (.getName v)))))]
+
+      (when-not (every? (comp #(= 1 %) count val) col-mapping)
+        (throw (err/incorrect :xtdb/invalid-docs-relation "Duplicate columns in relation"
+                              {:cols (->> col-mapping
+                                          (into {} (keep (fn [[k v]]
+                                                           (when (> (count v) 1)
+                                                             [k (mapv #(.getName ^VectorReader %) v)])))))})))
+      (let [^VectorReader id-vec (or (first (get col-mapping "_id"))
+                                     (throw (err/incorrect :xtdb/missing-id "Missing ID column in relation")))]
+
+        ;; TODO: need copy-rel-to-struct-vec here for xtdb.arrow
+        (let [doc-vec (.getListElements table-doc-writer)
+              copiers (vec (for [^VectorReader v in-cols]
+                             (let [col-name (util/->normal-form-str (.getName v))]
+                               (.rowCopier v (.vectorFor doc-vec col-name
+                                                         (.getFieldType (.getField v)))))))]
+          (while (.loadNextPage loader rel)
+            (dotimes [idx (.getRowCount rel)]
+              (doseq [^RowCopier copier copiers]
+                (.copyRow copier idx))
+              (.endStruct doc-vec)
+
+              (.writeBytes iid-writer (util/->iid (.getObject id-vec idx)))))
+
+          (.endList iids-writer)
+          (.endList table-doc-writer))))))
+
+(defn- ->docs-op-writer [^VectorWriter op-writer, ^BufferAllocator al]
   (let [iids-writer (.vectorFor op-writer "iids" (FieldType/notNullable #xt.arrow/type :list))
         iid-writer (some-> iids-writer
                            (.getListElements (FieldType/notNullable #xt.arrow/type [:fixed-size-binary 16])))
@@ -115,27 +151,33 @@
                                   (doto (.vectorFor doc-writer table (FieldType/notNullable #xt.arrow/type :list))
                                     (.getListElements (FieldType/notNullable #xt.arrow/type :struct)))))]
 
-          (.writeObject table-doc-writer docs)
+          (if (bytes? docs)
+            (write-docs-bytes! al table-doc-writer iids-writer iid-writer docs)
 
-          (doseq [doc docs
-                  :let [eid (val (or (->> doc
-                                          (some (fn [e]
-                                                  (when (.equals "_id" (util/->normal-form-str (key e)))
-                                                    e))))
-                                     (throw (err/illegal-arg :missing-id {:doc doc}))))]]
-            (.writeBytes iid-writer (util/->iid eid)))
-          (.endList iids-writer))
+            (do
+              (.writeObject table-doc-writer docs)
+
+              (doseq [doc docs
+                      :let [eid (val (or (->> doc
+                                              (some (fn [e]
+                                                      (when (.equals "_id" (util/->normal-form-str (key e)))
+                                                        e))))
+                                         (throw (err/illegal-arg :missing-id {:doc doc}))))]]
+                (.writeBytes iid-writer (util/->iid eid)))
+              (.endList iids-writer))))
 
         (.writeObject valid-from-writer (time/->instant valid-from opts))
         (.writeObject valid-to-writer (time/->instant valid-to opts))
 
         (.endStruct op-writer)))))
 
-(defn- ->put-writer [^VectorWriter op-writer]
-  (->docs-op-writer (.vectorFor op-writer "put-docs" (FieldType/notNullable #xt.arrow/type :struct))))
+(defn- ->put-writer [^VectorWriter op-writer, allocator]
+  (->docs-op-writer (.vectorFor op-writer "put-docs" (FieldType/notNullable #xt.arrow/type :struct))
+                    allocator))
 
-(defn- ->patch-writer [^VectorWriter op-writer]
-  (->docs-op-writer (.vectorFor op-writer "patch-docs" (FieldType/notNullable #xt.arrow/type :struct))))
+(defn- ->patch-writer [^VectorWriter op-writer, allocator]
+  (->docs-op-writer (.vectorFor op-writer "patch-docs" (FieldType/notNullable #xt.arrow/type :struct))
+                    allocator))
 
 (defn- ->delete-writer [^VectorWriter op-writer]
   (let [delete-writer (.vectorFor op-writer "delete-docs" (FieldType/notNullable #xt.arrow/type :struct))
@@ -181,8 +223,8 @@
 (defn write-tx-ops! [^BufferAllocator allocator, ^VectorWriter op-writer, tx-ops, {:keys [default-tz]}]
   (let [!write-sql! (delay (->sql-writer op-writer allocator))
         !write-sql-byte-args! (delay (->sql-byte-args-writer op-writer))
-        !write-put! (delay (->put-writer op-writer))
-        !write-patch! (delay (->patch-writer op-writer))
+        !write-put! (delay (->put-writer op-writer allocator))
+        !write-patch! (delay (->patch-writer op-writer allocator))
         !write-delete! (delay (->delete-writer op-writer))
         !write-erase! (delay (->erase-writer op-writer))]
 
@@ -202,8 +244,9 @@
         EraseDocs (@!write-erase! tx-op)
         (throw (err/illegal-arg :invalid-tx-op {:tx-op tx-op}))))))
 
-(defn serialize-tx-ops ^java.nio.ByteBuffer [^BufferAllocator allocator tx-ops {:keys [^Instant system-time, default-tz]
-                                                                                {:keys [user]} :authn :as opts}]
+(defn serialize-tx-ops ^bytes [^BufferAllocator allocator tx-ops
+                               {:keys [^Instant system-time, default-tz]
+                                {:keys [user]} :authn :as opts}]
   (with-open [rel (Relation. allocator tx-schema)]
     (let [ops-list-writer (.get rel "tx-ops")
 
@@ -295,10 +338,12 @@
   (let [default-tz (:default-tz opts default-tz)]
     (util/rethrowing-cause
       (let [offset @(.appendMessage log
-                                    (Log$Message$Tx. (serialize-tx-ops allocator (->TxOps tx-ops)
-                                                                       (-> (select-keys opts [:authn])
-                                                                           (assoc :default-tz (:default-tz opts default-tz)
-                                                                                  :system-time (some-> system-time time/expect-instant))))))]
+                                    (Log$Message$Tx.
+                                     (ByteBuffer/wrap
+                                      (serialize-tx-ops allocator (->TxOps tx-ops)
+                                                        (-> (select-keys opts [:authn])
+                                                            (assoc :default-tz (:default-tz opts default-tz)
+                                                                   :system-time (some-> system-time time/expect-instant)))))))]
          (TxIdUtil/offsetToTxId (.getEpoch log) offset)))))
 
 (defmethod ig/prep-key :xtdb.log/processor [_ ^Xtdb$Config opts]

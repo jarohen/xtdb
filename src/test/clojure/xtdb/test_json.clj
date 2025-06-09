@@ -50,13 +50,13 @@
            (sort-arrow-json (json/read-value (Files/readString actual))))
         actual))
 
-#_{:clj-kondo/ignore [:unused-private-var]}
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn copy-expected-file [^Path file, ^Path expected-dir, ^Path actual-dir]
   (Files/copy file (doto (.resolve expected-dir (.relativize actual-dir file))
                      (-> (.getParent) (util/mkdirs)))
               ^"[Ljava.nio.file.CopyOption;" (into-array CopyOption #{StandardCopyOption/REPLACE_EXISTING})))
 
-#_{:clj-kondo/ignore [:unused-private-var]}
+#_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn delete-and-recreate-dir [^Path path]
   (when (.. path toFile isDirectory)
     (util/delete-dir path)
@@ -83,11 +83,11 @@
            :when (.endsWith file-name ".arrow.json")]
      (check-arrow-json-file expected actual))))
 
-(defn arrow-streaming->json ^String [^ByteBuffer buf]
+(defn arrow-streaming->json ^String [^bytes arrow-bytes]
   (let [json-file (File/createTempFile "arrow" "json")]
     (try
       (util/with-open [allocator (RootAllocator.)
-                       in-ch (util/->seekable-byte-channel buf)
+                       in-ch (util/->seekable-byte-channel (ByteBuffer/wrap arrow-bytes))
                        file-reader (ArrowStreamReader. in-ch allocator)
                        file-writer (JsonFileWriter. json-file (.. (JsonFileWriter/config) (pretty true)))]
         (let [root (.getVectorSchemaRoot file-reader)]

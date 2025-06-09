@@ -165,16 +165,18 @@ class Relation(val vecs: SequencedMap<String, Vector>, override var rowCount: In
     fun startUnload(ch: WritableByteChannel, mode: UnloadMode = FILE) =
         RelationUnloader(WriteChannel(ch), mode)
 
-    val asArrowStream: ByteBuffer
-        get() {
-            val baos = ByteArrayOutputStream()
-            startUnload(Channels.newChannel(baos), STREAM).use { unl ->
-                unl.writePage()
-                unl.end()
-            }
-
-            return ByteBuffer.wrap(baos.toByteArray())
+    private fun toBytes(mode: UnloadMode): ByteArray {
+        val baos = ByteArrayOutputStream()
+        startUnload(Channels.newChannel(baos), mode).use { unl ->
+            unl.writePage()
+            unl.end()
         }
+
+        return baos.toByteArray()
+    }
+
+    val asArrowStream get() = toBytes(STREAM)
+    val asArrowFile get() = toBytes(FILE)
 
     private fun load(recordBatch: ArrowRecordBatch) {
         val nodes = recordBatch.nodes.toMutableList()
