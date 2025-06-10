@@ -12,6 +12,10 @@ interface IVectorReader : VectorReader, AutoCloseable {
     override val nullable get() = this.field.isNullable
     override val fieldType: FieldType get() = this.field.fieldType
 
+    override fun vectorForOrNull(name: String): IVectorReader? = unsupported("vectorForOrNull")
+    override fun vectorFor(name: String) = vectorForOrNull(name) ?: error("missing vector: $name")
+    override operator fun get(name: String) = vectorFor(name)
+
     override fun withName(newName: String): IVectorReader = RenamedVectorReader(this, newName)
 
     override fun vectorForOrNull(name: String): IVectorReader? = unsupported("vectorForOrNull")

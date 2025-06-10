@@ -9,10 +9,8 @@ import org.apache.arrow.vector.complex.StructVector
 import org.apache.arrow.vector.complex.replaceChild
 import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
-import xtdb.arrow.InvalidCopySourceException
-import xtdb.arrow.InvalidWriteObjectException
-import xtdb.arrow.RowCopier
-import xtdb.arrow.ValueReader
+import xtdb.arrow.*
+import xtdb.arrow.RelationReader
 import xtdb.error.Incorrect
 import xtdb.toFieldType
 import xtdb.util.normalForm

@@ -977,6 +977,11 @@ public class ValueVectorReader implements IVectorReader {
 
         return new ValueVectorReader(v) {
             @Override
+            public @Nullable IVectorReader vectorForOrNull(@NotNull String name) {
+                return structKeyReader(name);
+            }
+
+            @Override
             public Set<String> getKeyNames() {
                 return rdrs.keySet();
             }

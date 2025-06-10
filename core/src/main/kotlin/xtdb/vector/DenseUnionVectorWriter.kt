@@ -7,11 +7,13 @@ import org.apache.arrow.vector.types.pojo.ArrowType
 import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.arrow.NULL_TYPE
+import xtdb.arrow.RelationReader
 import xtdb.arrow.RowCopier
 import xtdb.arrow.ValueReader
 import xtdb.toArrowType
 import xtdb.toLeg
 import java.nio.ByteBuffer
+
 
 class DenseUnionVectorWriter(
     override val vector: DenseUnionVector,
