@@ -4,6 +4,7 @@ package xtdb.azure
 
 import com.azure.core.util.BinaryData
 import com.azure.identity.DefaultAzureCredential
+import com.google.protobuf.Any as ProtoAny
 import com.azure.identity.DefaultAzureCredentialBuilder
 import com.azure.storage.blob.BlobServiceClientBuilder
 import com.azure.storage.blob.models.BlobListDetails
@@ -23,6 +24,7 @@ import xtdb.api.storage.ObjectStore
 import xtdb.api.storage.ObjectStore.Companion.throwMissingKey
 import xtdb.api.storage.ObjectStore.StoredObject
 import xtdb.asBytes
+import xtdb.azure.proto.azureBlobStorageConfig
 import xtdb.multipart.IMultipartUpload
 import xtdb.multipart.SupportsMultipart
 import xtdb.util.asPath
@@ -66,7 +68,7 @@ import kotlin.time.Duration.Companion.seconds
  * }
  * ```
  */
-class BlobStorage(factory: Factory, private val prefix: Path) : ObjectStore, SupportsMultipart<String> {
+class BlobStorage(private val factory: Factory, private val prefix: Path) : ObjectStore, SupportsMultipart<String> {
 
     private val client =
         BlobServiceClientBuilder().run {
@@ -259,6 +261,19 @@ class BlobStorage(factory: Factory, private val prefix: Path) : ObjectStore, Sup
 
     override fun close() {
         runBlocking { withTimeout(5.seconds) { scope.coroutineContext.job.cancelAndJoin() } }
+    }
+
+    override val configProto by lazy {
+        ProtoAny.pack(azureBlobStorageConfig {
+            this.storageAccount = factory.storageAccount
+            this.container = factory.container
+            this.prefix = this@BlobStorage.prefix.toString()
+            
+            factory.storageAccountKey?.let { this.storageAccountKey = it }
+            factory.userManagedIdentityClientId?.let { this.userManagedIdentityClientId = it }
+            factory.storageAccountEndpoint?.let { this.storageAccountEndpoint = it }
+            factory.connectionString?.let { this.connectionString = it }
+        }, "proto.xtdb.com")
     }
 
     companion object {

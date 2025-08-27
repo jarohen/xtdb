@@ -32,7 +32,7 @@ internal class LocalStorage(
     allocator: BufferAllocator,
     private val memoryCache: MemoryCache,
     meterRegistry: MeterRegistry? = null,
-    private val diskStore: Path,
+    val diskStore: Path,
 ) : BufferPool, IEvictBufferTest, Closeable {
 
     private val allocator = allocator.openChildAllocator("buffer-pool").also { meterRegistry?.register(it) }

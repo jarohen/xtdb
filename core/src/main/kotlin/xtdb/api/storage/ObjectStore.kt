@@ -1,5 +1,6 @@
 package xtdb.api.storage
 
+import com.google.protobuf.Any as ProtoAny
 import xtdb.api.storage.Storage.STORAGE_ROOT
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -64,4 +65,6 @@ interface ObjectStore : AutoCloseable {
 
     override fun close() {
     }
+
+    val configProto: ProtoAny
 }

@@ -1,36 +1,23 @@
 package xtdb.storage
 
 import com.github.benmanes.caffeine.cache.Caffeine
+import com.google.protobuf.Any
 import org.apache.arrow.vector.ipc.message.ArrowFooter
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch
 import xtdb.ArrowWriter
-import xtdb.api.storage.ObjectStore
+import xtdb.api.storage.ObjectStore.StoredObject
 import xtdb.arrow.Relation
 import xtdb.arrow.unsupported
+import xtdb.database.proto.DatabaseConfig
+import xtdb.database.proto.RemoteStorage
+import xtdb.database.proto.inMemoryStorage
+import xtdb.database.proto.localStorage
 import xtdb.util.StringUtil.fromLexHex
 import xtdb.util.asPath
 import java.nio.ByteBuffer
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.toJavaDuration
-
-private fun Path.parseBlockIndex(): Long? =
-    Regex("b(\\p{XDigit}+)\\.binpb")
-        .matchEntire(toString())
-        ?.groups?.get(1)
-        ?.value?.fromLexHex
-
-private val latestAvailableBlockCache =
-    Caffeine.newBuilder().expireAfterWrite(1.minutes.toJavaDuration()).build<BufferPool, Long>()
-
-val BufferPool.latestAvailableBlockIndex0: Long
-    get() =
-        listAllObjects("blocks".asPath)
-            .lastOrNull()?.key?.fileName?.parseBlockIndex()
-            ?: -1
-
-val BufferPool.latestAvailableBlockIndex: Long
-    get() = latestAvailableBlockCache.get(this) { it.latestAvailableBlockIndex0 }
 
 sealed interface BufferPool : AutoCloseable {
     /**
@@ -61,14 +48,14 @@ sealed interface BufferPool : AutoCloseable {
      *
      * Objects are returned in lexicographic order of their path names.
      */
-    fun listAllObjects(): Iterable<ObjectStore.StoredObject>
+    fun listAllObjects(): Iterable<StoredObject>
 
     /**
      * Recursively lists all objects in the buffer pool, under the given directory.
      *
      * Objects are returned in lexicographic order of their path names.
      */
-    fun listAllObjects(dir: Path): Iterable<ObjectStore.StoredObject>
+    fun listAllObjects(dir: Path): Iterable<StoredObject>
 
     fun deleteAllObjects()
 
@@ -78,9 +65,9 @@ sealed interface BufferPool : AutoCloseable {
 
     companion object {
         @JvmField
-        val UNUSED: BufferPool = Unused
+        val UNUSED = UnusedBufferPool
 
-        private object Unused : BufferPool {
+        object UnusedBufferPool : BufferPool {
 
             override fun getByteArray(key: Path) = unsupported("getByteArray")
             override fun getFooter(key: Path) = unsupported("getFooter")
@@ -94,5 +81,41 @@ sealed interface BufferPool : AutoCloseable {
 
             override fun close() = Unit
         }
+
+        fun DatabaseConfig.Builder.applyStorage(bufferPool: BufferPool) {
+            when (bufferPool) {
+                is MemoryStorage -> setInMemoryStorage(inMemoryStorage { })
+
+                is LocalStorage -> setLocalStorage(localStorage {
+                    this.path = bufferPool.diskStore.toString()
+                })
+
+                is RemoteBufferPool ->
+                    setRemoteStorage(
+                        RemoteStorage.newBuilder().also { it.objectStore = bufferPool.objectStore.configProto }.build()
+                    )
+
+                UnusedBufferPool -> error("can't serialise UnusedBufferPool")
+            }
+        }
     }
+
 }
+
+private fun Path.parseBlockIndex(): Long? =
+    Regex("b(\\p{XDigit}+)\\.binpb")
+        .matchEntire(toString())
+        ?.groups?.get(1)
+        ?.value?.fromLexHex
+
+private val latestAvailableBlockCache =
+    Caffeine.newBuilder().expireAfterWrite(1.minutes.toJavaDuration()).build<BufferPool, Long>()
+
+val BufferPool.latestAvailableBlockIndex0: Long
+    get() =
+        listAllObjects("blocks".asPath)
+            .lastOrNull()?.key?.fileName?.parseBlockIndex()
+            ?: -1
+
+val BufferPool.latestAvailableBlockIndex: Long
+    get() = latestAvailableBlockCache.get(this) { it.latestAvailableBlockIndex0 }

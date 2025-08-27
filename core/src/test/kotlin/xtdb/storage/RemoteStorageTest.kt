@@ -13,7 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.junit.jupiter.api.io.TempDir
 import xtdb.api.storage.ObjectStore
 import xtdb.api.storage.SimulatedObjectStore
-import xtdb.api.storage.Storage.remoteStorage
+import xtdb.api.storage.Storage.remote
 import xtdb.api.storage.StoreOperation.COMPLETE
 import xtdb.api.storage.StoreOperation.UPLOAD
 import xtdb.arrow.I32
@@ -40,7 +40,7 @@ class RemoteStorageTest : StorageTest() {
     fun setUp(@TempDir localDiskCachePath: Path, al: BufferAllocator) {
         memoryCache = MemoryCache.Factory().open(al)
         remoteBufferPool =
-            remoteStorage(SimulatedObjectStoreFactory)
+            remote(SimulatedObjectStoreFactory)
                 .open(al, memoryCache, DiskCache.Factory(localDiskCachePath).build()) as RemoteBufferPool
 
         // Mocking small value for MIN_MULTIPART_PART_SIZE

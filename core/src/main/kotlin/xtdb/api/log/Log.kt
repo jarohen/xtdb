@@ -5,6 +5,7 @@ package xtdb.api.log
 import kotlinx.serialization.UseSerializers
 import xtdb.DurationSerde
 import xtdb.api.PathWithEnvVarSerde
+import xtdb.database.proto.DatabaseConfig
 import xtdb.log.proto.*
 import xtdb.log.proto.LogMessage.MessageCase
 import xtdb.trie.BlockIndex
@@ -146,4 +147,6 @@ interface Log : AutoCloseable {
         val latestSubmittedMsgId: MessageId
         fun processRecords(records: List<Record>)
     }
+
+    fun writeTo(dbConfig: DatabaseConfig.Builder)
 }

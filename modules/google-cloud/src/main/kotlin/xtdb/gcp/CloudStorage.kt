@@ -3,6 +3,7 @@ package xtdb.gcp
 
 import clojure.lang.ExceptionInfo
 import clojure.lang.PersistentHashMap
+import com.google.protobuf.Any as ProtoAny
 import com.google.cloud.storage.BlobInfo
 import com.google.cloud.storage.Storage
 import com.google.cloud.storage.Storage.BlobListOption
@@ -19,7 +20,7 @@ import xtdb.api.module.XtdbModule
 import xtdb.api.storage.ObjectStore
 import xtdb.api.storage.ObjectStore.Companion.throwMissingKey
 import xtdb.api.storage.ObjectStore.StoredObject
-import xtdb.gcp.CloudStorage.Factory
+import xtdb.gcp.proto.gcsObjectStoreConfig
 import xtdb.util.asPath
 import java.nio.ByteBuffer
 import java.nio.file.Path
@@ -49,7 +50,7 @@ import kotlin.time.Duration.Companion.seconds
  * ```
  */
 class CloudStorage(
-    projectId: String,
+    private val projectId: String,
     private val bucket: String,
     private val prefix: Path,
 ) : ObjectStore {
@@ -114,6 +115,14 @@ class CloudStorage(
     override fun close() {
         runBlocking { withTimeout(5.seconds) { scope.coroutineContext.job.cancelAndJoin() } }
         client.close()
+    }
+
+    override val configProto by lazy {
+        ProtoAny.pack(gcsObjectStoreConfig {
+            this.projectId = this@CloudStorage.projectId
+            this.bucket = this@CloudStorage.bucket
+            this.prefix = this@CloudStorage.prefix.toString()
+        }, "proto.xtdb.com")
     }
 
     companion object {

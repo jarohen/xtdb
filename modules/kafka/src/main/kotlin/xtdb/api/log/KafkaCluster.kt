@@ -7,6 +7,7 @@
 
 package xtdb.api.log
 
+import com.google.protobuf.Any as ProtoAny
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.future
 import kotlinx.serialization.SerialName
@@ -30,6 +31,9 @@ import xtdb.api.StringMapWithEnvVarsSerde
 import xtdb.api.StringWithEnvVarSerde
 import xtdb.api.log.Log.*
 import xtdb.api.module.XtdbModule
+import xtdb.database.proto.DatabaseConfig
+import xtdb.database.proto.otherLog
+import xtdb.kafka.proto.kafkaLogConfig
 import java.nio.ByteBuffer
 import java.nio.file.Path
 import java.time.Duration
@@ -142,7 +146,7 @@ class KafkaCluster(
         override fun open(): KafkaCluster = KafkaCluster(configMap, pollDuration)
     }
 
-    private inner class KafkaLog(private val topic: String, override val epoch: Int) : Log {
+    private inner class KafkaLog(private val clusterAlias: LogClusterAlias, private val topic: String, override val epoch: Int) : Log {
 
         private fun readLatestSubmittedMessage(kafkaConfigMap: KafkaConfigMap): LogOffset =
             kafkaConfigMap.openConsumer().use { c ->
@@ -208,6 +212,17 @@ class KafkaCluster(
             return Subscription { runBlocking { withTimeout(5.seconds) { job.cancelAndJoin() } } }
         }
 
+        override fun writeTo(dbConfig: DatabaseConfig.Builder) {
+            dbConfig.setOtherLog(otherLog {
+                tag = "kafka"
+                log = ProtoAny.pack(kafkaLogConfig {
+                    this.topic = topic
+                    this.epoch = epoch
+                    this.logClusterAlias = clusterAlias
+                }, "proto.xtdb.com")
+            })
+        }
+
         override fun close() = Unit
     }
 
@@ -235,7 +250,7 @@ class KafkaCluster(
                 admin.ensureTopicExists(topic, autoCreateTopic)
             }
 
-            return cluster.KafkaLog(topic, epoch)
+            return cluster.KafkaLog(clusterAlias, topic, epoch)
         }
     }
 

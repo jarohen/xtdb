@@ -2,6 +2,7 @@
 
 package xtdb.aws
 
+import com.google.protobuf.Any as ProtoAny
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.future.future
@@ -23,6 +24,8 @@ import xtdb.api.module.XtdbModule
 import xtdb.api.storage.ObjectStore
 import xtdb.api.storage.ObjectStore.Companion.throwMissingKey
 import xtdb.api.storage.ObjectStore.StoredObject
+import xtdb.aws.proto.s3Credentials
+import xtdb.aws.proto.s3ObjectStoreConfig
 import xtdb.aws.s3.S3Configurator
 import xtdb.multipart.IMultipartUpload
 import xtdb.multipart.SupportsMultipart
@@ -60,6 +63,7 @@ class S3(
     private val bucket: String,
     private val prefix: Path,
     private val configurator: S3Configurator,
+    private val factory: Factory,
 ) : ObjectStore, SupportsMultipart<CompletedPart> {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -219,6 +223,23 @@ class S3(
         }.await()
     }
 
+    override val configProto by lazy {
+        ProtoAny.pack(s3ObjectStoreConfig {
+            this.bucket = this@S3.bucket
+            this.prefix = this@S3.prefix.toString()
+            
+            factory.region?.let { this.region = it }
+            factory.endpoint?.let { this.endpoint = it }
+            this.pathStyleAccessEnabled = factory.pathStyleAccessEnabled
+            
+            factory.credentials?.let { creds ->
+                this.credentials = s3Credentials {
+                    this.accessKey = creds.accessKey
+                    this.secretKey = creds.secretKey
+                }
+            }
+        }, "proto.xtdb.com")
+    }
 
     companion object {
         @JvmStatic
@@ -282,7 +303,7 @@ class S3(
                         s3Configurator.configureClient(this)
                     }.build()
 
-            return S3(client, bucket, prefix?.resolve(storageRoot) ?: storageRoot, s3Configurator)
+            return S3(client, bucket, prefix?.resolve(storageRoot) ?: storageRoot, s3Configurator, this)
         }
     }
 

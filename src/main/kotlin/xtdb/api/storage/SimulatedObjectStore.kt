@@ -1,5 +1,6 @@
 package xtdb.api.storage
 
+import com.google.protobuf.Any as ProtoAny
 import xtdb.api.storage.ObjectStore.StoredObject
 import xtdb.multipart.IMultipartUpload
 import xtdb.multipart.SupportsMultipart
@@ -57,6 +58,8 @@ class SimulatedObjectStore(
         buffers.remove(k)
         return completedFuture(Unit)
     }
+
+    override val configProto: ProtoAny = ProtoAny.newBuilder().build()
 
     override fun startMultipart(k: Path): CompletableFuture<IMultipartUpload<ByteBuffer>> {
         val upload = object : IMultipartUpload<ByteBuffer> {
