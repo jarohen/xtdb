@@ -418,6 +418,7 @@
                                  :max-valid-from (time/->zdt #inst "2020-01-04")
                                  :min-valid-to (time/->zdt #inst "2020-01-02")
                                  :max-valid-to (time/->zdt #inst "2020-01-05")
+                                 :max-bound-valid-to (time/->zdt #inst "2020-01-05")
                                  :min-system-from (time/->zdt #inst "2020-01-01")
                                  :max-system-from (time/->zdt #inst "2020-01-01")
                                  :max-recency (time/->zdt #inst "2020-01-05")}}
@@ -434,6 +435,7 @@
              :temporal-metadata {:min-valid-from (time/->zdt #inst "2020-01-01")
                                  :max-valid-from (time/->zdt #inst "2020-01-01")
                                  :min-valid-to (time/->zdt time/end-of-time)
+                                 :max-bound-valid-to (time/->zdt time/start-of-time)
                                  :max-valid-to (time/->zdt time/end-of-time)
                                  :min-system-from (time/->zdt #inst "2020-01-01")
                                  :max-system-from (time/->zdt #inst "2020-01-01")

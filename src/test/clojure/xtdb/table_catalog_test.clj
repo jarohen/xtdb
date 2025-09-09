@@ -1,12 +1,12 @@
 (ns xtdb.table-catalog-test
   (:require [clojure.test :as t :refer [deftest]]
             [xtdb.api :as xt]
-            [xtdb.buffer-pool :as bp]
             [xtdb.db-catalog :as db]
             [xtdb.object-store :as os]
             [xtdb.table :as table]
             [xtdb.table-catalog :as table-cat]
             [xtdb.test-util :as tu]
+            [xtdb.time :as time]
             [xtdb.trie :as trie]
             [xtdb.trie-catalog :as trie-cat]
             [xtdb.util :as util])
@@ -45,8 +45,8 @@
         (xt/execute-tx node [[:put-docs :foo {:xt/id 2}]])
         (tu/finish-block! node)
 
-        (t/is (= [(os/->StoredObject "tables/public$foo/blocks/b00.binpb" 4418)
-                  (os/->StoredObject "tables/public$foo/blocks/b01.binpb" 4572)]
+        (t/is (= [(os/->StoredObject "tables/public$foo/blocks/b00.binpb" 4430)
+                  (os/->StoredObject "tables/public$foo/blocks/b01.binpb" 4596)]
                  (.listAllObjects bp (table-cat/->table-block-dir #xt/table foo))))
 
         (let [{hlls1 :hlls :as _table-block1} (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b00.binpb"))
@@ -73,6 +73,7 @@
                      :max-valid-from #xt/instant "2020-01-01T00:00:00Z",
                      :min-valid-to #xt/instant "+294247-01-10T04:00:54.775807Z",
                      :max-valid-to #xt/instant "+294247-01-10T04:00:54.775807Z",
+                     :max-bound-valid-to time/start-of-time
                      :min-system-from #xt/instant "2020-01-01T00:00:00Z",
                      :max-system-from #xt/instant "2020-01-01T00:00:00Z",
                      :max-recency nil,
@@ -81,6 +82,7 @@
                      :max-valid-from #xt/instant "2020-01-02T00:00:00Z",
                      :min-valid-to #xt/instant "+294247-01-10T04:00:54.775807Z",
                      :max-valid-to #xt/instant "+294247-01-10T04:00:54.775807Z",
+                     :max-bound-valid-to time/start-of-time
                      :min-system-from #xt/instant "2020-01-02T00:00:00Z",
                      :max-system-from #xt/instant "2020-01-02T00:00:00Z",
                      :max-recency nil,

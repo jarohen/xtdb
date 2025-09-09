@@ -34,6 +34,9 @@ class TrieMetadataCalculator(
                 minValidTo = minOf(minValidTo, validTo)
                 maxValidTo = maxOf(maxValidTo, validTo)
 
+                maxBoundValidTo =
+                    if (validTo == Long.MAX_VALUE) maxBoundValidTo else maxOf(maxBoundValidTo, validTo)
+
                 val systemFrom = systemFromRdr.getLong(i)
                 minSystemFrom = minOf(minSystemFrom, systemFrom)
                 maxSystemFrom = maxOf(maxSystemFrom, systemFrom)

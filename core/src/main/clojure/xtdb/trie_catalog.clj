@@ -307,6 +307,8 @@
        :max-valid-from (time/micros->instant (.getMaxValidFrom temporal-metadata))
        :min-valid-to (time/micros->instant (.getMinValidTo temporal-metadata))
        :max-valid-to (time/micros->instant (.getMaxValidTo temporal-metadata))
+       :max-bound-valid-to (when (.hasMaxBoundValidTo temporal-metadata)
+                             (time/micros->instant (.getMaxBoundValidTo temporal-metadata)))
        :min-system-from (time/micros->instant (.getMinSystemFrom temporal-metadata))
        :max-system-from (time/micros->instant (.getMaxSystemFrom temporal-metadata))
        :max-recency (when (.hasMaxRecency temporal-metadata)

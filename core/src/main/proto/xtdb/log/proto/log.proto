@@ -29,6 +29,12 @@ message TemporalMetadata {
     int64 max_valid_from = 2 [default = -9223372036854775808];
     int64 min_valid_to = 3 [default = 9223372036854775807];
     int64 max_valid_to = 4 [default = -9223372036854775808];
+
+    // max_bound_valid_to won't necessarily be present in storage v06
+    // if it is present, a value of MIN_LONG means there is no bound valid-tos in that page/file
+    // i.e. don't use the default - explicitly check whether it's present
+    int64 max_bound_valid_to = 8 [default = -9223372036854775808];
+
     int64 min_system_from = 5 [default = 9223372036854775807];
     int64 max_system_from = 6 [default = -9223372036854775808];
     int64 max_recency = 7 [default = -9223372036854775808];

@@ -17,7 +17,8 @@
    :trie-metadata
    {:min-system-from #xt/instant "2020-01-01T00:00:00Z",
     :max-recency #xt/instant "+294247-01-10T04:00:54.775807Z",
-    :iid-bloom [-1042473350 10],
+    :iid-bloom [-1339710607 10],
+    :max-bound-valid-to #xt/instant "-290308-12-21T19:59:05.224192Z",
     :max-valid-from #xt/instant "2020-01-02T00:00:00Z",
     :row-count 2,
     :max-system-from #xt/instant "2020-01-02T00:00:00Z",
@@ -27,5 +28,5 @@
  :hlls
  {"system_time" [2144534777 2.001955671862574],
   "committed" [554809535 1.0004885993744506],
-  "_id" [1959637022 2.001955671862574],
+  "_id" [-1529858497 2.001955671862574],
   "error" [1743287434 1.0004885993744506]}}

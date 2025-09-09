@@ -15,6 +15,7 @@
    {:min-system-from #xt/instant "2020-01-01T00:00:00Z",
     :max-recency nil,
     :iid-bloom [1087039858 10],
+    :max-bound-valid-to #xt/instant "-290308-12-21T19:59:05.224192Z",
     :max-valid-from #xt/instant "2020-01-02T00:00:00Z",
     :row-count 2,
     :max-system-from #xt/instant "2020-01-02T00:00:00Z",

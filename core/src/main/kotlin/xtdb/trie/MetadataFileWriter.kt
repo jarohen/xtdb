@@ -3,6 +3,8 @@ package xtdb.trie
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
+import xtdb.arrow.TimestampTzVector
+import xtdb.arrow.VectorReader
 import xtdb.indexer.TrieMetadataCalculator
 import xtdb.log.proto.TrieMetadata
 import xtdb.metadata.ColumnMetadata
