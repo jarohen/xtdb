@@ -1,13 +1,11 @@
 package xtdb.util
 
-import org.jetbrains.annotations.Contract
 import java.nio.channels.SeekableByteChannel
 import java.nio.channels.WritableByteChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption.*
 import kotlin.contracts.ExperimentalContracts
-import kotlin.contracts.InvocationKind
 import kotlin.contracts.InvocationKind.EXACTLY_ONCE
 import kotlin.contracts.contract
 import kotlin.io.path.createTempFile
