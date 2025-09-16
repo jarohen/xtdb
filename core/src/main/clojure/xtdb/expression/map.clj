@@ -95,6 +95,3 @@
       (doto (.rowCopier (->nil-rel (keys fields)) rel-writer)
         (.copyRow 0))
       rel-writer)))
-
-(def nil-row-idx 0)
-

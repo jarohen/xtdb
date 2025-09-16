@@ -82,7 +82,7 @@ class BuildSideTest {
                 assertEquals(10, builtRelation.rowCount)
 
                 assertEquals(
-                    listOf<Map<*, *>>(emptyMap<String, Any>()) + rows + rows + rows,
+                    rows + rows + rows + emptyMap<String, Any>(),
                     builtRelation.toMaps(SNAKE_CASE_STRING)
                 )
 

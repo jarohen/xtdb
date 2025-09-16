@@ -70,7 +70,7 @@ class BuildSideMap private constructor(
 
         @JvmStatic
         @JvmOverloads
-        fun from(al: BufferAllocator, hashCol: VectorWriter, offset: Int = 0, loadFactor: Double = DEFAULT_LOAD_FACTOR): BuildSideMap {
+        fun from(al: BufferAllocator, hashCol: VectorWriter, loadFactor: Double = DEFAULT_LOAD_FACTOR): BuildSideMap {
 
             val rowCount = hashCol.valueCount
 
@@ -85,7 +85,7 @@ class BuildSideMap private constructor(
                         val hash = hashCol.getInt(idx)
                         val insertionIdx = srcIdxs.insertionIdx(hash and hashMask , hashMask, skipIndex)
 
-                        srcIdxs[insertionIdx] = idx + offset
+                        srcIdxs[insertionIdx] = idx
                         srcHashes[insertionIdx] = hash
                     }
                     BuildSideMap(srcIdxs, srcHashes, hashMask)

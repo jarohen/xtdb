@@ -19,35 +19,26 @@ import java.nio.file.Path
 import java.util.function.IntConsumer
 import java.util.function.IntUnaryOperator
 
-internal const val NULL_ROW_IDX = 0
-
 class BuildSide(
-    val al: BufferAllocator,
+    private val al: BufferAllocator,
     val schema: Schema,
     val keyColNames: List<String>,
     val matchedBuildIdxs: RoaringBitmap?,
-    private val withNilRow: Boolean,
-    private val inMemoryThreshold: Int = 1_000_000,
+    val withNilRow: Boolean,
+    val inMemoryThreshold: Int = 1_000_000,
 ) : AutoCloseable {
     private val dataRel = Relation(al, schema)
+    private val dataRelHasher = IndexHasher.fromCols(keyColNames.map { dataRel[it] })
 
     private var builtDataRel: RelationReader? = null
     val builtRel get() = builtDataRel!!
-    var buildMap: BuildSideMap? = null
-
-    init {
-        if (withNilRow) {
-            dataRel.endRow()
-        }
-    }
+    var buildMap: BuildSideMap? = null; private set
 
     internal fun hashDataRel(dataRel: Relation, hashCol: VectorWriter) {
         hashCol.clear()
 
-        val hasher = IndexHasher.fromCols(keyColNames.map { dataRel[it] })
-        val offset = if (withNilRow) 1 else 0
-        repeat(dataRel.rowCount - offset) { idx ->
-            hashCol.writeInt(hasher.hashCode(idx + offset))
+        repeat(dataRel.rowCount) { idx ->
+            hashCol.writeInt(dataRelHasher.hashCode(idx))
         }
     }
 
@@ -131,13 +122,20 @@ class BuildSide(
 
             hashDataRel(dataRel, hashCol)
 
+            if (withNilRow) dataRel.endRow()
             builtDataRel?.close()
             builtDataRel = RelationReader.from(dataRel.openAsRoot(al))
 
             buildMap?.close()
-            buildMap = BuildSideMap.from(al, hashCol, if (withNilRow) 1 else 0)
+            buildMap = BuildSideMap.from(al, hashCol)
         }
     }
+
+    val nullRowIdx: Int
+        get() {
+            check(withNilRow) { "no nil row in build side" }
+            return builtRel.rowCount - 1
+        }
 
     fun addMatch(idx: Int) = matchedBuildIdxs?.add(idx)
 
