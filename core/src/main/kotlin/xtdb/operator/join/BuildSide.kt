@@ -18,6 +18,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.function.IntConsumer
 import java.util.function.IntUnaryOperator
+import kotlin.io.path.deleteIfExists
+
+private const val HASH_COL_NAME = "xt/join-hash"
 
 class BuildSide(
     private val al: BufferAllocator,
@@ -67,15 +70,6 @@ class BuildSide(
             ch.close()
             Files.deleteIfExists(path)
         }
-
-        fun loadAll(dataRel: Relation) {
-            openDataLoader().use { loader ->
-                Relation(al, loader.schema).use { inRel ->
-                    while (loader.loadNextPage(inRel))
-                        dataRel.append(inRel)
-                }
-            }
-        }
     }
 
     private fun openSpiller(): Spill {
@@ -107,9 +101,70 @@ class BuildSide(
         }
     }
 
+    internal class Shuffle(
+        private val al: BufferAllocator,
+        val shuffleDataFile: Path,
+        val shuffleHashFile: Path,
+    ) : AutoCloseable {
+
+        fun openDataLoader() = Relation.loader(al, shuffleDataFile)
+        fun openHashLoader() = Relation.loader(al, shuffleHashFile)
+
+        // temporary function to load everything back in
+        fun loadAll(dataRel: Relation, hashRel: Relation) {
+            dataRel.clear()
+            hashRel.clear()
+
+            openDataLoader().use { loader ->
+                Relation(al, loader.schema).use { inRel ->
+                    while (loader.loadNextPage(inRel))
+                        dataRel.append(inRel)
+                }
+            }
+
+            openHashLoader().use { loader ->
+                Relation(al, loader.schema).use { inRel ->
+                    while (loader.loadNextPage(inRel))
+                        hashRel.append(inRel)
+                }
+            }
+        }
+
+        override fun close() {
+            shuffleHashFile.deleteIfExists()
+            shuffleDataFile.deleteIfExists()
+        }
+    }
+
+    internal var shuffle: Shuffle? = null; private set
+
+    internal fun Spill.openShuffle(): Shuffle {
+        val shuffleHashFile = Files.createTempFile("xtdb-build-side-shuffle-hash-", ".arrow")
+
+        // step 1 - just hashes
+        openDataLoader().use { dataLoader ->
+            Relation(al, schema(HASH_COL_NAME ofType I32)).use { hashRel ->
+                val hashCol = hashRel[HASH_COL_NAME]
+                shuffleHashFile.openWritableChannel().use { outCh ->
+                    hashRel.startUnload(outCh).use { unloader ->
+                        while (dataLoader.loadNextPage(dataRel)) {
+                            hashDataRel(dataRel, hashCol)
+                            unloader.writePage()
+                        }
+
+                        unloader.end()
+                    }
+                }
+            }
+        }
+
+        return Shuffle(al, this.path, shuffleHashFile)
+    }
+
+
     fun build() {
-        Relation(al, schema("xt/join-hash" ofType I32)).use { hashRel ->
-            val hashCol = hashRel["xt/join-hash"]
+        Relation(al, schema(HASH_COL_NAME ofType I32)).use { hashRel ->
+            val hashCol = hashRel[HASH_COL_NAME]
 
             val spill = this.spill
 
@@ -117,10 +172,11 @@ class BuildSide(
                 spill.spill(dataRel)
                 spill.end()
 
-                spill.loadAll(dataRel)
+                val shuffle = spill.openShuffle().also { this.shuffle = it }
+                shuffle.loadAll(dataRel, hashRel)
+            } else{
+                hashDataRel(dataRel, hashCol)
             }
-
-            hashDataRel(dataRel, hashCol)
 
             if (withNilRow) dataRel.endRow()
             builtDataRel?.close()
@@ -149,6 +205,7 @@ class BuildSide(
         buildMap?.close()
         builtDataRel?.close()
 
+        shuffle?.close()
         spill?.close()
 
         dataRel.close()
