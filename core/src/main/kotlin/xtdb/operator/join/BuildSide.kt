@@ -6,8 +6,9 @@ import org.roaringbitmap.RoaringBitmap
 import xtdb.arrow.Relation
 import xtdb.arrow.Relation.RelationUnloader
 import xtdb.arrow.RelationReader
+import xtdb.arrow.VectorWriter
 import xtdb.expression.map.IndexHasher
-import xtdb.types.Type
+import xtdb.types.Type.Companion.I32
 import xtdb.types.Type.Companion.ofType
 import xtdb.types.schema
 import xtdb.util.closeOnCatch
@@ -30,9 +31,6 @@ class BuildSide(
 ) : AutoCloseable {
     private val dataRel = Relation(al, schema)
 
-    private val hashRel = Relation(al, schema("xt/join-hash" ofType Type.I32))
-    private val hashColumn = hashRel["xt/join-hash"]
-
     private var builtDataRel: RelationReader? = null
     val builtRel get() = builtDataRel!!
     var buildMap: BuildSideMap? = null
@@ -43,44 +41,58 @@ class BuildSide(
         }
     }
 
-    internal inner class Spill(
-        val dataPath: Path, private val dataCh: WritableByteChannel, private val dataUnloader: RelationUnloader,
-        val hashPath: Path, private val hashCh: WritableByteChannel, private val hashUnloader: RelationUnloader,
+    internal fun hashDataRel(dataRel: Relation, hashCol: VectorWriter) {
+        hashCol.clear()
+
+        val hasher = IndexHasher.fromCols(keyColNames.map { dataRel[it] })
+        val offset = if (withNilRow) 1 else 0
+        repeat(dataRel.rowCount - offset) { idx ->
+            hashCol.writeInt(hasher.hashCode(idx + offset))
+        }
+    }
+
+    internal class Spill(
+        private val al: BufferAllocator,
+        val path: Path, private val ch: WritableByteChannel, private val unloader: RelationUnloader,
     ) : AutoCloseable {
-        fun spill() {
-            dataUnloader.writePage()
+
+        var rowCount: Int = 0; private set
+
+        fun spill(dataRel: Relation) {
+            if (dataRel.rowCount == 0) return
+            rowCount += dataRel.rowCount
+            unloader.writePage()
             dataRel.clear()
-            hashUnloader.writePage()
-            hashRel.clear()
         }
 
+        fun openDataLoader() = Relation.loader(al, path)
+
         fun end() {
-            dataUnloader.end()
-            hashUnloader.end()
+            unloader.end()
         }
 
         override fun close() {
-            dataUnloader.close()
-            dataCh.close()
-            Files.deleteIfExists(dataPath)
+            unloader.close()
+            ch.close()
+            Files.deleteIfExists(path)
+        }
 
-            hashUnloader.close()
-            hashCh.close()
-            Files.deleteIfExists(hashPath)
+        fun loadAll(dataRel: Relation) {
+            openDataLoader().use { loader ->
+                Relation(al, loader.schema).use { inRel ->
+                    while (loader.loadNextPage(inRel))
+                        dataRel.append(inRel)
+                }
+            }
         }
     }
 
     private fun openSpiller(): Spill {
         val dataPath = Files.createTempFile("xtdb-build-side-", ".arrow")
-        val hashPath = Files.createTempFile("xtdb-build-side-hash-", ".arrow")
 
         return dataPath.openWritableChannel().closeOnCatch { dataCh ->
             dataRel.startUnload(dataCh).closeOnCatch { dataUnloader ->
-                hashPath.openWritableChannel().closeOnCatch { hashCh ->
-                    hashRel.startUnload(hashCh).closeOnCatch { hashUnloader ->
-                        Spill(dataPath, dataCh, dataUnloader, hashPath, hashCh, hashUnloader)
-                    }
-                }
+                Spill(al, dataPath, dataCh, dataUnloader)
             }
         }
     }
@@ -90,49 +102,41 @@ class BuildSide(
     @Suppress("NAME_SHADOWING")
     fun append(inRel: RelationReader) {
         inRel.openDirectSlice(al).use { inRel ->
-            val inKeyCols = keyColNames.map { inRel[it] }
-
-            val hasher = IndexHasher.fromCols(inKeyCols)
             val rowCopier = inRel.rowCopier(dataRel)
 
             repeat(inRel.rowCount) { inIdx ->
-                hashColumn.writeInt(hasher.hashCode(inIdx))
                 rowCopier.copyRow(inIdx)
             }
 
             if (dataRel.rowCount > inMemoryThreshold) {
                 val spill = spill ?: openSpiller().also { this.spill = it }
 
-                spill.spill()
+                spill.spill(dataRel)
             }
         }
     }
 
     fun build() {
-        spill?.let { spill ->
-            spill.spill()
-            spill.end()
+        Relation(al, schema("xt/join-hash" ofType I32)).use { hashRel ->
+            val hashCol = hashRel["xt/join-hash"]
 
-            Relation.loader(al, spill.dataPath).use { loader ->
-                Relation(al, loader.schema).use { inRel ->
-                    while (loader.loadNextPage(inRel))
-                        dataRel.append(inRel)
-                }
+            val spill = this.spill
+
+            if (spill != null) {
+                spill.spill(dataRel)
+                spill.end()
+
+                spill.loadAll(dataRel)
             }
 
-            Relation.loader(al, spill.hashPath).use { loader ->
-                Relation(al, loader.schema).use { inRel ->
-                    while (loader.loadNextPage(inRel))
-                        hashRel.append(inRel)
-                }
-            }
+            hashDataRel(dataRel, hashCol)
+
+            builtDataRel?.close()
+            builtDataRel = RelationReader.from(dataRel.openAsRoot(al))
+
+            buildMap?.close()
+            buildMap = BuildSideMap.from(al, hashCol, if (withNilRow) 1 else 0)
         }
-
-        builtDataRel?.close()
-        builtDataRel = RelationReader.from(dataRel.openAsRoot(al))
-
-        buildMap?.close()
-        buildMap = BuildSideMap.from(al, hashColumn, if (withNilRow) 1 else 0)
     }
 
     fun addMatch(idx: Int) = matchedBuildIdxs?.add(idx)
@@ -150,6 +154,5 @@ class BuildSide(
         spill?.close()
 
         dataRel.close()
-        hashRel.close()
     }
 }
