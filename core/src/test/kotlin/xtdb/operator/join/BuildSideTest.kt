@@ -11,7 +11,6 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.roaringbitmap.RoaringBitmap
 import xtdb.api.query.IKeyFn.KeyFn.SNAKE_CASE_STRING
 import xtdb.arrow.Relation
-import xtdb.expression.map.IndexHasher
 import xtdb.expression.map.IndexHasher.Companion.hasher
 import xtdb.test.AllocatorResolver
 import xtdb.types.Type
@@ -38,11 +37,14 @@ class BuildSideTest {
             "value" ofType maybe(I32)
         )
 
-        val rows = listOf(
-            mapOf("id" to 1, "name" to "John", "value" to 100),
-            mapOf("id" to 2, "name" to "Jane", "value" to 200),
-            mapOf("id" to 3, "name" to "Bob", "value" to 300)
-        )
+        val john = mapOf("id" to 1, "name" to "John", "value" to 100)
+        val jane = mapOf("id" to 2, "name" to "Jane", "value" to 200)
+        val bob = mapOf("id" to 3, "name" to "Bob", "value" to 300)
+
+        val rows = listOf(john, jane, bob)
+
+        val spillOneRows = listOf(bob, bob, john, jane, john, jane)
+        val spillTwoRows = listOf(bob, john, jane)
 
         Relation.openFromRows(al, rows).use { rel ->
             // without nil row
@@ -59,11 +61,14 @@ class BuildSideTest {
 
                 assertEquals(9, builtRelation.rowCount)
 
-                assertEquals(rows + rows + rows, builtRelation.toMaps(SNAKE_CASE_STRING))
+                assertEquals(
+                    spillOneRows + spillTwoRows,
+                    builtRelation.toMaps(SNAKE_CASE_STRING)
+                )
 
                 val hasher = rel.hasher(listOf("id"))
                 val val2Hash = hasher.hashCode(1) // hash for id=2
-                val expectedMatches = listOf(1, 4, 7)
+                val expectedMatches = listOf(3, 5, 8)
                 assertEquals(expectedMatches, buildSide.getMatches(val2Hash).sorted())
             }
 
@@ -82,13 +87,13 @@ class BuildSideTest {
                 assertEquals(10, builtRelation.rowCount)
 
                 assertEquals(
-                    rows + rows + rows + emptyMap<String, Any>(),
+                    spillOneRows + spillTwoRows + emptyMap(),
                     builtRelation.toMaps(SNAKE_CASE_STRING)
                 )
 
                 val hasher = rel.hasher(listOf("id"))
-                val val2Hash = hasher.hashCode(2) // hash for id=2
-                val expectedMatches = listOf(2, 5, 8)
+                val val2Hash = hasher.hashCode(2) // hash for id=3
+                val expectedMatches = listOf(0, 1, 6)
                 assertEquals(expectedMatches, buildSide.getMatches(val2Hash).sorted())
             }
         }
