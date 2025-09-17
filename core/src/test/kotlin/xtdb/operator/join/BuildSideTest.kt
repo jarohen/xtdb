@@ -12,6 +12,7 @@ import org.roaringbitmap.RoaringBitmap
 import xtdb.api.query.IKeyFn.KeyFn.SNAKE_CASE_STRING
 import xtdb.arrow.Relation
 import xtdb.expression.map.IndexHasher
+import xtdb.expression.map.IndexHasher.Companion.hasher
 import xtdb.test.AllocatorResolver
 import xtdb.types.Type
 import xtdb.types.Type.Companion.I32
@@ -60,8 +61,7 @@ class BuildSideTest {
 
                 assertEquals(rows + rows + rows, builtRelation.toMaps(SNAKE_CASE_STRING))
 
-                val idVector = builtRelation.vectorFor("id")
-                val hasher = IndexHasher.fromCols(listOf(idVector))
+                val hasher = rel.hasher(listOf("id"))
                 val val2Hash = hasher.hashCode(1) // hash for id=2
                 val expectedMatches = listOf(1, 4, 7)
                 assertEquals(expectedMatches, buildSide.getMatches(val2Hash).sorted())
@@ -86,8 +86,7 @@ class BuildSideTest {
                     builtRelation.toMaps(SNAKE_CASE_STRING)
                 )
 
-                val idVector = builtRelation.vectorFor("id")
-                val hasher = IndexHasher.fromCols(listOf(idVector))
+                val hasher = rel.hasher(listOf("id"))
                 val val2Hash = hasher.hashCode(2) // hash for id=2
                 val expectedMatches = listOf(2, 5, 8)
                 assertEquals(expectedMatches, buildSide.getMatches(val2Hash).sorted())

@@ -3,6 +3,7 @@ package xtdb.operator.join
 import xtdb.arrow.RelationReader
 import xtdb.arrow.VectorReader
 import xtdb.expression.map.IndexHasher
+import xtdb.expression.map.IndexHasher.Companion.hasher
 import java.util.function.BiConsumer
 import java.util.function.IntBinaryOperator
 import java.util.function.IntConsumer
@@ -36,7 +37,7 @@ class ProbeSide(
             .reduceOrNull(::andIBO)
             ?: IntBinaryOperator { _, _ -> 1 }
 
-    private val hasher = IndexHasher.fromCols(probeKeyCols)
+    private val hasher = probeRel.hasher(keyColNames)
 
     fun forEachIndexOf(c: BiConsumer<Int, Int>, removeOnMatch: Boolean) =
         repeat(rowCount) { probeIdx ->
