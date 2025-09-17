@@ -1,30 +1,64 @@
 package xtdb.operator.join
 
 import org.apache.arrow.memory.BufferAllocator
-import org.apache.arrow.vector.types.pojo.Schema
 import xtdb.arrow.Relation
+import xtdb.arrow.Relation.RelationUnloader
 import xtdb.arrow.VectorWriter
 import xtdb.expression.map.IndexHasher.Companion.hasher
 import xtdb.trie.ColumnName
 import xtdb.types.Type
-import xtdb.types.Type.Companion.I32
 import xtdb.types.Type.Companion.ofType
-import xtdb.types.schema
+import xtdb.util.closeOnCatch
 import xtdb.util.deleteOnCatch
-import xtdb.util.openWritableChannel
 import java.nio.file.Files.createTempFile
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
 
 internal const val HASH_COL_NAME = "xt/join-hash"
 
-internal class Shuffle(private val al: BufferAllocator, val hashFile: Path) : AutoCloseable {
+internal class Shuffle private constructor(
+    private val al: BufferAllocator, private val dataRel: Relation, hashColNames: List<ColumnName>,
 
-    fun openHashLoader() = Relation.loader(al, hashFile)
+    val dataFile: Path, private val dataUnloader: RelationUnloader,
+    val hashFile: Path, private val hashRel: Relation, private val hashUnloader: RelationUnloader,
 
-    // temporary function to load everything back in
-    fun loadAll(hashCol: VectorWriter) {
-        openHashLoader().use { loader ->
+    expectedRowCount: Long, expectedBlockCount: Int
+) : AutoCloseable {
+
+    val partCount = (expectedBlockCount.takeHighestOneBit() shl 1).coerceAtLeast(1)
+    val hashMask = partCount - 1
+    val approxRowsPerPart = (expectedRowCount / expectedBlockCount).toInt()
+    private val hashCol = hashRel[HASH_COL_NAME]
+
+    private val hasher = dataRel.hasher(hashColNames)
+
+    fun shuffle() {
+        hasher.writeAllHashes(hashCol)
+        dataUnloader.writePage()
+        hashUnloader.writePage()
+    }
+
+    fun end() {
+        dataUnloader.end()
+        hashUnloader.end()
+    }
+
+    // temporary function to load data back in
+    fun loadAllData(dataRel: Relation) {
+        dataRel.clear()
+        Relation.loader(al, dataFile).use { loader ->
+            Relation(al, loader.schema).use { inRel ->
+                while (loader.loadNextPage(inRel)) {
+                    dataRel.append(inRel)
+                }
+            }
+        }
+    }
+
+    // temporary function to load hashes back in
+    fun loadAllHashes(hashCol: VectorWriter) {
+        hashCol.clear()
+        Relation.loader(al, hashFile).use { loader ->
             Relation(al, loader.schema).use { inRel ->
                 val inCol = inRel[HASH_COL_NAME]
                 while (loader.loadNextPage(inRel))
@@ -34,31 +68,41 @@ internal class Shuffle(private val al: BufferAllocator, val hashFile: Path) : Au
     }
 
     override fun close() {
+        dataUnloader.close()
+
+        hashUnloader.close()
+        hashRel.close()
+
         hashFile.deleteIfExists()
+        dataFile.deleteIfExists()
     }
 
     companion object {
-        fun open(al: BufferAllocator, hashColNames: List<ColumnName>, dataLoader: Relation.Loader): Shuffle =
-            createTempFile("xtdb-build-side-shuffle-hash-", ".arrow").deleteOnCatch { hashFile ->
-                Relation(al, dataLoader.schema).use { dataRel ->
-                    val hasher = dataRel.hasher(hashColNames)
+        // my kingdom for `util/with-close-on-catch` in Kotlin
+        // y'all need macros. or monads.
 
-                    // step 1 - just hashes
-                    Relation(al, schema(HASH_COL_NAME ofType I32)).use { hashRel ->
-                        val hashCol = hashRel[HASH_COL_NAME]
-                        hashFile.openWritableChannel().use { outCh ->
-                            hashRel.startUnload(outCh).use { unloader ->
-                                while (dataLoader.loadNextPage(dataRel)) {
-                                    hasher.writeAllHashes(hashCol)
-                                    unloader.writePage()
-                                }
+        fun open(
+            al: BufferAllocator, dataRel: Relation, hashColNames: List<ColumnName>,
+            rowCount: Long, blockCount: Int
+        ): Shuffle =
+            createTempFile("xtdb-build-side-shuffle-", ".arrow").deleteOnCatch { dataFile ->
+                dataRel.startUnload(dataFile).closeOnCatch { dataUnloader ->
 
-                                unloader.end()
+                    createTempFile("xtdb-build-side-shuffle-hash-", ".arrow").deleteOnCatch { hashFile ->
+                        Relation(al, HASH_COL_NAME ofType Type.I32).closeOnCatch { outHashRel ->
+                            outHashRel.startUnload(hashFile).closeOnCatch { hashUnloader ->
+
+                                Shuffle(
+                                    al, dataRel, hashColNames,
+                                    dataFile, dataUnloader,
+                                    hashFile, outHashRel, hashUnloader,
+                                    rowCount, blockCount
+                                )
+
                             }
                         }
                     }
 
-                    Shuffle(al, hashFile)
                 }
             }
     }

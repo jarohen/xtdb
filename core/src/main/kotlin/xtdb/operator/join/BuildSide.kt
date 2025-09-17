@@ -57,11 +57,19 @@ class BuildSide(
                 spill.spill()
                 spill.end()
 
+                val shuffle = Shuffle.open(
+                    al, dataRel, keyColNames, spill.rowCount, spill.blockCount
+                ).also { this.shuffle = it }
+
                 spill.openDataLoader().use { dataLoader ->
-                    val shuffle = Shuffle.open(al, keyColNames, dataLoader).also { this.shuffle = it }
-                    shuffle.loadAll(hashCol)
+                    while(dataLoader.loadNextPage(dataRel)) {
+                        shuffle.shuffle()
+                    }
                 }
-                spill.loadAll(dataRel)
+
+                shuffle.end()
+                shuffle.loadAllData(dataRel)
+                shuffle.loadAllHashes(hashCol)
             } else {
                 dataRel.hasher(keyColNames).writeAllHashes(hashCol)
             }
