@@ -43,6 +43,14 @@ data class Bucketer(val levelBits: Int = DEFAULT_LEVEL_BITS) {
         return 0
     }
 
+    fun compareToPath(bytes: ByteArray, path: ByteArray) : Int {
+        for (level in path.indices) {
+            val cmp = bucketFor(bytes, level).toInt() compareTo (path[level].toInt())
+            if (cmp != 0) return cmp
+        }
+        return 0
+    }
+
     companion object {
         @JvmField
         val DEFAULT = Bucketer()

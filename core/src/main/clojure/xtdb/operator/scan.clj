@@ -159,12 +159,11 @@
                       (MutableRoaringBitmap/intersects pushdown-bloom (BloomUtils/bloomToBitmap bloom-rdr bloom-vec-idx)))))))))))
 
 
-(defn ->path-pred [^ArrowBuf iid-arrow-buf]
-  (when iid-arrow-buf
-    (let [iid-ptr (ArrowBufPointer. iid-arrow-buf 0 (.capacity iid-arrow-buf))]
-      (reify Predicate
-        (test [_ path]
-          (zero? (.compareToPath Bucketer/DEFAULT iid-ptr path)))))))
+(defn ->path-pred [^bytes iid-bytes]
+  ;; TODO take the whole set
+  (reify Predicate
+    (test [_ path]
+      (zero? (.compareToPath Bucketer/DEFAULT iid-bytes ^bytes path)))))
 
 (defmethod ig/prep-key ::scan-emitter [_ opts]
   (merge opts
@@ -251,11 +250,11 @@
                          (info-schema/->cursor info-schema allocator db snapshot derived-table-schema table col-names col-preds schema args)
 
                          (let [iid-set (get pushdown-iids '_iid)
-                               iid-bb (or (some-> (selects->iid-bytes selects args) ByteBuffer/wrap)
-                                          (when (and iid-set (= (count iid-set) 1))
-                                            (first iid-set)))
+                               iid-bytes (or (selects->iid-bytes selects args)
+                                             (when (and iid-set (= (count iid-set) 1))
+                                               (first iid-set)))
                                col-preds (cond-> col-preds
-                                           iid-bb (assoc "_iid" (IidSelector. iid-bb)))
+                                           iid-bytes (assoc "_iid" (IidSelector. iid-bytes)))
                                metadata-pred (expr.meta/->metadata-selector allocator (cons 'and metadata-args) (update-vals fields types/field->col-type) args)
                                metadata-pred (reify MetadataPredicate
                                                (build [_ page-metadata]
@@ -274,33 +273,32 @@
                                                                   (-> (basis/<-time-basis-str snapshot-token)
                                                                       (get-in [(.getName db) 0])))]
 
-                           (util/with-open [iid-arrow-buf (when iid-bb (util/->arrow-buf-view allocator iid-bb))]
-                             (util/with-close-on-catch [!segments (LinkedList.)]
-                               
-                               (doseq [{:keys [^String trie-key]} (-> (cat/trie-state trie-catalog table)
-                                                                      (cat/current-tries)
-                                                                      (cat/filter-tries temporal-bounds))]
-                                 (.add !segments
-                                       (BufferPoolSegment/open allocator buffer-pool metadata-mgr table trie-key metadata-pred)))
+                           (util/with-close-on-catch [!segments (LinkedList.)]
+                             
+                             (doseq [{:keys [^String trie-key]} (-> (cat/trie-state trie-catalog table)
+                                                                    (cat/current-tries)
+                                                                    (cat/filter-tries temporal-bounds))]
+                               (.add !segments
+                                     (BufferPoolSegment/open allocator buffer-pool metadata-mgr table trie-key metadata-pred)))
 
-                               (when live-table-snap
-                                 (.add !segments
-                                       (MemorySegment. (.getLiveTrie live-table-snap) (.getLiveRelation live-table-snap))))
+                             (when live-table-snap
+                               (.add !segments
+                                     (MemorySegment. (.getLiveTrie live-table-snap) (.getLiveRelation live-table-snap))))
 
-                               (when template-table?
-                                 (.add !segments
-                                       (let [[memory-rel trie] (info-schema/table-template info-schema table)]
-                                         (MemorySegment. trie memory-rel))))
+                             (when template-table?
+                               (.add !segments
+                                     (let [[memory-rel trie] (info-schema/table-template info-schema table)]
+                                       (MemorySegment. trie memory-rel))))
 
-                               (let [merge-tasks (->> (MergePlanner/plan !segments (->path-pred iid-arrow-buf))
-                                                      (into [] (keep (fn [^MergeTask mt]
-                                                                       (when-let [pages (trie/filter-pages (.getPages mt) temporal-bounds)]
-                                                                         (MergeTask. pages (.getPath mt)))))))]
-                                 (cond-> (ScanCursor. allocator col-names col-preds
-                                                      temporal-bounds
-                                                      !segments (.iterator ^Iterable merge-tasks)
-                                                      schema args)
-                                   explain-analyze? (ICursor/wrapExplainAnalyze)))))))))}))))
+                             (let [merge-tasks (->> (MergePlanner/plan !segments (some-> iid-bytes ->path-pred))
+                                                    (into [] (keep (fn [^MergeTask mt]
+                                                                     (when-let [pages (trie/filter-pages (.getPages mt) temporal-bounds)]
+                                                                       (MergeTask. pages (.getPath mt)))))))]
+                               (cond-> (ScanCursor. allocator col-names col-preds
+                                                    temporal-bounds
+                                                    !segments (.iterator ^Iterable merge-tasks)
+                                                    schema args)
+                                 explain-analyze? (ICursor/wrapExplainAnalyze))))))))}))))
 
 (defmethod lp/emit-expr :scan [scan-expr {:keys [^IScanEmitter scan-emitter db-cat scan-fields, param-fields]}]
   (assert db-cat)
