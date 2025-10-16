@@ -7,7 +7,7 @@ import xtdb.arrow.RelationReader
 import xtdb.operator.SelectionSpec
 import java.util.stream.IntStream
 
-class IidSelector(private val iid: ByteArray) : SelectionSpec {
+class SingleIidSelector(private val iid: ByteArray) : SelectionSpec {
 
     private operator fun ArrowBufPointer.compareTo(bytes: ByteArray): Int =
         ByteFunctionHelpers.compare(

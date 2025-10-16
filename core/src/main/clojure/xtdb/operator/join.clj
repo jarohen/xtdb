@@ -171,16 +171,12 @@
       (dotimes [col-idx (count build-key-col-names)]
         (let [build-col-name (nth build-key-col-names col-idx)
               build-col (.vectorForOrNull build-rel (str build-col-name))
-              build-col-type (.getType build-col)
-              push-down-iid? (and pushdown-iids
-                                  (or (and (= build-col-type #xt/type :varbinary)
-                                           (str/ends-with? build-col-name "/_iid"))
-                                      (= build-col-type #xt/type :uuid)))
               ^MutableRoaringBitmap pushdown-bloom (nth pushdown-blooms col-idx)
               ^SortedSet col-pushdown-iids (nth pushdown-iids col-idx)]
           (dotimes [build-idx (.getRowCount build-rel)]
-            (when push-down-iid?
-              (.add col-pushdown-iids (.getObject build-col build-idx)))
+            (when col-pushdown-iids
+              (let [v (.getObject build-col build-idx)]
+                (.add col-pushdown-iids (cond-> v (uuid? v) util/uuid->bytes))))
             (.add pushdown-bloom ^ints (BloomUtils/bloomHashes build-col build-idx))))))))
 
 (deftype JoinCursor [^BufferAllocator allocator,
@@ -397,7 +393,14 @@
                                                our-pushdown-iids (update :pushdown-iids (fnil into {}) our-pushdown-iids))))]
                      (let [pushdown-blooms (when pushdown-blooms?
                                              (vec (repeatedly (count build-key-col-names) #(MutableRoaringBitmap.))))
-                           pushdown-iids (vec (repeatedly (count build-key-col-names) #(TreeSet.)))
+                           pushdown-iids (->> build-key-col-names
+                                              (mapv (fn [col-name]
+                                                      (let [^Field field (get build-fields col-name)
+                                                            build-col-type (.getType field)]
+                                                        (when (or (and (= build-col-type #xt.arrow/type :varbinary)
+                                                                       (str/ends-with? col-name "/_iid"))
+                                                                  (= build-col-type #xt.arrow/type :uuid))
+                                                          (TreeSet. util/bytes-comparator))))))
                            cmp-factory (->cmp-factory {:build-fields build-fields
                                                        :probe-fields probe-fields
                                                        :with-nil-row? with-nil-row?
