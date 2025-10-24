@@ -23,10 +23,11 @@ import xtdb.trie.*
 import xtdb.util.*
 import java.nio.channels.ClosedByInterruptException
 import java.time.Duration
+import java.time.InstantSource
 import kotlin.time.Duration.Companion.seconds
 import kotlin.use
 
-private typealias JobKey = Pair<TableRef, TrieKey>
+typealias JobKey = Pair<TableRef, TrieKey>
 
 private val LOGGER = Compactor::class.logger
 
@@ -164,6 +165,7 @@ interface Compactor : AutoCloseable {
                         override fun close() = al.close()
                     }
                 }
+
         }
     }
 
