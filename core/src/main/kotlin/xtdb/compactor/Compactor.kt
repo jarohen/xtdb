@@ -23,7 +23,6 @@ import xtdb.trie.*
 import xtdb.util.*
 import java.nio.channels.ClosedByInterruptException
 import java.time.Duration
-import java.time.InstantSource
 import kotlin.time.Duration.Companion.seconds
 import kotlin.use
 
@@ -48,13 +47,12 @@ interface Compactor : AutoCloseable {
     interface ForDatabase : AutoCloseable {
         fun signalBlock()
         fun compactAll(timeout: Duration? = null)
-        fun getDriver(): Driver
     }
 
     fun openForDatabase(db: IDatabase): ForDatabase
 
     interface Driver : AutoCloseable {
-        suspend fun launchIn(scope: CoroutineScope, f: suspend CoroutineScope.() -> Unit)
+        suspend fun launchIn(jobsScope: CoroutineScope, f: suspend () -> Unit)
         fun executeJob(job: Job): TriesAdded
         suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata
         suspend fun awaitSignal(): JobKey?
@@ -62,14 +60,14 @@ interface Compactor : AutoCloseable {
         fun wakeup()
 
         interface Factory {
-            fun create(db: IDatabase): Driver
+            fun create(scope: CoroutineScope, db: IDatabase): Driver
         }
 
         companion object {
             @JvmStatic
             fun real(meterRegistry: MeterRegistry?, pageSize: Int, recencyPartition: RecencyPartition?) =
                 object : Factory {
-                    override fun create(db: IDatabase) = object : Driver {
+                    override fun create(scope: CoroutineScope, db: IDatabase) = object : Driver {
                         private val al = db.allocator.openChildAllocator("compactor")
                             .also { meterRegistry?.register(it) }
 
@@ -83,8 +81,8 @@ interface Compactor : AutoCloseable {
                         private val doneCh = Channel<JobKey>()
                         private val wakeupCh = Channel<Unit>(1, onBufferOverflow = DROP_OLDEST)
 
-                        override suspend fun launchIn(scope: CoroutineScope, f: suspend CoroutineScope.() -> Unit) =
-                            scope.launch(block = f).let { }
+                        override suspend fun launchIn(jobsScope: CoroutineScope, f: suspend () -> Unit) =
+                            jobsScope.launch { f() }.let { }
 
                         private fun Job.trieDetails(
                             trieKey: TrieKey,
@@ -190,7 +188,7 @@ interface Compactor : AutoCloseable {
 
             private val trieCatalog = db.trieCatalog
 
-            val driver = driverFactory.create(db)
+            val driver = driverFactory.create(scope, db)
             private val idle = Channel<Unit>()
 
             @Volatile
@@ -269,17 +267,13 @@ interface Compactor : AutoCloseable {
                 runBlocking { job.join() }
             }
 
-            override fun getDriver(): Driver {
-                TODO("Not yet implemented")
-            }
-
             override fun close() {
+                driver.close()
+
                 runBlocking {
                     withTimeoutOrNull(10.seconds) { scope.coroutineContext.job.cancelAndJoin() }
                         ?: LOGGER.warn("failed to close compactor cleanly in 10s")
                 }
-
-                driver.close()
 
                 LOGGER.debug("compactor closed")
             }
@@ -294,9 +288,6 @@ interface Compactor : AutoCloseable {
             override fun openForDatabase(db: IDatabase) = object : ForDatabase {
                 override fun signalBlock() = Unit
                 override fun compactAll(timeout: Duration?) = Unit
-                override fun getDriver(): Driver {
-                    TODO("Not yet implemented")
-                }
 
                 override fun close() = Unit
             }

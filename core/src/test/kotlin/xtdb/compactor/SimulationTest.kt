@@ -1,13 +1,8 @@
 package xtdb.compactor
 
-import junit.framework.TestCase.assertEquals
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
 import org.apache.arrow.memory.BufferAllocator
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
@@ -29,99 +24,173 @@ import xtdb.storage.BufferPool
 import xtdb.table.TableRef
 import xtdb.trie.TrieCatalog
 import xtdb.util.requiringResolve
-import xtdb.util.trace
 import java.time.Instant
-import java.time.InstantSource
+import java.util.concurrent.LinkedBlockingQueue
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
+import kotlin.random.Random
+import kotlin.time.Duration.Companion.milliseconds
 
-class MockDb(override val trieCatalog: TrieCatalog): IDatabase {
+class MockDb(override val trieCatalog: TrieCatalog) : IDatabase {
     override val name: DatabaseName get() = unsupported("name")
-    override val allocator: BufferAllocator get() = unsupported("name")
-    override val blockCatalog: BlockCatalog get() = unsupported("name")
-    override val tableCatalog: TableCatalog get() = unsupported("name")
-    override val log: Log get() = unsupported("name")
-    override val bufferPool: BufferPool get() = unsupported("name")
-    override val metadataManager: PageMetadata.Factory get() = unsupported("name")
-    override val logProcessor: LogProcessor get() = unsupported("name")
-    override val compactor: Compactor.ForDatabase get() = unsupported("name")
+    override val allocator: BufferAllocator get() = unsupported("allocator")
+    override val blockCatalog: BlockCatalog get() = unsupported("blockCatalog")
+    override val tableCatalog: TableCatalog get() = unsupported("tableCatalog")
+    override val log: Log get() = unsupported("log")
+    override val bufferPool: BufferPool get() = unsupported("bufferPool")
+    override val metadataManager: PageMetadata.Factory get() = unsupported("metadataManager")
+
+    override val logProcessor: LogProcessor get() = unsupported("logProcessor")
+    override val compactor: Compactor.ForDatabase get() = unsupported("compactor")
 }
 
+class MockDriver(seed: Int = 0) : Factory {
 
+    sealed interface AsyncMessage
 
-@OptIn(DelicateCoroutinesApi::class)
-class MockDriver(private val instantSource: InstantSource = InstantSource.system()) : Factory {
+    class AppendMessage(val msg: TriesAdded, val msgTimestamp: Instant) : AsyncMessage
+    class AwaitSignalMessage(val cont: Continuation<JobKey?>) : AsyncMessage
+    class Launch(val f: suspend () -> Unit) : AsyncMessage
 
-    sealed interface AsyncMessage {}
-    class AppendMessage(val added: TriesAdded, val continuation: Continuation<Log.MessageMetadata>) : AsyncMessage
-    class AwaitSignalMessage(val continuation: Continuation<JobKey?>) : AsyncMessage
+    val outerRand = Random(seed)
 
-    override fun create(db: IDatabase) = object : Driver {
-        val appendedTries = mutableListOf<TriesAdded>()
-        val launchedBlocks = mutableListOf<suspend CoroutineScope.() -> Unit>()
-        private val doneCh = Channel<JobKey>()
-        private val wakeupCh = Channel<Unit>(1, onBufferOverflow = DROP_OLDEST)
-        val channel = Channel<AsyncMessage>()
+    override fun create(scope: CoroutineScope, db: IDatabase) = ForDatabase(scope, db)
 
-        val thingsTodo: MutableSet<AsyncMessage> = mutableSetOf()
+    // GlobalScope.
+    @OptIn(DelicateCoroutinesApi::class)
+    inner class ForDatabase(scope: CoroutineScope, private val db: IDatabase) : Driver {
+        val rand = Random(outerRand.nextInt())
 
-        init {
-            GlobalScope.launch {
-                for (msg in channel) {
-                    when (msg) {
-                        is AppendMessage -> {
+        val channel = Channel<AsyncMessage>(UNLIMITED)
 
+        var started = false
+        var awaitSignalMessage: AwaitSignalMessage? = null
+
+        var wokenUp: Boolean = false
+
+        val launchedJobs = mutableSetOf<suspend () -> Unit>()
+        val doneJobs = LinkedBlockingQueue<JobKey>()
+
+        val logMessages = LinkedBlockingQueue<AppendMessage>()
+        val trieCat = db.trieCatalog
+
+        private fun consumeAll() {
+            while (true) {
+                channel.tryReceive()
+                    .onSuccess { msg ->
+                        started = true
+
+                        when (msg) {
+                            is AppendMessage -> logMessages.add(msg)
+
+                            is AwaitSignalMessage -> {
+                                check(awaitSignalMessage == null)
+                                awaitSignalMessage = msg
+                            }
+
+                            is Launch -> launchedJobs.add(msg.f)
                         }
-                        is AwaitSignalMessage -> {
 
-                        }
-                        else -> thingsTodo.add(msg)
                     }
+                    .onFailure { return } // channel is empty
+                    .onClosed { throw (it ?: CancellationException()) }
+            }
+        }
+
+        private fun handleAwaitSignal(message: AwaitSignalMessage) {
+            when {
+                doneJobs.isNotEmpty<JobKey>() && rand.nextDouble() < 0.8 -> {
+                    val doneJob = doneJobs.poll()!!
+
+                    message.cont.resume(doneJob)
+                    awaitSignalMessage = null
+                }
+
+                wokenUp && rand.nextDouble() < 0.8 -> {
+                    message.cont.resume(null)
+                    awaitSignalMessage = null
+                    wokenUp = false
                 }
             }
         }
 
-        override suspend fun launchIn(scope: CoroutineScope, f: suspend CoroutineScope.() -> Unit) =
-            launchedBlocks.add(f).let { }
+        init {
+            scope.launch {
+                try {
+                    while (true) {
+                        yield()
+                        consumeAll()
 
-        suspend fun runNext(scope: CoroutineScope) {
-            launchedBlocks.removeFirstOrNull()?.invoke(scope)
+                        val logs = mutableListOf<AppendMessage>()
+                        logMessages.drainTo(logs)
+
+                        logs.forEach { logMsg ->
+                            logMsg.msg.tries
+                                .groupBy { it.tableName }
+                                .forEach { (tableName, tries) ->
+                                    trieCat.addTries(TableRef.parse(db.name, tableName), tries, logMsg.msgTimestamp)
+                                }
+                        }
+
+                        awaitSignalMessage?.let { handleAwaitSignal(it); continue }
+
+                        launchedJobs.randomOrNull(rand)?.let { launchedJob ->
+                            launchedJobs.remove(launchedJob)
+                            launchedJob()
+                            continue
+                        }
+
+                        if (started) break else delay(10.milliseconds)
+                    }
+                } catch (e: Throwable) {
+                    channel.close(e)
+                    consumeAll()
+                    awaitSignalMessage?.let { msg -> msg.cont.resumeWithException(e); awaitSignalMessage = null }
+                    throw e
+                }
+            }
         }
 
-        suspend fun runAll(scope: CoroutineScope) {
-            while (launchedBlocks.isNotEmpty()) runNext(scope)
-        }
+        override suspend fun launchIn(jobsScope: CoroutineScope, f: suspend () -> Unit) =
+            channel.send(Launch(f))
 
-        override fun executeJob(job: Job): TriesAdded {
-            val trie = TrieDetails.newBuilder()
-                .setTableName(job.table.tableName)
-                .setTrieKey(job.outputTrieKey.toString())
-                .setDataFileSize(100 * 1024L * 1024L)
-                .build()
-            return TriesAdded(Storage.VERSION, 0, listOf(trie))
-        }
+        override fun executeJob(job: Job) =
+            TriesAdded(
+                Storage.VERSION, 0,
+                listOf(
+                    TrieDetails.newBuilder()
+                        .setTableName(job.table.tableName)
+                        .setTrieKey(job.outputTrieKey.toString())
+                        .setDataFileSize(100 * 1024L * 1024L)
+                        .build()
+                )
+            )
 
-        override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata = suspendCoroutine { continuation ->
-            channel.trySend(AppendMessage(triesAdded, continuation))
+        var logOffset = 0L
+
+        override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata {
+            val logTimestamp = Instant.now()
+            channel.send(AppendMessage(triesAdded, logTimestamp))
+            return Log.MessageMetadata(logOffset++, logTimestamp)
         }
 
         override suspend fun awaitSignal(): JobKey? = suspendCoroutine { cont ->
-            channel.trySend(AwaitSignalMessage(cont))
+            channel.trySendBlocking(AwaitSignalMessage(cont))
         }
 
         override suspend fun jobDone(jobKey: JobKey) {
-            doneCh.send(jobKey)
+            doneJobs.add(jobKey)
         }
 
         override fun wakeup() {
-            wakeupCh.trySend(Unit)
+            wokenUp = true
         }
 
         override fun close() = Unit
     }
 }
-
 
 @Tag("simulation")
 class SimulationTest {
@@ -130,20 +199,24 @@ class SimulationTest {
         val mockDriver = MockDriver()
         val jobCalculator = requiringResolve("xtdb.compactor/->JobCalculator").invoke() as Compactor.JobCalculator
         val compactor = Compactor.Impl(mockDriver, null, jobCalculator, false, 2)
-        val trieCatalog = requiringResolve("xtdb.trie-catalog/->TrieCatalog").invoke(mutableMapOf<Any,Any>(), (100 * 1024 * 1024)) as TrieCatalog
+        val trieCatalog = requiringResolve("xtdb.trie-catalog/->TrieCatalog").invoke(
+            mutableMapOf<Any, Any>(),
+            (100 * 1024 * 1024)
+        ) as TrieCatalog
+
         val db = MockDb(trieCatalog)
-        val compactorForDb = compactor.openForDatabase(db)
-        val docsTableRef = TableRef("xtdb", "public", "docs")
-        val driverForDb = compactorForDb.getDriver()
 
-        val l0Trie = TrieDetails.newBuilder()
-            .setTableName(docsTableRef.tableName)
-            .setTrieKey("l00-rc-b01")
-            .setDataFileSize(1024L)
-            .build()
+        compactor.openForDatabase(db).use {
+            val docsTableRef = TableRef("xtdb", "public", "docs")
 
-        trieCatalog.addTries(docsTableRef, listOf(l0Trie),Instant.now())
+            val l0Trie = TrieDetails.newBuilder()
+                .setTableName(docsTableRef.tableName)
+                .setTrieKey("l00-rc-b01")
+                .setDataFileSize(1024L)
+                .build()
 
+            trieCatalog.addTries(docsTableRef, listOf(l0Trie), Instant.now())
+        }
 
         // Add L0 to TrieCatalog
         // Do we need to wakeup compactor thread?
