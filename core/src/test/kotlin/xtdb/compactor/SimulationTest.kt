@@ -1,8 +1,12 @@
 package xtdb.compactor
 
+import junit.framework.TestCase.assertEquals
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import org.apache.arrow.memory.BufferAllocator
 import org.junit.jupiter.api.Tag
@@ -28,6 +32,9 @@ import xtdb.util.requiringResolve
 import xtdb.util.trace
 import java.time.Instant
 import java.time.InstantSource
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 class MockDb(override val trieCatalog: TrieCatalog): IDatabase {
     override val name: DatabaseName get() = unsupported("name")
@@ -41,12 +48,39 @@ class MockDb(override val trieCatalog: TrieCatalog): IDatabase {
     override val compactor: Compactor.ForDatabase get() = unsupported("name")
 }
 
+
+
+@OptIn(DelicateCoroutinesApi::class)
 class MockDriver(private val instantSource: InstantSource = InstantSource.system()) : Factory {
+
+    sealed interface AsyncMessage {}
+    class AppendMessage(val added: TriesAdded, val continuation: Continuation<Log.MessageMetadata>) : AsyncMessage
+    class AwaitSignalMessage(val continuation: Continuation<JobKey?>) : AsyncMessage
+
     override fun create(db: IDatabase) = object : Driver {
         val appendedTries = mutableListOf<TriesAdded>()
         val launchedBlocks = mutableListOf<suspend CoroutineScope.() -> Unit>()
         private val doneCh = Channel<JobKey>()
         private val wakeupCh = Channel<Unit>(1, onBufferOverflow = DROP_OLDEST)
+        val channel = Channel<AsyncMessage>()
+
+        val thingsTodo: MutableSet<AsyncMessage> = mutableSetOf()
+
+        init {
+            GlobalScope.launch {
+                for (msg in channel) {
+                    when (msg) {
+                        is AppendMessage -> {
+
+                        }
+                        is AwaitSignalMessage -> {
+
+                        }
+                        else -> thingsTodo.add(msg)
+                    }
+                }
+            }
+        }
 
         override suspend fun launchIn(scope: CoroutineScope, f: suspend CoroutineScope.() -> Unit) =
             launchedBlocks.add(f).let { }
@@ -59,20 +93,22 @@ class MockDriver(private val instantSource: InstantSource = InstantSource.system
             while (launchedBlocks.isNotEmpty()) runNext(scope)
         }
 
-        override suspend fun executeJob(job: Job): TriesAdded = TriesAdded(Storage.VERSION, 0, emptyList())
+        override fun executeJob(job: Job): TriesAdded {
+            val trie = TrieDetails.newBuilder()
+                .setTableName(job.table.tableName)
+                .setTrieKey(job.outputTrieKey.toString())
+                .setDataFileSize(100 * 1024L * 1024L)
+                .build()
+            return TriesAdded(Storage.VERSION, 0, listOf(trie))
+        }
 
-        override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata =
-            Log.MessageMetadata(appendedTries.size.toLong(), instantSource.instant())
-                .also { appendedTries += triesAdded }
+        override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata = suspendCoroutine { continuation ->
+            channel.trySend(AppendMessage(triesAdded, continuation))
+        }
 
-        override suspend fun awaitSignal(): JobKey? =
-            select {
-                doneCh.onReceive { it }
-
-                wakeupCh.onReceive {
-                    null
-                }
-            }
+        override suspend fun awaitSignal(): JobKey? = suspendCoroutine { cont ->
+            channel.trySend(AwaitSignalMessage(cont))
+        }
 
         override suspend fun jobDone(jobKey: JobKey) {
             doneCh.send(jobKey)
@@ -98,9 +134,21 @@ class SimulationTest {
         val db = MockDb(trieCatalog)
         val compactorForDb = compactor.openForDatabase(db)
         val docsTableRef = TableRef("xtdb", "public", "docs")
+        val driverForDb = compactorForDb.getDriver()
 
-        trieCatalog.addTries(docsTableRef, listOf(TrieDetails.newBuilder().build()),Instant.now())
+        val l0Trie = TrieDetails.newBuilder()
+            .setTableName(docsTableRef.tableName)
+            .setTrieKey("l00-rc-b01")
+            .setDataFileSize(1024L)
+            .build()
+
+        trieCatalog.addTries(docsTableRef, listOf(l0Trie),Instant.now())
 
 
+        // Add L0 to TrieCatalog
+        // Do we need to wakeup compactor thread?
+        // Compactor thread adds new job
+        // runNext on driver
+        // jobDone
     }
 }

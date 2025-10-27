@@ -48,13 +48,14 @@ interface Compactor : AutoCloseable {
     interface ForDatabase : AutoCloseable {
         fun signalBlock()
         fun compactAll(timeout: Duration? = null)
+        fun getDriver(): Driver
     }
 
     fun openForDatabase(db: IDatabase): ForDatabase
 
     interface Driver : AutoCloseable {
         suspend fun launchIn(scope: CoroutineScope, f: suspend CoroutineScope.() -> Unit)
-        suspend fun executeJob(job: Job): TriesAdded
+        fun executeJob(job: Job): TriesAdded
         suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata
         suspend fun awaitSignal(): JobKey?
         suspend fun jobDone(jobKey: JobKey)
@@ -97,7 +98,7 @@ interface Compactor : AutoCloseable {
                                 .setTrieMetadata(trieMetadata)
                                 .build()
 
-                        override suspend fun executeJob(job: Job): TriesAdded =
+                        override fun executeJob(job: Job): TriesAdded =
                             try {
                                 LOGGER.debug("compacting '${job.table.sym}' '${job.trieKeys}' -> ${job.outputTrieKey}")
 
@@ -189,7 +190,7 @@ interface Compactor : AutoCloseable {
 
             private val trieCatalog = db.trieCatalog
 
-            private val driver = driverFactory.create(db)
+            val driver = driverFactory.create(db)
             private val idle = Channel<Unit>()
 
             @Volatile
@@ -268,6 +269,10 @@ interface Compactor : AutoCloseable {
                 runBlocking { job.join() }
             }
 
+            override fun getDriver(): Driver {
+                TODO("Not yet implemented")
+            }
+
             override fun close() {
                 runBlocking {
                     withTimeoutOrNull(10.seconds) { scope.coroutineContext.job.cancelAndJoin() }
@@ -289,6 +294,10 @@ interface Compactor : AutoCloseable {
             override fun openForDatabase(db: IDatabase) = object : ForDatabase {
                 override fun signalBlock() = Unit
                 override fun compactAll(timeout: Duration?) = Unit
+                override fun getDriver(): Driver {
+                    TODO("Not yet implemented")
+                }
+
                 override fun close() = Unit
             }
 
