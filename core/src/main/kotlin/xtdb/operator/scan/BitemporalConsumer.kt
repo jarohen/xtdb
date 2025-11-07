@@ -120,12 +120,12 @@ class BitemporalConsumer private constructor(
         rowCount++
     }
 
-    fun build(): RelationReader {
-        val builtRels = rels.map { it.build() }
+    fun build(select: (RelationReader) -> RelationReader): RelationReader {
+        val builtRels = rels.map { select(it.build()) }
 
         return RelationReader.from(
             colNames.map { colName -> ConcatVector.from(colName, builtRels.map { it[colName] }) },
-            rowCount
+            builtRels.sumOf { it.rowCount }
         )
     }
 
