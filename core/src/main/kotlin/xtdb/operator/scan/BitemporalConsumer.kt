@@ -10,6 +10,7 @@ import xtdb.types.Type.Companion.maybe
 import xtdb.types.Type.Companion.ofType
 import xtdb.util.closeAll
 import xtdb.util.closeAllOnCatch
+import xtdb.util.closeOnCatch
 import xtdb.util.safeMap
 import kotlin.Long.Companion.MAX_VALUE as MAX_LONG
 
@@ -120,14 +121,7 @@ class BitemporalConsumer private constructor(
         rowCount++
     }
 
-    fun build(select: (RelationReader) -> RelationReader): RelationReader {
-        val builtRels = rels.map { select(it.build()) }
-
-        return RelationReader.from(
-            colNames.map { colName -> ConcatVector.from(colName, builtRels.map { it[colName] }) },
-            builtRels.sumOf { it.rowCount }
-        )
-    }
+    fun build() = rels.map { it.build() }
 
     override fun close() = rels.closeAll()
 

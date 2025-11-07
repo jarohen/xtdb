@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.util.ArrowBufPointer
 import xtdb.ICursor
+import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
 import xtdb.bitemporal.PolygonCalculator
 import xtdb.operator.SelectionSpec
@@ -97,14 +98,19 @@ class ScanCursor(
                     .filterNot { it.key == "_iid" }
                     .map { it.value }
 
-                val rel = bitemporalConsumer.build { childRel ->
-                    colPreds
-                        .fold(childRel) { acc, colPred -> acc.select(colPred.select(al, acc, schema, args)) }
-                }
+                Relation(al).use { outRel ->
+                    for (rel in bitemporalConsumer.build()) {
+                        val filtered = colPreds.fold(rel) { acc, colPred ->
+                            acc.select(colPred.select(al, acc, schema, args))
+                        }
 
-                if (rel.rowCount > 0) {
-                    c.accept(rel)
-                    return true
+                        outRel.append(filtered)
+                    }
+
+                    if (outRel.rowCount > 0) {
+                        c.accept(outRel)
+                        return true
+                    }
                 }
             }
         }
