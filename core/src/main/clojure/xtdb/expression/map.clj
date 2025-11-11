@@ -6,7 +6,7 @@
             [xtdb.vector.reader :as vr])
   (:import (java.util Map)
            java.util.function.IntBinaryOperator
-           (xtdb.arrow RelationReader VectorReader)))
+           (xtdb.arrow EquiComparator2 EquiComparator3 RelationReader VectorReader)))
 
 (def ^:private left-rel (gensym 'left-rel))
 (def ^:private left-vec (gensym 'left-vec))
@@ -30,7 +30,23 @@
                     ~(-> expr/schema-sym (expr/with-tag Map))
                     ~(-> expr/args-sym (expr/with-tag RelationReader))]
                  (let [~@(expr/batch-bindings emitted-expr)]
-                   (reify IntBinaryOperator
+                   (reify
+                     EquiComparator3
+                     (~'equals3 [_# ~left-idx ~right-idx]
+                      ~(continue (fn [res-type code]
+                                   (case res-type
+                                     :null nil
+                                     :bool code))))
+
+                     EquiComparator2
+                     (~'equals2 [_# ~left-idx ~right-idx]
+                      ~(continue (fn [res-type code]
+                                   (case res-type
+                                     :null false
+                                     :bool code))))
+
+
+                     IntBinaryOperator
                      (~'applyAsInt [_# ~left-idx ~right-idx]
                       ~(continue (fn [res-type code]
                                    (case res-type

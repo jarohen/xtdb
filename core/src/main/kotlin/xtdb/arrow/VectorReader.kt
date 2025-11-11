@@ -108,6 +108,8 @@ interface VectorReader : ILookup, AutoCloseable {
 
     val metadataFlavours: Collection<MetadataFlavour> get() = unsupported("metadataFlavours")
 
+    fun equiComparator3(other: VectorReader): EquiComparator3
+
     fun rowCopier(dest: VectorWriter): RowCopier
 
     companion object {

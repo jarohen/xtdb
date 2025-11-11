@@ -5,6 +5,7 @@ import org.apache.arrow.vector.types.TimeUnit
 import org.apache.arrow.vector.types.TimeUnit.*
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.time.MICRO_HZ
 import xtdb.time.MILLI_HZ
@@ -13,7 +14,6 @@ import xtdb.util.Hasher
 import java.time.*
 import java.time.ZoneOffset.UTC
 import java.time.temporal.ChronoUnit
-import java.util.*
 
 private fun TimeUnit.toInstant(value: Long) = when (this) {
     SECOND -> Instant.ofEpochSecond(value)
@@ -57,6 +57,11 @@ class TimestampLocalVector private constructor(
             NANOSECOND -> getLong(idx) / NANO_HZ.toDouble()
         }
 
+    override fun equiComparator2(other: Vector) =
+        if (other is TimestampLocalVector)
+            EquiComparator2 { t, o -> getMetaDouble(t) == other.getMetaDouble(o) }
+        else Never
+
     override fun hashCode0(idx: Int, hasher: Hasher) = hasher.hash(getMetaDouble(idx))
 
     override fun openSlice(al: BufferAllocator) =
@@ -95,7 +100,7 @@ class TimestampTzVector private constructor(
                 if (value.offset == zone) value.toInstant()
                 else throw InvalidWriteObjectException(fieldType, value)
 
-            is Date -> value.toInstant()
+            is java.util.Date -> value.toInstant()
             else -> throw InvalidWriteObjectException(fieldType, value)
         }.let {
             writeLong(unit.toLong(it.epochSecond, it.nano))
@@ -110,6 +115,13 @@ class TimestampTzVector private constructor(
             MICROSECOND -> getLong(idx) / MICRO_HZ.toDouble()
             NANOSECOND -> getLong(idx) / NANO_HZ.toDouble()
         }
+
+    // False positive in Kotlin 2.2.0: bug KT-78352
+    @Suppress("IDENTITY_SENSITIVE_OPERATIONS_WITH_VALUE_TYPE")
+    override fun equiComparator2(other: Vector) =
+        if (other is TimestampTzVector && zone == other.zone)
+            EquiComparator2 { t, o -> getMetaDouble(t) == other.getMetaDouble(o) }
+        else Never
 
     override fun hashCode0(idx: Int, hasher: Hasher) = hasher.hash(getMetaDouble(idx))
 

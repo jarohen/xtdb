@@ -10,7 +10,7 @@ import xtdb.util.Hasher
 class LongVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.Number {
+) : FixedWidthVector.Integer(), MetadataFlavour.Number {
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(name, nullable, 0, BitBuffer(al), ExtensibleBuffer(al))
@@ -20,6 +20,8 @@ class LongVector private constructor(
 
     override fun getLong(idx: Int) = getLong0(idx)
     override fun writeLong(v: Long) = writeLong0(v)
+
+    override fun getAsLong(idx: Int) = getLong(idx)
 
     override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getLong(idx)
 

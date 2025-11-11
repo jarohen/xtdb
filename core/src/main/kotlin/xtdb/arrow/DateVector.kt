@@ -18,7 +18,7 @@ private val SECONDS_PER_DAY = Duration.ofDays(1).toSeconds()
 class DateDayVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.DateTime {
+) : FixedWidthVector.Date(), MetadataFlavour.DateTime {
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(name, nullable, 0, BitBuffer(al), ExtensibleBuffer(al))
@@ -29,7 +29,9 @@ class DateDayVector private constructor(
     override fun getInt(idx: Int) = getInt0(idx)
     override fun writeInt(v: Int) = writeInt0(v)
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = LocalDate.ofEpochDay(getInt(idx).toLong())
+    override fun getAsDate(idx: Int) = LocalDate.ofEpochDay(getInt(idx).toLong())
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsDate(idx)
 
     override fun writeObject0(value: Any) {
         if (value is LocalDate) writeInt(value.toEpochDay().toInt())
@@ -49,7 +51,7 @@ class DateDayVector private constructor(
 class DateMilliVector internal constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.DateTime {
+) : FixedWidthVector.Date(), MetadataFlavour.DateTime {
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(name, nullable, 0, BitBuffer(al), ExtensibleBuffer(al))
@@ -61,7 +63,9 @@ class DateMilliVector internal constructor(
     override fun getLong(idx: Int) = getLong0(idx) / MILLIS_PER_DAY
     override fun writeLong(v: Long) = writeLong0(v * MILLIS_PER_DAY)
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = LocalDate.ofEpochDay(getLong(idx))!!
+    override fun getAsDate(idx: Int) = LocalDate.ofEpochDay(getLong(idx))
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsDate(idx)
 
     override fun writeObject0(value: Any) {
         if (value is LocalDate) writeLong(value.toEpochDay())

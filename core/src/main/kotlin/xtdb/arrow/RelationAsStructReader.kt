@@ -27,6 +27,10 @@ class RelationAsStructReader(
 
     override fun getObject(idx: Int, keyFn: IKeyFn<*>): Any = rel[idx, keyFn]
 
+    override fun equiComparator3(other: VectorReader): EquiComparator2 {
+        TODO("Not yet implemented")
+    }
+
     override fun rowCopier(dest: VectorWriter): RowCopier {
         val copiers = rel.vectors.map { it.rowCopier(dest.vectorFor(it.name, it.fieldType)) }
         return RowCopier { idx ->

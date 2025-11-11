@@ -10,7 +10,7 @@ import xtdb.util.Hasher
 class ByteVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.Number {
+) : FixedWidthVector.Integer(), MetadataFlavour.Number {
 
     constructor(
         al: BufferAllocator, name: String, nullable: Boolean
@@ -21,6 +21,8 @@ class ByteVector private constructor(
 
     override fun getByte(idx: Int) = getByte0(idx)
     override fun writeByte(v: Byte) = writeByte0(v)
+
+    override fun getAsLong(idx: Int) = getByte(idx).toLong()
 
     override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getByte(idx)
 

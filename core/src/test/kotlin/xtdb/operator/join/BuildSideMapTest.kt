@@ -1,7 +1,8 @@
 package xtdb.operator.join
 
 import org.apache.arrow.memory.BufferAllocator
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import xtdb.arrow.IntVector
@@ -35,7 +36,7 @@ class BuildSideMapTest {
             hashCol.writeInt(100)
             hashCol.writeInt(200)
             hashCol.writeInt(300)
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(0), map.getMatches(100))
                 assertEquals(listOf(1), map.getMatches(200))
@@ -49,7 +50,7 @@ class BuildSideMapTest {
         IntVector.open(al, "hashes", false).use { hashCol ->
             hashCol.writeInt(100)
             hashCol.writeInt(200)
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertTrue(map.getMatches(999).isEmpty())
             }
@@ -63,7 +64,7 @@ class BuildSideMapTest {
             hashCol.writeInt(sameHash)
             hashCol.writeInt(sameHash)
             hashCol.writeInt(sameHash)
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(0, 1, 2), map.getMatches(sameHash).sorted())
             }
@@ -83,7 +84,7 @@ class BuildSideMapTest {
     fun testSingleElement(al: BufferAllocator) {
         IntVector.open(al, "hashes", false).use { hashCol ->
             hashCol.writeInt(42)
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(0), map.getMatches(42))
                 assertTrue(map.getMatches(99).isEmpty())
@@ -96,7 +97,7 @@ class BuildSideMapTest {
         val size = 1000
         IntVector.open(al, "hashes", false).use { hashCol ->
             repeat(size) { i -> hashCol.writeInt(i * 7) }
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(50), map.getMatches(350))
                 assertEquals(listOf(100), map.getMatches(700))
@@ -109,7 +110,7 @@ class BuildSideMapTest {
     fun testQuadraticProbing(al: BufferAllocator) {
         IntVector.open(al, "hashes", false).use { hashCol ->
             repeat(20) { i -> hashCol.writeInt(i) }
-            
+
             BuildSideMap.from(al, hashCol, 0.5).use { map ->
                 repeat(20) { i ->
                     assertEquals(listOf(i), map.getMatches(i), "Failed to find element $i")
@@ -123,7 +124,7 @@ class BuildSideMapTest {
         IntVector.open(al, "hashes", false).use { hashCol ->
             hashCol.writeInt(0)
             hashCol.writeInt(100)
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(0), map.getMatches(0))
             }
@@ -136,7 +137,7 @@ class BuildSideMapTest {
             hashCol.writeInt(-100)
             hashCol.writeInt(-200)
             hashCol.writeInt(Int.MIN_VALUE)
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(0), map.getMatches(-100))
                 assertEquals(listOf(1), map.getMatches(-200))
@@ -150,7 +151,7 @@ class BuildSideMapTest {
         IntVector.open(al, "hashes", false).use { hashCol ->
             hashCol.writeInt(Int.MAX_VALUE)
             hashCol.writeInt(Int.MAX_VALUE - 1)
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(0), map.getMatches(Int.MAX_VALUE))
                 assertEquals(listOf(1), map.getMatches(Int.MAX_VALUE - 1))
@@ -166,7 +167,7 @@ class BuildSideMapTest {
             hashCol.writeInt(2000)  // collision group
             hashCol.writeInt(3000)  // unique
             hashCol.writeInt(2000)  // collision group
-            
+
             BuildSideMap.from(al, hashCol).use { map ->
                 assertEquals(listOf(0), map.getMatches(1000))
                 assertEquals(listOf(1, 2, 4), map.getMatches(2000).sorted())
@@ -186,12 +187,12 @@ class BuildSideMapTest {
             hashCol.writeInt(2000)  // collision group
 
             BuildSideMap.from(al, hashCol).use { map ->
-                assertEquals(0, map.findValue(1000, {_ -> 1}, false))
-                assertEquals(2, map.findValue(2000, {idx -> if (idx == 2) 1 else -1}, true))
-                assertEquals(-1, map.findValue(2000, {idx -> if (idx == 2) 1 else -1}, true))
-                assertEquals(1, map.findValue(2000, {idx -> if (idx == 1) 1 else -1}, true))
-                assertEquals(4, map.findValue(2000, {idx -> if (idx == 4) 1 else -1}, true))
-                assertEquals(3, map.findValue(3000, {idx -> if (idx == 3) 1 else -1}, true))
+                assertEquals(0, map.findValue(1000, { _ -> true }, false))
+                assertEquals(2, map.findValue(2000, { idx -> idx == 2 }, true))
+                assertEquals(-1, map.findValue(2000, { idx -> idx == 2 }, true))
+                assertEquals(1, map.findValue(2000, { idx -> idx == 1 }, true))
+                assertEquals(4, map.findValue(2000, { idx -> idx == 4 }, true))
+                assertEquals(3, map.findValue(3000, { idx -> idx == 3 }, true))
             }
         }
     }

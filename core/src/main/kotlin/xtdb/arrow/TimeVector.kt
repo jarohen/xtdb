@@ -28,11 +28,15 @@ internal fun TimeUnit.toLocalTime(value: Long): LocalTime = when (this) {
     NANOSECOND -> LocalTime.ofNanoOfDay(value)
 }
 
+sealed class TimeVector: FixedWidthVector.Time() {
+
+}
+
 class Time32Vector private constructor(
     override var name: String, override var nullable: Boolean, val unit: TimeUnit,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer,
     override var valueCount: Int
-) : FixedWidthVector(), MetadataFlavour.TimeOfDay {
+) : TimeVector(), MetadataFlavour.TimeOfDay {
 
     override val arrowType = ArrowType.Time(unit, Int.SIZE_BITS)
     override val byteWidth = Int.SIZE_BYTES
@@ -45,7 +49,9 @@ class Time32Vector private constructor(
 
     override fun writeLong(v: Long) = writeInt(v.toInt())
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = unit.toLocalTime(getInt(idx))
+    override fun getAsTime(idx: Int) = unit.toLocalTime(getInt(idx))
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsTime(idx)
 
     override fun writeObject0(value: Any) {
         if (value is LocalTime) writeInt(unit.toInt(value)) else throw InvalidWriteObjectException(fieldType, value)
@@ -67,7 +73,7 @@ class Time64Vector private constructor(
     override var name: String, override var nullable: Boolean, private val unit: TimeUnit,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer,
     override var valueCount: Int
-) : FixedWidthVector(), MetadataFlavour.TimeOfDay {
+) : TimeVector(), MetadataFlavour.TimeOfDay {
 
     override val arrowType = ArrowType.Time(unit, Long.SIZE_BITS)
     override val byteWidth = Long.SIZE_BYTES
@@ -78,7 +84,9 @@ class Time64Vector private constructor(
     override fun getLong(idx: Int) = getLong0(idx)
     override fun writeLong(v: Long) = writeLong0(v)
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = unit.toLocalTime(getLong(idx))
+    override fun getAsTime(idx: Int) = unit.toLocalTime(getLong(idx))
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsTime(idx)
 
     override fun writeObject0(value: Any) {
         if (value is LocalTime) writeLong(unit.toLong(value.toSecondOfDay().toLong(), value.nano))

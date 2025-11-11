@@ -117,6 +117,36 @@ class ListVector private constructor(
 
     override val metadataFlavours get() = listOf(this)
 
+    override fun equiComparator2(other: Vector): EquiComparator2 = when (other) {
+        is ListVector -> {
+            val elComparator = elVector.equiComparator2(other.elVector)
+            EquiComparator2 { t, o ->
+                if (getListCount(t) != other.getListCount(o)) false
+                else {
+                    val tStart = getListStartIndex(t)
+                    val oStart = other.getListStartIndex(o)
+                    (0 until getListCount(t)).all { elIdx ->
+                        elComparator.equals2(tStart + elIdx, oStart + elIdx)
+                    }
+                }
+            }
+        }
+        is FixedSizeListVector -> {
+            val elComparator = elVector.equiComparator3(other.listElements)
+            EquiComparator2 { t, o ->
+                if (getListCount(t) != other.getListCount(o)) false
+                else {
+                    val tStart = getListStartIndex(t)
+                    val oStart = other.getListStartIndex(o)
+                    (0 until getListCount(t)).all { elIdx ->
+                        elComparator.equals2(tStart + elIdx, oStart + elIdx)
+                    }
+                }
+            }
+        }
+        else -> EquiComparator2.Never
+    }
+
     override fun hashCode0(idx: Int, hasher: Hasher) =
         (getListStartIndex(idx) until getListEndIndex(idx)).fold(0) { hash, elIdx ->
             ByteFunctionHelpers.combineHash(hash, elVector.hashCode(elIdx, hasher))

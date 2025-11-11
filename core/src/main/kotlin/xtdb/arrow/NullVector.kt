@@ -8,6 +8,7 @@ import org.apache.arrow.vector.types.pojo.ArrowType
 import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Always
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.util.Hasher
 import org.apache.arrow.vector.NullVector as ArrowNullVector
@@ -61,6 +62,10 @@ class NullVector(
                         if (nullable) newVec.writeNull() else newVec.writeUndefined()
                     }
                 }
+
+    override fun equiComparator2(other: Vector) =
+        // we assume nulls are equal here because null-not-being-equal is handled above
+        if (other is NullVector) Always else EquiComparator2 { _, o -> other.isNull(o) }
 
     override fun rowCopier(dest: VectorWriter) =
         if (dest is DenseUnionVector) dest.rowCopier0(this)

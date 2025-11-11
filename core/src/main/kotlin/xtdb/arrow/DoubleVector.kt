@@ -12,7 +12,7 @@ val F64: ArrowType = MinorType.FLOAT8.type
 class DoubleVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.Number {
+) : FixedWidthVector.Numeric(), MetadataFlavour.Number {
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(name, nullable, 0, BitBuffer(al), ExtensibleBuffer(al))
@@ -22,6 +22,8 @@ class DoubleVector private constructor(
 
     override fun getDouble(idx: Int) = getDouble0(idx)
     override fun writeDouble(v: Double) = writeDouble0(v)
+
+    override fun getAsDouble(idx: Int) = getDouble(idx)
 
     override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getDouble(idx)
 

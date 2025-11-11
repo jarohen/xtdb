@@ -5,7 +5,7 @@ import org.roaringbitmap.RoaringBitmap
 import xtdb.arrow.IntVector
 import xtdb.arrow.VectorReader
 import xtdb.util.closeOnCatch
-import java.util.function.IntUnaryOperator
+import java.util.function.IntPredicate
 
 private const val DEFAULT_LOAD_FACTOR = 0.6
 
@@ -17,13 +17,13 @@ class BuildSideMap private constructor(
 
     var tombstones: RoaringBitmap? = null
 
-    fun findValue(hash: Int, cmp: IntUnaryOperator, removeOnMatch: Boolean): Int {
+    fun findValue(hash: Int, cmp: IntPredicate, removeOnMatch: Boolean): Int {
         var lookupIdx = hash and hashMask
 
         while (true) {
             if (srcIdxs.isNull(lookupIdx)) return -1
             val idx = srcIdxs.getInt(lookupIdx)
-            if ((tombstones == null || !tombstones!!.contains(idx)) && srcHashes.getInt(lookupIdx) == hash && cmp.applyAsInt(idx) == 1) {
+            if ((tombstones == null || !tombstones!!.contains(idx)) && srcHashes.getInt(lookupIdx) == hash && cmp.test(idx)) {
                 if (removeOnMatch) {
                     if (tombstones == null) tombstones = RoaringBitmap()
                     tombstones!!.add(idx)

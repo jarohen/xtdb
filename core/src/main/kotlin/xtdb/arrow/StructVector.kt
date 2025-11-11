@@ -11,9 +11,10 @@ import org.apache.arrow.vector.types.pojo.ArrowType
 import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
+import xtdb.arrow.VectorType.Companion.NULL
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.error.Incorrect
-import xtdb.arrow.VectorType.Companion.NULL
 import xtdb.util.Hasher
 import xtdb.util.closeAllOnCatch
 import xtdb.util.closeOnCatch
@@ -144,6 +145,9 @@ class StructVector private constructor(
         childWriters.values.fold(0) { hash, child ->
             ByteFunctionHelpers.combineHash(hash, child.hashCode(idx, hasher))
         }
+
+    override fun equiComparator2(other: Vector) =
+        if (other is StructVector) TODO("StructVector/equiComparator2") else Never
 
     override fun rowCopier0(src: VectorReader): RowCopier {
         nullable = nullable || src.nullable

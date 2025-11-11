@@ -5,6 +5,7 @@ import org.apache.arrow.vector.PeriodDuration
 import org.apache.arrow.vector.types.Types.MinorType
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.time.Interval
 import xtdb.time.MILLI_HZ
@@ -15,20 +16,24 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Duration
 
-private class IntervalValueReader(private val vec: VectorReader) : ValueReader {
+private sealed interface IntervalVector : VectorReader {
+    fun getAsInterval(idx: Int): Interval
+
+    fun equiComparator2(other: Vector) =
+        if (other is IntervalVector) EquiComparator2 { t, o -> getAsInterval(t) == other.getAsInterval(o) } else Never
+}
+
+private class IntervalValueReader(private val vec: IntervalVector) : ValueReader {
     override var pos = 0
     override val isNull: Boolean get() = vec.isNull(pos)
 
-    override fun readObject(): Any? =
-        vec.getObject(pos)
-            ?.let { it as Interval }
-            ?.let { PeriodDuration(it.period, it.duration) }
+    override fun readObject() = vec.getAsInterval(pos).let { PeriodDuration(it.period, it.duration) }
 }
 
 class IntervalYearMonthVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.Presence {
+) : FixedWidthVector(), IntervalVector, MetadataFlavour.Presence {
 
     override val arrowType: ArrowType = MinorType.INTERVALYEAR.type
     override val byteWidth = Int.SIZE_BYTES
@@ -39,7 +44,9 @@ class IntervalYearMonthVector private constructor(
     override fun getInt(idx: Int) = getInt0(idx)
     override fun writeInt(v: Int) = writeInt0(v)
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = Interval(getInt(idx), 0, 0)
+    override fun getAsInterval(idx: Int) = Interval(getInt(idx), 0, 0)
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsInterval(idx)
 
     override fun writeObject0(value: Any) {
         when (value) {
@@ -54,6 +61,8 @@ class IntervalYearMonthVector private constructor(
 
     override fun valueReader(): ValueReader = IntervalValueReader(this)
 
+    override fun equiComparator2(other: Vector) = super.equiComparator2(other)
+
     override fun writeValue0(v: ValueReader) = writeObject(v.readObject())
 
     override val metadataFlavours get() = listOf(this)
@@ -67,7 +76,7 @@ private const val NANOS_PER_MILLI = NANO_HZ / MILLI_HZ
 class IntervalDayTimeVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.Presence {
+) : FixedWidthVector(), IntervalVector, MetadataFlavour.Presence {
 
     override val arrowType: ArrowType = MinorType.INTERVALDAY.type
     override val byteWidth = Long.SIZE_BYTES
@@ -76,10 +85,12 @@ class IntervalDayTimeVector private constructor(
         al: BufferAllocator, name: String, nullable: Boolean
     ) : this(name, nullable, 0, BitBuffer(al), ExtensibleBuffer(al))
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>): Interval {
+    override fun getAsInterval(idx: Int): Interval {
         val buf = getBytes0(idx).duplicate().order(ByteOrder.LITTLE_ENDIAN)
         return Interval(0, buf.getInt(), buf.getInt().toLong() * NANOS_PER_MILLI)
     }
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsInterval(idx)
 
     // Java Type uses little endian byte order in underlying BasedFixedWidthVector
     private val buf: ByteBuffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
@@ -111,6 +122,8 @@ class IntervalDayTimeVector private constructor(
 
     override fun valueReader(): ValueReader = IntervalValueReader(this)
 
+    override fun equiComparator2(other: Vector) = super.equiComparator2(other)
+
     override fun writeValue0(v: ValueReader) = writeObject(v.readObject())
 
     override val metadataFlavours get() = listOf(this)
@@ -122,7 +135,7 @@ class IntervalDayTimeVector private constructor(
 class IntervalMonthDayNanoVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.Presence {
+) : FixedWidthVector(), IntervalVector, MetadataFlavour.Presence {
 
     override val arrowType: ArrowType = MinorType.INTERVALMONTHDAYNANO.type
     override val byteWidth = 16
@@ -130,10 +143,12 @@ class IntervalMonthDayNanoVector private constructor(
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(name, nullable, 0, BitBuffer(al), ExtensibleBuffer(al))
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>): Interval {
+    override fun getAsInterval(idx: Int): Interval {
         val buf = getBytes0(idx).duplicate().order(ByteOrder.LITTLE_ENDIAN)
         return Interval(buf.getInt(), buf.getInt(), buf.getLong())
     }
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsInterval(idx)
 
     // Java Type uses little endian byte order in underlying BasedFixedWidthVector
     private val buf: ByteBuffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
@@ -175,6 +190,8 @@ class IntervalMonthDayNanoVector private constructor(
             else -> throw InvalidWriteObjectException(fieldType, value)
         }
 
+    override fun equiComparator2(other: Vector) = super.equiComparator2(other)
+
     override fun valueReader(): ValueReader = IntervalValueReader(this)
 
     override fun writeValue0(v: ValueReader) = writeObject(v.readObject())
@@ -187,12 +204,15 @@ class IntervalMonthDayNanoVector private constructor(
 
 class IntervalMonthDayMicroVector(
     override val inner: IntervalMonthDayNanoVector
-) : ExtensionVector(), MetadataFlavour.Presence {
+) : ExtensionVector(), IntervalVector, MetadataFlavour.Presence {
 
     override val arrowType = IntervalMDMType
 
     override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = inner.getObject0(idx, keyFn)
     override fun writeObject0(value: Any) = inner.writeObject(value)
+
+    override fun getAsInterval(idx: Int) = inner.getAsInterval(idx)
+    override fun equiComparator2(other: Vector) = super.equiComparator2(other)
 
     override val metadataFlavours get() = listOf(this)
 

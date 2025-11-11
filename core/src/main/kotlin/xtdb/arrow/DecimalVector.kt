@@ -16,7 +16,7 @@ class DecimalVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer,
     private val decimalType: Decimal
-) : FixedWidthVector(), MetadataFlavour.Number {
+) : FixedWidthVector.Numeric(), MetadataFlavour.Number {
 
     companion object {
         private val BIT_WIDTHS = setOf(32, 64, 128, 256)
@@ -37,8 +37,11 @@ class DecimalVector private constructor(
 
     override val arrowType: ArrowType = Decimal(precision, scale, bitWidth)
 
-    override fun getObject0(idx: Int, keyFn: IKeyFn<*>): BigDecimal =
-        dataBuffer.readBigDecimal(idx, scale, byteWidth)
+    private fun getAsBigDecimal(idx: Int): BigDecimal = dataBuffer.readBigDecimal(idx, scale, byteWidth)
+
+    override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getAsBigDecimal(idx)
+
+    override fun getAsDouble(idx: Int) = getAsBigDecimal(idx).toDouble()
 
     override fun writeObject0(value: Any) {
         if (value is BigDecimal) {

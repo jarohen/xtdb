@@ -6,6 +6,7 @@ import org.apache.arrow.vector.BaseFixedWidthVector
 import org.apache.arrow.vector.ValueVector
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode
 import org.apache.arrow.vector.types.TimeUnit
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.VectorIndirection.Companion.Selection
 import xtdb.arrow.VectorIndirection.Companion.Slice
 import xtdb.arrow.metadata.MetadataFlavour
@@ -20,6 +21,36 @@ internal fun TimeUnit.toLong(seconds: Long, nanos: Int): Long = when (this) {
 }
 
 sealed class FixedWidthVector : Vector() {
+
+    sealed class Numeric : FixedWidthVector() {
+        abstract fun getAsDouble(idx: Int): Double
+
+        override fun equiComparator2(other: Vector) =
+            if (other is Numeric) EquiComparator2 { t, o -> getAsDouble(t) == other.getAsDouble(o) } else Never
+    }
+
+    sealed class Integer : Numeric() {
+        abstract fun getAsLong(idx: Int): Long
+
+        override fun getAsDouble(idx: Int) = getAsLong(idx).toDouble()
+
+        override fun equiComparator2(other: Vector) =
+            if (other is Integer) EquiComparator2 { t, o -> getAsLong(t) == other.getAsLong(o) } else Never
+    }
+
+    sealed class Date : FixedWidthVector() {
+        abstract fun getAsDate(idx: Int): java.time.LocalDate
+
+        override fun equiComparator2(other: Vector) =
+            if (other is Date) EquiComparator2 { t, o -> getAsDate(t) == other.getAsDate(o) } else Never
+    }
+
+    sealed class Time : FixedWidthVector() {
+        abstract fun getAsTime(idx: Int): java.time.LocalTime
+
+        override fun equiComparator2(other: Vector) =
+            if (other is Time) EquiComparator2 { t, o -> getAsTime(t) == other.getAsTime(o) } else Never
+    }
 
     protected abstract val byteWidth: Int
     override val vectors: Iterable<Vector> = emptyList()
@@ -211,7 +242,10 @@ sealed class FixedWidthVector : Vector() {
         val node = nodes.removeFirstOrNull() ?: throw IllegalStateException("missing node")
         valueCount = node.length
 
-        validityBuffer.loadBuffer(buffers.removeFirstOrNull() ?: throw IllegalStateException("missing validity buffer"), valueCount)
+        validityBuffer.loadBuffer(
+            buffers.removeFirstOrNull() ?: throw IllegalStateException("missing validity buffer"),
+            valueCount
+        )
         dataBuffer.loadBuffer(buffers.removeFirstOrNull() ?: throw IllegalStateException("missing data buffer"))
     }
 

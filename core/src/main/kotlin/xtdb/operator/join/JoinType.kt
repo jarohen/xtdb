@@ -17,11 +17,12 @@ interface JoinType {
     }
 
     class Outer(override val outerJoinType: OuterJoinType) : JoinType {
-        
-        override val joinTypeName: String get() = when (outerJoinType) {
-            LEFT, LEFT_FLIPPED -> "left-join"
-            FULL -> "full-join"
-        }
+
+        override val joinTypeName: String
+            get() = when (outerJoinType) {
+                LEFT, LEFT_FLIPPED -> "left-join"
+                FULL -> "full-join"
+            }
 
         override fun probe(probeSide: ProbeSide): RelationReader {
             val matchingBuildIdxs = IntArrayList()
@@ -57,7 +58,7 @@ interface JoinType {
         @JvmField
         val INNER = object : JoinType {
             override val joinTypeName = "inner-join"
-            
+
             override fun probe(probeSide: ProbeSide): RelationReader {
                 val matchingBuildIdxs = IntArrayList()
                 val matchingProbeIdxs = IntArrayList()
@@ -88,24 +89,22 @@ interface JoinType {
         @JvmStatic
         fun ProbeSide.mark(markCol: BitVector) {
             repeat(rowCount) { probeIdx ->
-                when (matches(probeIdx)) {
-                    0 -> markCol.setNull(probeIdx)
-                    1 -> markCol.setBoolean(probeIdx, true)
-                    -1 -> markCol.setBoolean(probeIdx, false)
+                matches(probeIdx).let {
+                    if (it == null) markCol.setNull(probeIdx) else markCol.setBoolean(probeIdx, it)
                 }
             }
         }
 
         internal fun ProbeSide.semiJoinSelection() =
             IntArrayList().let { sel ->
-                forEachIndexOf( {probeIdx, buildIdx -> if (buildIdx >= 0) sel.add(probeIdx) } ,false)
+                forEachIndexOf({ probeIdx, buildIdx -> if (buildIdx >= 0) sel.add(probeIdx) }, false)
                 sel.toArray()
             }
 
         @JvmField
         val SEMI = object : JoinType {
             override val joinTypeName = "semi-join"
-            
+
             override fun probe(probeSide: ProbeSide): RelationReader {
                 return probeSide.probeRel.select(probeSide.semiJoinSelection())
             }
@@ -113,7 +112,7 @@ interface JoinType {
 
         internal fun ProbeSide.antiJoinSelection() =
             IntArrayList().let { sel ->
-                repeat(rowCount) { if (matches(it) < 0) sel.add(it) }
+                repeat(rowCount) { if (matches(it) == false) sel.add(it) }
 
                 sel.toArray()
             }
@@ -121,7 +120,7 @@ interface JoinType {
         @JvmField
         val ANTI = object : JoinType {
             override val joinTypeName = "anti-join"
-            
+
             override fun probe(probeSide: ProbeSide): RelationReader {
                 return probeSide.probeRel.select(probeSide.antiJoinSelection())
             }
@@ -130,7 +129,7 @@ interface JoinType {
         @JvmField
         val SINGLE = object : JoinType {
             override val joinTypeName = "single-join"
-            
+
             override fun probe(probeSide: ProbeSide): RelationReader {
                 val matchingBuildIdxs = IntArrayList()
                 val matchingProbeIdxs = IntArrayList()

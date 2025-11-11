@@ -2,6 +2,8 @@ package xtdb.arrow
 
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.ByPointer
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.vector.extensions.UriType
 import java.net.URI
@@ -27,6 +29,9 @@ class UriVector(override val inner: Utf8Vector) : ExtensionVector(), MetadataFla
         override val isNull: Boolean get() = this@UriVector.isNull(pos)
         override fun readObject(): Any? = getObject(pos)
     }
+
+    override fun equiComparator2(other: Vector) =
+        if (other is UriVector) ByPointer(this, other) else Never
 
     override fun openSlice(al: BufferAllocator) = UriVector(inner.openSlice(al))
 }

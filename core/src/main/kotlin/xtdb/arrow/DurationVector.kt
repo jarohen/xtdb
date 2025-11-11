@@ -5,6 +5,7 @@ import org.apache.arrow.vector.types.TimeUnit
 import org.apache.arrow.vector.types.TimeUnit.*
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.time.MICRO_HZ
 import xtdb.time.MILLI_HZ
@@ -52,6 +53,9 @@ class DurationVector private constructor(
             MICROSECOND -> getLong(idx) / MICRO_HZ.toDouble()
             NANOSECOND -> getLong(idx) / NANO_HZ.toDouble()
         }
+
+    override fun equiComparator2(other: Vector) =
+        if (other is DurationVector) EquiComparator2 { t, o -> getMetaDouble(t) == other.getMetaDouble(o) } else Never
 
     override fun hashCode0(idx: Int, hasher: Hasher) = hasher.hash(getMetaDouble(idx))
 

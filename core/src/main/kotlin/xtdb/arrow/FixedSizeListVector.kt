@@ -9,6 +9,7 @@ import org.apache.arrow.vector.types.pojo.ArrowType
 import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.util.Hasher
 import xtdb.util.closeOnCatch
@@ -105,6 +106,36 @@ class FixedSizeListVector private constructor(
     }
 
     override val metadataFlavours get() = listOf(this)
+
+    override fun equiComparator2(other: Vector): EquiComparator2 = when (other) {
+        is FixedSizeListVector -> {
+            if (listSize != other.listSize) Never
+            else {
+                val elComparator = elVector.equiComparator3(other.elVector)
+                EquiComparator2 { t, o ->
+                    val tStart = getListStartIndex(t)
+                    val oStart = other.getListStartIndex(o)
+                    (0 until listSize).all { elIdx ->
+                        elComparator.equals2(tStart + elIdx, oStart + elIdx)
+                    }
+                }
+            }
+        }
+        is ListVector -> {
+            val elComparator = elVector.equiComparator3(other.listElements)
+            EquiComparator2 { t, o ->
+                if (listSize != other.getListCount(o)) false
+                else {
+                    val tStart = getListStartIndex(t)
+                    val oStart = other.getListStartIndex(o)
+                    (0 until listSize).all { elIdx ->
+                        elComparator.equals2(tStart + elIdx, oStart + elIdx)
+                    }
+                }
+            }
+        }
+        else -> Never
+    }
 
     override fun hashCode0(idx: Int, hasher: Hasher) =
         (0 until listSize).fold(0) { hash, elIdx ->

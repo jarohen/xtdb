@@ -14,7 +14,7 @@ internal val I32 = MinorType.INT.type
 class IntVector private constructor(
     override var name: String, override var nullable: Boolean, override var valueCount: Int,
     override val validityBuffer: BitBuffer, override val dataBuffer: ExtensibleBuffer
-) : FixedWidthVector(), MetadataFlavour.Number {
+) : FixedWidthVector.Integer(), MetadataFlavour.Number {
 
     override val arrowType: ArrowType = I32
     override val byteWidth = Int.SIZE_BYTES
@@ -39,6 +39,8 @@ class IntVector private constructor(
     override fun getInt(idx: Int) = getInt0(idx)
     override fun writeInt(v: Int) = writeInt0(v)
     override fun getLong(idx: Int) = getInt(idx).toLong()
+
+    override fun getAsLong(idx: Int) = getInt(idx).toLong()
 
     override fun getObject0(idx: Int, keyFn: IKeyFn<*>) = getInt(idx)
 

@@ -4,6 +4,7 @@ import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.types.Types
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import java.nio.ByteBuffer
 
@@ -28,6 +29,9 @@ class VarBinaryVector private constructor(
         is ByteBuffer -> writeBytes(value)
         else -> throw InvalidWriteObjectException(fieldType, value)
     }
+
+    override fun equiComparator2(other: Vector): EquiComparator2 =
+        if (other is VarBinaryVector) EquiComparator2.ByPointer(this, other) else Never
 
     override val metadataFlavours get() = listOf(this)
 

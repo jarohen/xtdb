@@ -57,6 +57,12 @@ class IndirectVector(private val inner: VectorReader, private val sel: VectorInd
     override fun select(startIdx: Int, len: Int): VectorReader =
         IndirectVector(inner, selection(sel.select(startIdx, len)))
 
+    override fun equiComparator3(other: VectorReader): EquiComparator3 {
+        val inner = this.inner.equiComparator3(other)
+
+        return EquiComparator3 { thisIdx, otherIdx -> inner.equals3(sel[thisIdx], otherIdx) }
+    }
+
     override fun rowCopier(dest: VectorWriter): RowCopier {
         val innerCopier = inner.rowCopier(dest)
         return object : RowCopier {

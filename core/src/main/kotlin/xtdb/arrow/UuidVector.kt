@@ -2,6 +2,7 @@ package xtdb.arrow
 
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.vector.extensions.UuidType
 import java.nio.ByteBuffer
@@ -26,6 +27,9 @@ class UuidVector(override val inner: FixedSizeBinaryVector) : ExtensionVector(),
 
         else -> throw InvalidWriteObjectException(fieldType, value)
     }
+
+    override fun equiComparator2(other: Vector) =
+        if (other is UuidVector) EquiComparator2.ByPointer(this, other) else Never
 
     override val metadataFlavours get() = listOf(this)
 

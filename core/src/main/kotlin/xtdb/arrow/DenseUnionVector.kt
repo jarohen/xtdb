@@ -90,6 +90,8 @@ class DenseUnionVector private constructor(
 
         override fun getLeg(idx: Int) = inner.getLeg(getOffset(idx))
 
+        override fun equiComparator3(other: VectorReader) = TODO("DenseUnionVector/equiComparator2")
+
         override fun rowCopier(dest: VectorWriter): RowCopier {
             val innerCopier = inner.rowCopier(dest)
             return RowCopier { srcIdx -> innerCopier.copyRow(getOffset(srcIdx)) }
@@ -316,6 +318,8 @@ class DenseUnionVector private constructor(
         get() = legVectors.flatMap { it.metadataFlavours }
 
     override fun hashCode0(idx: Int, hasher: Hasher) = leg(idx)!!.hashCode(getOffset(idx), hasher)
+
+    override fun equiComparator2(other: Vector) = TODO("DenseUnionVector/equiComparator2")
 
     override fun rowCopier0(src: VectorReader): RowCopier =
         when {

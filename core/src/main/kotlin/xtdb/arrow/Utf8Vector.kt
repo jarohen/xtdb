@@ -4,6 +4,8 @@ import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.types.Types.MinorType
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.ByPointer
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import java.nio.ByteBuffer
 
@@ -27,6 +29,9 @@ class Utf8Vector private constructor(
         value is String -> writeBytes(ByteBuffer.wrap(value.toByteArray()))
         else -> throw InvalidWriteObjectException(fieldType, value)
     }
+
+    override fun equiComparator2(other: Vector): EquiComparator2 =
+        if (other is Utf8Vector) ByPointer(this, other) else Never
 
     override val metadataFlavours get() = listOf(this)
 

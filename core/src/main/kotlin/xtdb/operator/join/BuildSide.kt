@@ -12,7 +12,7 @@ import xtdb.expression.map.IndexHasher.Companion.hasher
 import xtdb.arrow.FieldName
 import xtdb.arrow.VectorType.Companion.I32
 import xtdb.arrow.VectorType.Companion.ofType
-import java.util.function.IntUnaryOperator
+import java.util.function.IntPredicate
 
 class BuildSide(
     private val al: BufferAllocator,
@@ -117,7 +117,7 @@ class BuildSide(
                     RelationReader.concatCols(buildRel, probeRel)
             }
 
-    fun indexOf(hashCode: Int, cmp: IntUnaryOperator, removeOnMatch: Boolean): Int =
+    fun indexOf(hashCode: Int, cmp: IntPredicate, removeOnMatch: Boolean): Int =
         requireNotNull(buildMap).findValue(hashCode, cmp, removeOnMatch)
 
     fun iterator(hashCode: Int) = requireNotNull(buildMap).iterator(hashCode)

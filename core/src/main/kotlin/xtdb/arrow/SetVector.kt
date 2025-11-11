@@ -3,6 +3,7 @@ package xtdb.arrow
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.util.Hasher
 import xtdb.vector.extensions.SetType
@@ -22,6 +23,9 @@ class SetVector(override val inner: ListVector) : ExtensionVector(), MetadataFla
             is ListValueReader -> inner.writeObject(value)
             else -> throw InvalidWriteObjectException(fieldType, value)
         }
+
+    override fun equiComparator2(other: Vector): EquiComparator2 =
+        if (other is SetVector) TODO("set vec equality") else Never
 
     override fun hashCode0(idx: Int, hasher: Hasher): Int {
         val elVector = inner.listElements

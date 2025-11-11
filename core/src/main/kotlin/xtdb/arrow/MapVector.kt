@@ -5,9 +5,9 @@ import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.ValueVector
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode
 import org.apache.arrow.vector.types.pojo.ArrowType
-import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.util.Hasher
 
 class MapVector(private val listVector: ListVector, private val keysSorted: Boolean) : Vector() {
@@ -95,6 +95,9 @@ class MapVector(private val listVector: ListVector, private val keysSorted: Bool
     override fun getMapKeys(fieldType: FieldType) = listElements.getMapKeys(fieldType)
     override val mapValues get() = listElements.mapValues
     override fun getMapValues(fieldType: FieldType) = listElements.getMapValues(fieldType)
+
+    override fun equiComparator2(other: Vector) =
+        if (other is MapVector) TODO("MapVector/equiComparator2") else Never
 
     override fun unloadPage(nodes: MutableList<ArrowFieldNode>, buffers: MutableList<ArrowBuf>) =
         listVector.unloadPage(nodes, buffers)

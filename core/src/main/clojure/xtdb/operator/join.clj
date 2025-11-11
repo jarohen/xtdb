@@ -301,9 +301,7 @@
 (defn ->cmp-factory [{:keys [build-fields probe-fields theta-expr param-fields args with-nil-row?]}]
   (reify ComparatorFactory
     (buildEqui [_ build-col probe-col]
-      (emap/->equi-comparator build-col probe-col args
-                              {:nil-keys-equal? with-nil-row?
-                               :param-fields param-fields}))
+      (.equiComparator3 build-col probe-col))
 
     (buildTheta [_ build-rel probe-rel]
       (when theta-expr

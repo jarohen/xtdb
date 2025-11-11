@@ -5,6 +5,7 @@ import org.apache.arrow.vector.types.TimeUnit.MICROSECOND
 import org.apache.arrow.vector.types.pojo.ArrowType.Timestamp
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.time.microsAsInstant
 import xtdb.types.ZonedDateTimeRange
@@ -42,6 +43,9 @@ class TsTzRangeVector(override val inner: FixedSizeListVector) : ExtensionVector
     }
 
     override val metadataFlavours get() = listOf(this)
+
+    override fun equiComparator2(other: Vector) =
+        if (other is TsTzRangeVector) inner.equiComparator2(other.inner) else Never
 
     override fun openSlice(al: BufferAllocator) = TsTzRangeVector(inner.openSlice(al))
 }

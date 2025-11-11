@@ -1,14 +1,13 @@
 package xtdb.operator.join
 
+import xtdb.arrow.EquiComparator3
 import xtdb.arrow.RelationReader
-import xtdb.expression.map.IndexHasher
 import xtdb.expression.map.IndexHasher.Companion.hasher
 import java.util.function.BiConsumer
-import java.util.function.IntBinaryOperator
 
 class ProbeSide(
     private val buildSide: BuildSide, val probeRel: RelationReader,
-    val keyColNames: List<String>, private val comparator: IntBinaryOperator,
+    val keyColNames: List<String>, private val comparator: EquiComparator3,
 ) {
 
     internal val buildRel = buildSide.dataRel
@@ -21,7 +20,7 @@ class ProbeSide(
         repeat(rowCount) { probeIdx ->
             val buildIdx = buildSide.indexOf(
                 hasher.hashCode(probeIdx),
-                { buildIdx -> comparator.applyAsInt(buildIdx, probeIdx) },
+                { buildIdx -> comparator.equals2(buildIdx, probeIdx) },
                 removeOnMatch
             )
             c.accept(probeIdx, buildIdx)
@@ -41,7 +40,7 @@ class ProbeSide(
 
                 while (iter.hasNext()) {
                     val idx = iter.nextInt()
-                    if (comparator.applyAsInt(idx, probeIdx) == 1) {
+                    if (comparator.equals2(idx, probeIdx)) {
                         nextValue = idx
                         hasNextValue = true
                         buildSide.addMatch(idx)
@@ -59,15 +58,18 @@ class ProbeSide(
         }
     }
 
-    fun matches(probeIdx: Int): Int {
+    fun matches(probeIdx: Int): Boolean? {
         // TODO: This doesn't use the hashTries, still a nested loop join
-        var acc = -1
+        var seenNull = false
         val buildRowCount = buildRel.rowCount
         for (buildIdx in 0 until buildRowCount) {
-            val res = comparator.applyAsInt(buildIdx, probeIdx)
-            if (res == 1) return 1
-            acc = maxOf(acc, res)
+            val res = comparator.equals3(buildIdx, probeIdx)
+            when (res) {
+                true -> return true
+                null -> seenNull = true
+                false -> Unit
+            }
         }
-        return acc
+        return if (seenNull) null else false
     }
 }

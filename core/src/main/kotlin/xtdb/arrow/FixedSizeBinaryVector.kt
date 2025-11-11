@@ -33,6 +33,10 @@ class FixedSizeBinaryVector private constructor(
 
     override fun writeValue0(v: ValueReader) = writeBytes(v.readBytes())
 
+    override fun equiComparator2(other: Vector): EquiComparator2 {
+        TODO("Not yet implemented")
+    }
+
     override val metadataFlavours get() = listOf(this)
 
     override fun openSlice(al: BufferAllocator) =

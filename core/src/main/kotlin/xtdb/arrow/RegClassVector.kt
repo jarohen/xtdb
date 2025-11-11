@@ -19,6 +19,9 @@ class RegClassVector(override val inner: IntVector) : ExtensionVector(), Metadat
         else -> throw InvalidWriteObjectException(fieldType, value)
     }
 
+    override fun equiComparator2(other: Vector) =
+        if (other is RegClassVector) inner.equiComparator2(other.inner) else EquiComparator2.Never
+
     override val metadataFlavours get() = listOf(this)
 
     override fun openSlice(al: BufferAllocator) = RegClassVector(inner.openSlice(al))

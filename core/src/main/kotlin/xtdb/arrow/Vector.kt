@@ -19,6 +19,7 @@ import org.apache.arrow.vector.types.pojo.DictionaryEncoding
 import org.apache.arrow.vector.types.pojo.Field
 import org.apache.arrow.vector.types.pojo.FieldType
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.CheckingNull
 import xtdb.trie.ColumnName
 import xtdb.arrow.VectorType.Companion.ofType
 import xtdb.util.Hasher
@@ -107,6 +108,14 @@ sealed class Vector : VectorReader, VectorWriter {
                 this
             }
         }
+
+    override fun equiComparator3(other: VectorReader): EquiComparator3 {
+        if (other !is Vector) return other.equiComparator3(this).flip()
+
+        return CheckingNull(this, other, equiComparator2(other))
+    }
+
+    internal abstract fun equiComparator2(other: Vector): EquiComparator2
 
     override fun rowCopier(dest: VectorWriter): RowCopier {
         if (dest is DenseUnionVector.LegVector) return dest.rowCopierFrom(this)

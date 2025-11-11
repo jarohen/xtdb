@@ -29,6 +29,8 @@ class TransitVector(override val inner: VarBinaryVector) : ExtensionVector(), Me
             else -> throw InvalidWriteObjectException(fieldType, value)
         }
 
+    override fun equiComparator2(other: Vector) = EquiComparator2 { thisIdx, otherIdx -> this[thisIdx] == other[otherIdx] }
+
     override val metadataFlavours get() = listOf(this)
 
     override fun openSlice(al: BufferAllocator) = TransitVector(inner.openSlice(al))

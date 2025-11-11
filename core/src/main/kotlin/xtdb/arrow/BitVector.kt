@@ -5,8 +5,8 @@ import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.ValueVector
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode
 import org.apache.arrow.vector.types.pojo.ArrowType
-import org.apache.arrow.vector.types.pojo.Field
 import xtdb.api.query.IKeyFn
+import xtdb.arrow.EquiComparator2.Never
 import xtdb.arrow.metadata.MetadataFlavour
 import xtdb.util.Hasher
 import org.apache.arrow.vector.BitVector as ArrowBitVector
@@ -71,6 +71,9 @@ class BitVector private constructor(
     }
 
     override fun writeValue0(v: ValueReader) = writeBoolean(v.readBoolean())
+
+    override fun equiComparator2(other: Vector) =
+        if (other is BitVector) EquiComparator2 { t, o -> getBoolean(t) == other.getBoolean(o) } else Never
 
     override val metadataFlavours get() = listOf(this)
 

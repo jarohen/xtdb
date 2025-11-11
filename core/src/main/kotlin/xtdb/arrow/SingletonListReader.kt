@@ -59,6 +59,8 @@ class SingletonListReader(override val name: String, private val elReader: Vecto
         }
     }
 
+    override fun equiComparator3(other: VectorReader) = TODO("SingletonListReader/equiComparator")
+
     override fun openSlice(al: BufferAllocator) =
         elReader.openSlice(al).closeOnCatch { slicedEl -> SingletonListReader(name, slicedEl) }
 
