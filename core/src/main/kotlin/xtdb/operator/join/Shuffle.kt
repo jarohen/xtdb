@@ -2,6 +2,8 @@ package xtdb.operator.join
 
 import com.carrotsearch.hppc.IntArrayList
 import org.apache.arrow.memory.BufferAllocator
+import org.apache.arrow.vector.compression.CompressionCodec
+import org.apache.arrow.vector.compression.CompressionUtil
 import xtdb.arrow.Relation
 import xtdb.arrow.Relation.RelationUnloader
 import xtdb.arrow.Vector.Companion.openVector
@@ -118,17 +120,23 @@ class Shuffle private constructor(
         // my kingdom for `util/with-close-on-catch` in Kotlin
         // y'all need macros. or monads.
 
+        private val DEFAULT_CODEC: CompressionCodec by lazy {
+            CompressionCodec.Factory.INSTANCE.createCodec(CompressionUtil.CodecType.LZ4_FRAME)
+        }
+
+        @JvmStatic
+        @JvmOverloads
         fun open(
             al: BufferAllocator, inDataRel: Relation, hashColNames: List<ColumnName>,
-            rowCount: Long, blockCount: Int, minParts: Int = 1
+            rowCount: Long, blockCount: Int, minParts: Int = 1, codec: CompressionCodec = DEFAULT_CODEC
         ): Shuffle =
             createTempFile("xtdb-build-side-shuffle-", ".arrow").deleteOnCatch { dataFile ->
                 Relation(al, inDataRel.schema).closeOnCatch { outDataRel ->
-                    outDataRel.startUnload(dataFile).closeOnCatch { dataUnloader ->
+                    outDataRel.startUnload(dataFile, codec = codec).closeOnCatch { dataUnloader ->
 
                         createTempFile("xtdb-build-side-shuffle-hash-", ".arrow").deleteOnCatch { hashFile ->
                             Relation(al, HASH_COL_NAME ofType I32).closeOnCatch { outHashRel ->
-                                outHashRel.startUnload(hashFile).closeOnCatch { hashUnloader ->
+                                outHashRel.startUnload(hashFile, codec = codec).closeOnCatch { hashUnloader ->
 
                                     Shuffle(
                                         al, inDataRel, hashColNames,

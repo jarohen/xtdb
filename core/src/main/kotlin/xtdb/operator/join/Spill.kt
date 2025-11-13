@@ -1,6 +1,8 @@
 package xtdb.operator.join
 
 import org.apache.arrow.memory.BufferAllocator
+import org.apache.arrow.vector.compression.CompressionCodec
+import org.apache.arrow.vector.compression.CompressionUtil
 import xtdb.arrow.Relation
 import xtdb.util.closeOnCatch
 import xtdb.util.deleteOnCatch
@@ -47,9 +49,15 @@ internal class Spill(
     }
 
     companion object {
-        fun open(al: BufferAllocator, dataRel: Relation): Spill =
+        private val DEFAULT_CODEC: CompressionCodec by lazy {
+            CompressionCodec.Factory.INSTANCE.createCodec(CompressionUtil.CodecType.LZ4_FRAME)
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun open(al: BufferAllocator, dataRel: Relation, codec: CompressionCodec = DEFAULT_CODEC): Spill =
             Files.createTempFile("xtdb-build-side-", ".arrow").deleteOnCatch { dataPath ->
-                dataRel.startUnload(dataPath).closeOnCatch { dataUnloader ->
+                dataRel.startUnload(dataPath, codec = codec).closeOnCatch { dataUnloader ->
                     Spill(al, dataRel, dataPath, dataUnloader)
                 }
             }

@@ -5,8 +5,10 @@ import clojure.lang.Symbol
 import org.apache.arrow.flatbuf.MessageHeader
 import org.apache.arrow.memory.ArrowBuf
 import org.apache.arrow.memory.BufferAllocator
-import org.apache.arrow.vector.VectorLoader
 import org.apache.arrow.vector.VectorSchemaRoot
+import org.apache.arrow.vector.compression.CompressionCodec
+import org.apache.arrow.vector.compression.CompressionUtil
+import org.apache.arrow.vector.compression.CompressionUtil.CodecType
 import org.apache.arrow.vector.compression.NoCompressionCodec
 import org.apache.arrow.vector.ipc.ReadChannel
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode
@@ -68,28 +70,32 @@ class Relation(
         rowCount = root.rowCount
     }
 
-    fun openArrowRecordBatch(): ArrowRecordBatch {
+    @JvmOverloads
+    fun openArrowRecordBatch(codec: CompressionCodec = NoCompressionCodec.INSTANCE): ArrowRecordBatch {
         val nodes = mutableListOf<ArrowFieldNode>()
-        return mutableListOf<ArrowBuf>().closeAllOnCatch { buffers ->
-            vecs.values.forEach { it.openUnloadedPage(nodes, buffers) }
+        val uncompressedBuffers = mutableListOf<ArrowBuf>()
 
-            ArrowRecordBatch(rowCount, nodes, buffers, NoCompressionCodec.DEFAULT_BODY_COMPRESSION, true, false)
-        }
+        vecs.values.forEach { it.openUnloadedPage(nodes, uncompressedBuffers) }
+
+        // uncompressed buffers closed here, compressed buffers opened
+        val compressedBuffers = uncompressedBuffers.safeMap { buf -> codec.compress(al, buf) }
+
+        // don't retain buffers here - we've opened them.
+        return ArrowRecordBatch(
+            rowCount, nodes, compressedBuffers,
+            CompressionUtil.createBodyCompression(codec), true,
+            /* retainBuffers = */ false
+        )
     }
 
-    fun openAsRoot(al: BufferAllocator): VectorSchemaRoot =
-        VectorSchemaRoot.create(schema, al)
-            .also { vsr ->
-                openArrowRecordBatch().use { recordBatch ->
-                    VectorLoader(vsr).load(recordBatch)
-                }
-            }
-
-    inner class RelationUnloader(private val arrowUnloader: ArrowUnloader) : ArrowWriter {
+    inner class RelationUnloader(
+        private val arrowUnloader: ArrowUnloader,
+        private val codec: CompressionCodec
+    ) : ArrowWriter {
 
         override fun writePage() {
             try {
-                openArrowRecordBatch().use { arrowUnloader.writeBatch(it) }
+                openArrowRecordBatch(codec).use { arrowUnloader.writeBatch(it) }
             } catch (_: ClosedByInterruptException) {
                 throw InterruptedException()
             }
@@ -101,11 +107,12 @@ class Relation(
     }
 
     @JvmOverloads
-    fun startUnload(ch: WritableByteChannel, mode: Mode = FILE) =
-        RelationUnloader(ArrowUnloader.open(ch, schema, mode))
+    fun startUnload(ch: WritableByteChannel, mode: Mode = FILE, codec: CompressionCodec = NoCompressionCodec.INSTANCE) =
+        RelationUnloader(ArrowUnloader.open(ch, schema, mode), codec)
 
-    fun startUnload(path: Path, mode: Mode = FILE) =
-        path.openWritableChannel().closeOnCatch { ch -> startUnload(ch, mode) }
+    @JvmOverloads
+    fun startUnload(path: Path, mode: Mode = FILE, codec: CompressionCodec = NoCompressionCodec.INSTANCE) =
+        path.openWritableChannel().closeOnCatch { ch -> startUnload(ch, mode, codec) }
 
     val asArrowStream: ByteArray
         get() {
@@ -118,12 +125,36 @@ class Relation(
             return baos.toByteArray()
         }
 
+    private fun CodecType.createCodec() = CompressionCodec.Factory.INSTANCE.createCodec(this)
+
     fun load(recordBatch: ArrowRecordBatch) {
         val nodes = recordBatch.nodes.toMutableList()
-        val buffers = recordBatch.buffers.toMutableList()
-        vecs.values.forEach { it.loadPage(nodes, buffers) }
-        require(nodes.isEmpty()) { "Unconsumed nodes: $nodes" }
-        require(buffers.isEmpty()) { "Unconsumed buffers: $buffers" }
+
+        val codecType = CodecType.fromCompressionType(recordBatch.bodyCompression.codec)
+
+        if (codecType != CodecType.NO_COMPRESSION) {
+            val codec = codecType.createCodec()
+
+            recordBatch.buffers
+                // decompress closes input buffer, but we shouldn't, so we retain
+                .safeMap { buf -> codec.decompress(al, buf.also { it.referenceManager.retain() }) }
+
+                // decompress then gives us a buffer with a ref-count.
+                // loadPage slices, so we close the decompressed buffers at the end
+                .useAll { buffers ->
+                    val bufQueue = buffers.toMutableList()
+                    vecs.values.forEach { it.loadPage(nodes, bufQueue) }
+                    require(nodes.isEmpty()) { "Unconsumed nodes: $nodes" }
+                    require(bufQueue.isEmpty()) { "Unconsumed buffers: $bufQueue" }
+                }
+
+        } else {
+            val buffers = recordBatch.buffers.toMutableList()
+
+            vecs.values.forEach { it.loadPage(nodes, buffers) }
+            require(nodes.isEmpty()) { "Unconsumed nodes: $nodes" }
+            require(buffers.isEmpty()) { "Unconsumed buffers: $buffers" }
+        }
 
         rowCount = recordBatch.length
     }
@@ -153,8 +184,18 @@ class Relation(
                 check(it == MessageHeader.RecordBatch) { "unexpected Type message type: $it" }
             }
 
-            MessageSerializer.deserializeRecordBatch(msg.message, msg.bodyBuffer ?: al.empty)
-                .use { rel.load(it) }
+            val recordBatch = MessageSerializer.deserializeRecordBatch(msg.message, msg.bodyBuffer ?: al.empty)
+            try {
+                rel.load(recordBatch)
+            } finally {
+                // If the record batch is compressed, the buffers have already been closed by decompress()
+                // So we need to suppress any errors from trying to close them again
+                try {
+                    recordBatch.close()
+                } catch (_: IllegalStateException) {
+                    // Ignore "RefCnt has gone negative" errors from compressed buffers
+                }
+            }
 
             return true
         }
@@ -172,7 +213,18 @@ class Relation(
         fun loadPage(idx: Int, al: BufferAllocator) = Relation(al, schema).closeOnCatch { loadPage(idx, it); it }
 
         fun loadPage(idx: Int, rel: Relation) {
-            arrowFileLoader.openPage(idx).use { rel.load(it) }
+            val recordBatch = arrowFileLoader.openPage(idx)
+            try {
+                rel.load(recordBatch)
+            } finally {
+                // If the record batch is compressed, the buffers have already been closed by decompress()
+                // So we need to suppress any errors from trying to close them again
+                try {
+                    recordBatch.close()
+                } catch (_: IllegalStateException) {
+                    // Ignore "RefCnt has gone negative" errors from compressed buffers
+                }
+            }
             lastPageIndex = idx
         }
 
