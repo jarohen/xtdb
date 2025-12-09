@@ -25,6 +25,7 @@
             xtdb.operator.project
             xtdb.operator.rename
             [xtdb.operator.scan :as scan]
+            [xtdb.trie-catalog :as trie-cat]
             xtdb.operator.select
             xtdb.operator.set
             xtdb.operator.table
@@ -58,6 +59,7 @@
            (xtdb.indexer Snapshot)
            xtdb.operator.scan.IScanEmitter
            (xtdb.query IQuerySource PreparedQuery)
+           xtdb.trie.TrieCatalog
            xtdb.util.RefCounter))
 
 (defn- wrap-result-fields [^ICursor cursor, result-fields]
@@ -257,6 +259,19 @@
    (serde-types/->field {"page_count" :i64})
    (serde-types/->field {"row_count" :i64})])
 
+(def ^:private explain-scan-files-fields
+  [(serde-types/->field {"trie_key" :utf8})
+   (serde-types/->field {"level" :i32})
+   (serde-types/->field {"recency" [:? :date :day]})
+   (serde-types/->field {"row_count" [:? :i64]})
+   (serde-types/->field {"data_file_size" :i64})
+   (serde-types/->field {"min_valid_from" [:? :instant]})
+   (serde-types/->field {"max_valid_from" [:? :instant]})
+   (serde-types/->field {"min_valid_to" [:? :instant]})
+   (serde-types/->field {"max_valid_to" [:? :instant]})
+   (serde-types/->field {"min_system_from" [:? :instant]})
+   (serde-types/->field {"max_system_from" [:? :instant]})])
+
 (defn- explain-analyze-results [^IResultCursor cursor]
   (letfn [(->results [^ICursor cursor, depth]
             (lazy-seq
@@ -273,6 +288,33 @@
                (->results (first (.getChildCursors cursor)) depth))))]
 
     (vec (->results cursor 0))))
+
+(defn- explain-scan-files-results
+  [^BufferAllocator allocator ^Database$Catalog db-cat snaps
+   {:keys [scan-files-table scan-files-for-valid-time scan-files-for-system-time]} args snapshot-token]
+  (let [db-name (.getDbName scan-files-table)
+        db (.databaseOrNull db-cat db-name)
+        ^TrieCatalog trie-catalog (.getTrieCatalog db)
+        temporal-bounds (scan/->temporal-bounds allocator args
+                                                 {:for-valid-time scan-files-for-valid-time
+                                                  :for-system-time scan-files-for-system-time}
+                                                 (some-> snapshot-token (basis/<-time-basis-str) (get-in [db-name 0])))
+        tries (scan/filtered-tries trie-catalog scan-files-table temporal-bounds)]
+    (vec (for [{:keys [trie-key level recency data-file-size trie-metadata]} tries
+               :let [{:keys [min-valid-from max-valid-from min-valid-to max-valid-to
+                             min-system-from max-system-from row-count]}
+                     (trie-cat/<-trie-metadata trie-metadata)]]
+           {:trie_key trie-key
+            :level (int level)
+            :recency recency
+            :row_count row-count
+            :data_file_size data-file-size
+            :min_valid_from min-valid-from
+            :max_valid_from max-valid-from
+            :min_valid_to min-valid-to
+            :max_valid_to max-valid-to
+            :min_system_from min-system-from
+            :max_system_from max-system-from}))))
 
 (defprotocol PQuerySource
   (-plan-query [q-src parsed-query query-opts table-info]))
@@ -295,7 +337,8 @@
                   {:keys [ordered-outer-projection warnings param-count], :or {param-count 0}, :as plan-meta} (meta plan)]
 
               (into (select-keys plan-meta [:current-time :snapshot-token :snapshot-time
-                                            :explain? :explain-analyze?])
+                                            :explain? :explain-analyze?
+                                            :explain-scan-files? :scan-files-table :scan-files-for-valid-time :scan-files-for-system-time])
                     {:plan plan,
                      :conformed-plan conformed-plan
                      :scan-cols (->> (lp/child-exprs conformed-plan)
@@ -340,15 +383,17 @@
 
             (getColumnFields [_ param-fields]
               (let [planned-query (plan-query* @!table-info)]
-                (util/with-open [snaps (open-snaps)]
-                  (let [emitted-query (emit-query planned-query scan-emitter db-cat snaps
-                                                  (->> param-fields
-                                                       (into {} (map (juxt (comp symbol #(.getName ^Field %)) identity))))
-                                                  query-opts)]
-                    (cond
-                      (:explain? planned-query) (explain-plan-fields (->explain-plan emitted-query))
-                      (:explain-analyze? planned-query) explain-analyze-fields
-                      :else (:fields emitted-query))))))
+                (if (:explain-scan-files? planned-query)
+                  explain-scan-files-fields
+                  (util/with-open [snaps (open-snaps)]
+                    (let [emitted-query (emit-query planned-query scan-emitter db-cat snaps
+                                                    (->> param-fields
+                                                         (into {} (map (juxt (comp symbol #(.getName ^Field %)) identity))))
+                                                    query-opts)]
+                      (cond
+                        (:explain? planned-query) (explain-plan-fields (->explain-plan emitted-query))
+                        (:explain-analyze? planned-query) explain-analyze-fields
+                        :else (:fields emitted-query)))))))
 
             (getWarnings [_] (:warnings (plan-query* @!table-info)))
 
@@ -367,39 +412,59 @@
                              (vector? args) (vw/open-args allocator args)
                              (nil? args) vw/empty-args
                              :else (throw (ex-info "invalid args"
-                                                   {:type (class args)})))
+                                                   {:type (class args)})))]
 
-                      {:keys [fields ->cursor] :as emitted-query} (emit-query planned-query scan-emitter db-cat snaps (->arg-fields args) query-opts)
-                      current-time (or (some-> (or (:current-time planned-query) current-time)
-                                               (expr->value {:args args})
-                                               (time/->instant {:default-tz default-tz}))
-                                       (expr/current-time))
-                      query-span (when tracer
-                                   (metrics/start-span tracer "xtdb.query" {:attributes {:query.text query-text}}))
-                      closeable-query-span (when query-span
-                                             (reify AutoCloseable
-                                               (close [_] (.end query-span))))]
+                  ;; Handle explain-scan-files? early - it doesn't need emit-query
+                  (if (:explain-scan-files? planned-query)
+                    (do
+                      (.acquire ref-ctr)
+                      (try
+                        (binding [expr/*default-tz* default-tz
+                                  expr/*snapshot-token* (some-> (or (default-basis snaps))
+                                                                (basis/->time-basis-str))]
+                          (let [scan-files-results (explain-scan-files-results allocator db-cat snaps planned-query args expr/*snapshot-token*)]
+                            (-> (PagesCursor. allocator nil [scan-files-results])
+                                (wrap-result-fields explain-scan-files-fields)
+                                (wrap-closeables ref-ctr (cond-> [snaps allocator]
+                                                           close-args? (cons args))))))
+                        (catch Throwable t
+                          (.release ref-ctr)
+                          (when close-args?
+                            (util/close args))
+                          (throw t))))
 
-                  (when (seq (:warnings planned-query))
-                    (.increment query-warning-counter))
+                    ;; Normal query processing
+                    (let [{:keys [fields ->cursor] :as emitted-query} (emit-query planned-query scan-emitter db-cat snaps (->arg-fields args) query-opts)
+                          current-time (or (some-> (or (:current-time planned-query) current-time)
+                                                   (expr->value {:args args})
+                                                   (time/->instant {:default-tz default-tz}))
+                                           (expr/current-time))
+                          query-span (when tracer
+                                       (metrics/start-span tracer "xtdb.query" {:attributes {:query.text query-text}}))
+                          closeable-query-span (when query-span
+                                                 (reify AutoCloseable
+                                                   (close [_] (.end query-span))))]
 
-                  (.acquire ref-ctr)
-                  (try
-                    (binding [expr/*clock* (InstantSource/fixed current-time)
-                              expr/*default-tz* default-tz
+                      (when (seq (:warnings planned-query))
+                        (.increment query-warning-counter))
 
-                              ;; both snapshot-token and snapshot-time form upper bounds - the result is the intersection of the two
-                              expr/*snapshot-token* (some-> (cond-> (or (some-> (:snapshot-token planned-query snapshot-token)
-                                                                                (expr->value {:args args})
-                                                                                (basis/<-time-basis-str)
-                                                                                (doto (validate-basis-not-before snaps)))
+                      (.acquire ref-ctr)
+                      (try
+                        (binding [expr/*clock* (InstantSource/fixed current-time)
+                                  expr/*default-tz* default-tz
 
-                                                                        (default-basis snaps))
-                                                              snapshot-time (basis/cap-basis (time/->instant snapshot-time)))
-                                                            (basis/->time-basis-str))
-                              expr/*await-token* await-token]
+                                  ;; both snapshot-token and snapshot-time form upper bounds - the result is the intersection of the two
+                                  expr/*snapshot-token* (some-> (cond-> (or (some-> (:snapshot-token planned-query snapshot-token)
+                                                                                    (expr->value {:args args})
+                                                                                    (basis/<-time-basis-str)
+                                                                                    (doto (validate-basis-not-before snaps)))
 
-                      (if (:explain? planned-query)
+                                                                            (default-basis snaps))
+                                                                  snapshot-time (basis/cap-basis (time/->instant snapshot-time)))
+                                                                (basis/->time-basis-str))
+                                  expr/*await-token* await-token]
+
+                          (if (:explain? planned-query)
                         (let [explain-plan (->explain-plan emitted-query)]
                           (-> (PagesCursor. allocator nil [explain-plan])
                               (wrap-result-fields (explain-plan-fields explain-plan))
@@ -435,11 +500,11 @@
                                                            close-args? (cons args)
                                                            closeable-query-span (cons closeable-query-span))))))))
 
-                    (catch Throwable t
-                      (.release ref-ctr)
-                      (when close-args?
-                        (util/close args))
-                      (throw t)))))))))))
+                        (catch Throwable t
+                          (.release ref-ctr)
+                          (when close-args?
+                            (util/close args))
+                          (throw t)))))))))))))
 
   AutoCloseable
   (close [_]

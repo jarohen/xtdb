@@ -326,8 +326,8 @@ WHERE foo._id = 1"]])
            (xt/q tu/*node* "SELECT _id foo, x FROM foo LEFT JOIN bar USING (_id, x) ORDER BY _id")))
 
   #_ ; FIXME #2302
-  (t/is (= []
-           (xt/q tu/*node* "SELECT foo._id foo, foo.x FROM foo LEFT JOIN bar USING (_id) WHERE foo.x = bar.x"))))
+    (t/is (= []
+             (xt/q tu/*node* "SELECT foo._id foo, foo.x FROM foo LEFT JOIN bar USING (_id) WHERE foo.x = bar.x"))))
 
 (t/deftest test-list-round-trip-2342
   (xt/submit-tx tu/*node* [[:sql "INSERT INTO t3(_id, data) VALUES (1, [2, 3])"]
@@ -478,7 +478,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
            (set (xt/q tu/*node* "SELECT * EXCLUDE (_id, b) RENAME a AS new FROM foo"))))
 
   (xt/execute-tx tu/*node*
-                [[:sql "INSERT INTO bing (SELECT * FROM foo)"]])
+                 [[:sql "INSERT INTO bing (SELECT * FROM foo)"]])
 
   (t/is (= #{{:a 1, :xt/id 1} {:b 2, :xt/id 2}}
            (set (xt/q tu/*node* "SELECT * FROM bing"))))
@@ -544,6 +544,57 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
            (xt/q tu/*node*
                  "EXPLAIN SELECT u._id, u.foo FROM users u WHERE u.a + u.b = 12 AND u.b = 1"))))
 
+(t/deftest test-explain-scan-files
+  (xt/execute-tx tu/*node* [[:put-docs :readings
+                             {:xt/id 1, :xt/valid-from #inst "2020-01-01", :xt/valid-to #inst "2020-06-01"}
+                             {:xt/id 1, :xt/valid-from #inst "2020-06-01", :xt/valid-to #inst "2021-01-01"}
+                             {:xt/id 2, :xt/valid-from #inst "2020-06-01", :xt/valid-to #inst "2021-01-01"}]])
+  (tu/finish-block! tu/*node*)
+
+  (t/is (= [{:trie-key "l01-r20210104-b00", :recency #xt/date "2021-01-04",
+             :level 1, :row-count 2, :data-file-size true
+             :min-valid-from #xt/zdt "2020-06-01T00:00Z[UTC]",
+             :max-valid-from #xt/zdt "2020-06-01T00:00Z[UTC]"
+             :min-valid-to #xt/zdt "2021-01-01T00:00Z[UTC]",
+             :max-valid-to #xt/zdt "2021-01-01T00:00Z[UTC]"
+             :min-system-from #xt/zdt "2020-01-01T00:00Z[UTC]",
+             :max-system-from #xt/zdt "2020-01-01T00:00Z[UTC]"}
+            {:trie-key "l01-r20200601-b00", :recency #xt/date "2020-06-01",
+             :level 1, :row-count 1, :data-file-size true
+             :min-valid-from #xt/zdt "2020-01-01T00:00Z[UTC]",
+             :max-valid-from #xt/zdt "2020-01-01T00:00Z[UTC]",
+             :min-valid-to #xt/zdt "2020-06-01T00:00Z[UTC]",
+             :max-valid-to #xt/zdt "2020-06-01T00:00Z[UTC]",
+             :min-system-from #xt/zdt "2020-01-01T00:00Z[UTC]",
+             :max-system-from #xt/zdt "2020-01-01T00:00Z[UTC]"}]
+
+           (->> (xt/q tu/*node* "EXPLAIN SCAN_FILES FROM readings")
+                (mapv #(update % :data-file-size number?)))))
+
+  (t/is (empty? (xt/q tu/*node* "EXPLAIN SCAN_FILES FROM readings FOR VALID_TIME AS OF TIMESTAMP '2019-01-01 00:00:00'"))
+        "temporal filtering excludes files"))
+
+(t/deftest test-explain-scan-files-with-compaction
+  ;; Insert multiple batches to trigger compaction
+  (dotimes [batch 3]
+    (xt/execute-tx tu/*node*
+                   [(into [:put-docs :events]
+                          (for [i (range 10)]
+                            {:xt/id (+ i (* batch 10))
+                             :batch batch
+                             :value (* i 10)}))])
+    (tu/finish-block! tu/*node*))
+
+  ;; Compact L0 -> L1
+  (c/compact-all! tu/*node* #xt/duration "PT1S")
+
+  (let [results (xt/q tu/*node* "EXPLAIN SCAN_FILES FROM events")]
+    (t/is (seq results) "Should have files after compaction")
+    ;; After compaction, we should have files at different levels
+    (let [levels (set (map :level results))]
+      (t/is (or (contains? levels 0) (contains? levels 1))
+            "Should have L0 or L1 files"))))
+
 (t/deftest test-normalising-nested-cols-2483
   (xt/submit-tx tu/*node* [[:put-docs :docs {:xt/id 1 :foo {:a/b "foo"}}]])
   (t/is (= [{:foo {:a/b "foo"}}] (xt/q tu/*node* "SELECT docs.foo FROM docs")))
@@ -566,9 +617,9 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
                                 [:put-docs :docs doc]))
 
       #_ ; FIXME #2923
-      (t/is (= (set docs)
-               (->> (xt/q node '{:find [e] :where [(match :docs {:xt/* e})]})
-                    (into #{} (map :e))))))))
+        (t/is (= (set docs)
+                 (->> (xt/q node '{:find [e] :where [(match :docs {:xt/* e})]})
+                      (into #{} (map :e))))))))
 
 (t/deftest non-existant-column-no-nil-rows-2898
   (xt/submit-tx tu/*node* [[:sql "INSERT INTO foo(_id, bar) VALUES (1, 2)"]])
@@ -625,7 +676,6 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
                  [:put-docs :track {:xt/id :track-2 :name "foo2" :composer "bar" :album :album-1}]
                  [:put-docs :album {:xt/id :album-1 :name "foo-album"}]])
 
-
   (t/is (= {:name "foo-album", :tracks #{"foo1" "foo2"}}
            (-> (xt/q tu/*node*
                      "SELECT a.name, ARRAY_AGG(t.name) AS tracks
@@ -637,13 +687,13 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
         "array-agg")
 
   #_ ;;TODO parser needs to be adpated #2948
-  (t/is (= [{:name "foo-album", :tracks ["bar"]}]
-           (xt/q tu/*node*
-                 "SELECT a.name, ARRAY_AGG(DISTINCT t.composer) AS composer
+    (t/is (= [{:name "foo-album", :tracks ["bar"]}]
+             (xt/q tu/*node*
+                   "SELECT a.name, ARRAY_AGG(DISTINCT t.composer) AS composer
                   FROM track AS t, album AS a
                   WHERE t.album = a._id
                   GROUP BY a.name"))
-        "array-agg distinct"))
+          "array-agg distinct"))
 
 (t/deftest start-node-from-non-map-config
   (t/testing "directly using Xtdb$Config"
@@ -784,7 +834,6 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
   (xt/submit-tx tu/*node* [[:put-docs :bar {:xt/id 1, :col 904292726}]
                            [:put-docs :bar {:xt/id 2, :col 1111}]])
 
-
   (t/is (= [{:v (RegClass. 904292726)}]
            (tu/query-ra
             '[:project [{v (cast "bar" :regclass)}]
@@ -867,7 +916,6 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
             (t/is (= (set [{:xt/id :foo} {:xt/id :baz}])
                      (set (xt/q node "SELECT * from xt_docs"))))))))))
 
-
 (t/deftest test-skip-txes-latest-submitted-tx-id
   (let [!skiptxid (atom nil)]
     (util/with-tmp-dirs #{path}
@@ -935,7 +983,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
 
 (deftest check-explicitly-for-l0-content-metadat-4185
   (with-open [node (xtn/start-node {:compactor {:threads 0}})]
-    (xt/execute-tx node [[:put-docs :docs {:xt/id 1 :a #inst "2000-01-01"}]] )
+    (xt/execute-tx node [[:put-docs :docs {:xt/id 1 :a #inst "2000-01-01"}]])
     (tu/finish-block! node)
 
     (t/is (= [{:xt/id 1}]
@@ -1044,7 +1092,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
 (t/deftest ^:integration log-backpressure-doesnt-halt-indexer-4285
   (doseq [batch (partition-all 1000 (range 400000))]
     (xt/submit-tx tu/*node* [(into [:put-docs :docs] (map (fn [idx] {:xt/id idx})) batch)]))
-  (t/is (= [{:v 1 }] (xt/q tu/*node* "SELECT 1 AS v"))))
+  (t/is (= [{:v 1}] (xt/q tu/*node* "SELECT 1 AS v"))))
 
 (deftest pushdown-blooms-not-working-for-l0
   (binding [c/*ignore-signal-block?* true]
@@ -1261,7 +1309,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
     (xt/execute-tx tu/*node* [[:put-docs :docs {:xt/id 8 :a ["NULL"]}]])
     (t/is (= [{:xt/id 8 :a ["NULL"]}]
              (xt/q tu/*node* "SELECT * FROM docs WHERE _id = 8"))))
-  
+
   (t/testing "escape characters"
     (xt/execute-tx tu/*node* [[:put-docs :docs {:xt/id 9 :a ["\n" "\t" "\r"]}]])
     (t/is (= [{:xt/id 9 :a ["\n" "\t" "\r"]}]
@@ -1277,7 +1325,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
     (xt/execute-tx tu/*node* [[:delete-docs :xtqldocs 0 "foo" :bar #uuid "a3a3690b-e3a7-4e62-b03e-69cf9982ebd3"]])
     (xt/execute-tx tu/*node* [[:erase-docs :xtqldocs 0 "foo" :bar #uuid "a3a3690b-e3a7-4e62-b03e-69cf9982ebd3"]])
     (t/is (empty? (xt/q tu/*node* "SELECT * FROM xtqldocs"))))
-  
+
   (t/testing "sql"
     (xt/execute-tx tu/*node* [[:sql "INSERT INTO sqldocs (_id) VALUES (?)" [0] ["foo"] [:bar] [#uuid "a3a3690b-e3a7-4e62-b03e-69cf9982ebd3"]]])
     (tu/finish-block! tu/*node*)

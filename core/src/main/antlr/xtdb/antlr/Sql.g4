@@ -16,6 +16,11 @@ multiSqlStatement : directlyExecutableStatement ( ';' directlyExecutableStatemen
 directlyExecutableStatement
     : (EXPLAIN ANALYZE?)? settingQueryVariables? queryExpression #QueryExpr
 
+    | EXPLAIN SCAN_FILES FROM targetTable
+      (queryValidTimePeriodSpecification | querySystemTimePeriodSpecification)*
+      whereClause?
+      #ExplainScanFilesStatement
+
     | 'INSERT' 'INTO' targetTable insertColumnsAndSource returningStatement? #InsertStatement
 
     | 'UPDATE' targetTable dmlStatementValidTimeExtents? ( 'AS'? correlationName=identifier )?
@@ -148,6 +153,7 @@ identifier
         | 'URI'
         | 'COPY' | 'FORMAT'
         | 'ATTACH' | 'DETACH' | 'DATABASE'
+        | SCAN_FILES
         | setFunctionType )
         # RegularIdentifier
     | DELIMITED_IDENTIFIER # DelimitedIdentifier

@@ -3001,7 +3001,32 @@
                                       (map-indexed (fn [idx expr]
                                                      (MapEntry/create (symbol (str "?_" idx)) expr))))))]
       (->QueryExpr [:table [(into {} arg-row)]]
-                   (vec (keys arg-row))))))
+                   (vec (keys arg-row)))))
+
+  (visitExplainScanFilesStatement [_ ctx]
+    (let [{:keys [default-db]} env
+          table-name (-> (identifier-sym (.targetTable ctx)) (util/with-default-schema))
+          table (table/->ref default-db table-name)
+          expr-visitor (->ExprPlanVisitor env (->NoColumnReferenceAllowed "No column reference allowed in table period specification: "))
+
+          parse-time-period (fn [specs]
+                              (case (count specs)
+                                0 nil
+                                1 (.accept ^ParserRuleContext (first specs) (->TableTimePeriodSpecificationVisitor expr-visitor))
+                                (add-err! env (->MultipleTimePeriodSpecifications))))
+
+          for-valid-time (parse-time-period (.queryValidTimePeriodSpecification ctx))
+          for-system-time (parse-time-period (.querySystemTimePeriodSpecification ctx))
+
+          col-syms '[trie_key level recency row_count data_file_size
+                     min_valid_from max_valid_from min_valid_to max_valid_to
+                     min_system_from max_system_from]]
+
+      (-> (->QueryExpr [:table col-syms [{}]] col-syms)
+          (assoc :explain-scan-files? true
+                 :scan-files-table table
+                 :scan-files-for-valid-time for-valid-time
+                 :scan-files-for-system-time for-system-time)))))
 
 (defn xform-table-info [table-info default-db]
   ;; this fn turned up in a profiler the last time I checked, particularly for low-latency queries.
@@ -3131,7 +3156,8 @@
             (-> plan
                 (vary-meta (fn [m]
                              (-> (or m {})
-                                 (into (select-keys stmt [:explain? :explain-analyze? :current-time :snapshot-token :snapshot-time]))
+                                 (into (select-keys stmt [:explain? :explain-analyze? :current-time :snapshot-token :snapshot-time
+                                                         :explain-scan-files? :scan-files-table :scan-files-for-valid-time :scan-files-for-system-time]))
                                  (assoc :param-count @!param-count
                                         :warnings @!warnings
                                         :ordered-outer-projection col-syms)))))))))))
@@ -3200,7 +3226,8 @@
   (visitQueryExpr [_ _])
   (visitShowVariableStatement [_ _])
   (visitCreateUserStatement [_ _])
-  (visitAlterUserStatement [_ _]))
+  (visitAlterUserStatement [_ _])
+  (visitExplainScanFilesStatement [_ _]))
 
 (defn sql->static-ops
   ([sql arg-rows] (sql->static-ops sql arg-rows {}))

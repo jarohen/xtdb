@@ -875,7 +875,10 @@
 
                                         (visitDetachDatabaseStatement [_ ctx]
                                           {:statement-type :detach-db
-                                           :db-name (str (sql/identifier-sym (.dbName ctx)))})))))))
+                                           :db-name (str (sql/identifier-sym (.dbName ctx)))})
+
+                                        (visitExplainScanFilesStatement [_ ctx]
+                                          {:statement-type :query, :query (subsql ctx), :parsed-query ctx})))))))
 
               (catch Exception e
                 (log/debug e "Error parsing SQL")

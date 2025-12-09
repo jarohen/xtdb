@@ -113,6 +113,11 @@
 
       bounds)))
 
+(defn filtered-tries [^TrieCatalog trie-catalog table temporal-bounds]
+  (-> (cat/trie-state trie-catalog table)
+      (cat/current-tries)
+      (cat/filter-tries temporal-bounds)))
+
 (defn tables-with-cols [^Snapshot$Source snap-src]
   (with-open [snap (.openSnapshot snap-src)]
     (.getSchema snap)))
@@ -156,7 +161,6 @@
              (and (>= bloom-vec-idx 0)
                   (or (.isNull bloom-rdr bloom-vec-idx)
                       (MutableRoaringBitmap/intersects pushdown-bloom (BloomUtils/bloomToBitmap bloom-rdr bloom-vec-idx)))))))))))
-
 
 (defn ->path-pred [^SortedSet iid-set]
   (when (and iid-set (not (.isEmpty iid-set)))
@@ -278,10 +282,8 @@
                                                                       (get-in [(.getName db) 0])))]
 
                            (util/with-close-on-catch [!segments (LinkedList.)]
-                             
-                             (doseq [{:keys [^String trie-key]} (-> (cat/trie-state trie-catalog table)
-                                                                    (cat/current-tries)
-                                                                    (cat/filter-tries temporal-bounds))]
+
+                             (doseq [{:keys [^String trie-key]} (filtered-tries trie-catalog table temporal-bounds)]
                                (.add !segments
                                      (BufferPoolSegment. allocator buffer-pool metadata-mgr table trie-key metadata-pred)))
 
