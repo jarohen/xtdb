@@ -2,7 +2,6 @@ import xtdb.DataReaderTransformer
 
 plugins {
     java
-    application
     id("com.gradleup.shadow")
 }
 
@@ -16,10 +15,6 @@ dependencies {
 }
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(21))
-
-application {
-    mainClass.set("clojure.main")
-}
 
 tasks.jar {
     manifest {
@@ -35,4 +30,7 @@ tasks.shadowJar {
     archiveClassifier.set("google-cloud")
     mergeServiceFiles()
     transform(DataReaderTransformer())
+    manifest {
+        attributes("Main-Class" to "clojure.main")
+    }
 }

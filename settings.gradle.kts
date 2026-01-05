@@ -5,9 +5,6 @@ project(":api").name = "xtdb-api"
 project(":core").name = "xtdb-core"
 project(":main").name = "xtdb-main"
 
-include("lang:test-harness")
-project(":lang:test-harness").name = "test-harness"
-
 include("docker:standalone", "docker:aws", "docker:azure", "docker:google-cloud")
 
 include("modules:kafka", "modules:kafka-connect", "modules:aws", "modules:azure", "modules:google-cloud")
@@ -19,5 +16,3 @@ project(":modules:google-cloud").name = "xtdb-google-cloud"
 
 include("modules:bench", "modules:datasets")
 project(":modules:datasets").name = "xtdb-datasets"
-
-include("monitoring", "monitoring:docker-image")
