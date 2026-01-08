@@ -19,15 +19,15 @@
 (defmethod lp/emit-expr :select [{:keys [opts relation]} {:keys [param-fields] :as args}]
   (let [{:keys [predicate]} opts]
     (lp/unary-expr (lp/emit-expr relation args)
-      (fn [{inner-fields :fields, inner-stats :stats :as inner-rel}]
-        (let [input-types {:vec-fields inner-fields
+      (fn [{inner-vec-types :vec-types, inner-stats :stats :as inner-rel}]
+        (let [input-types {:vec-fields inner-vec-types
                            :param-fields param-fields}
               selector (expr/->expression-selection-spec (expr/form->expr predicate input-types) input-types)]
           {:op :select
            :stats inner-stats
            :children [inner-rel]
            :explain  {:predicate (pr-str predicate)}
-           :fields inner-fields
+           :vec-types inner-vec-types
            :->cursor (fn [{:keys [allocator args schema explain-analyze? tracer query-span]} in-cursor]
                        (cond-> (-> (SelectCursor. allocator in-cursor selector schema args)
                                    (coalesce/->coalescing-cursor allocator))

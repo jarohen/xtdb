@@ -2146,8 +2146,12 @@
 
 (defn ->expression-projection-spec ^xtdb.operator.ProjectionSpec [col-name expr {:keys [vec-fields param-fields]}]
   (let [;; HACK - this runs the analyser (we discard the emission) to get the widest possible out-type.
+        ;; vec-fields can be either Fields (old) or VectorTypes (new) - convert if needed
+        var-types (if (every? #(instance? VectorType (val %)) vec-fields)
+                    vec-fields
+                    (update-vals vec-fields types/->type))
         widest-out-type (-> (emit-projection expr {:param-types (update-vals param-fields types/->type)
-                                                   :var-types (update-vals vec-fields types/->type)})
+                                                   :var-types var-types})
                             :return-type)]
 
     (reify ProjectionSpec
