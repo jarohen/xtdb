@@ -15,7 +15,7 @@
            (org.apache.arrow.vector.types.pojo Field Schema)
            (org.roaringbitmap.buffer MutableRoaringBitmap)
            (xtdb ICursor Bytes)
-           (xtdb.arrow BitVector RelationReader)
+           (xtdb.arrow BitVector RelationReader VectorType)
            (xtdb.bloom BloomUtils)
            (xtdb.operator ProjectionSpec)
            (xtdb.operator.join BuildSide ComparatorFactory DiskHashJoin JoinType MemoryHashJoin ProbeSide)))
@@ -151,10 +151,10 @@
 
 (defn emit-cross-join [{:keys [left right]}]
   (lp/binary-expr left right
-    (fn [{left-fields :fields :as left-rel} {right-fields :fields :as right-rel}]
+    (fn [{left-vec-types :vec-types :as left-rel} {right-vec-types :vec-types :as right-rel}]
       {:op :cross-join
        :children [left-rel right-rel]
-       :fields (merge left-fields right-fields)
+       :vec-types (merge left-vec-types right-vec-types)
        :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span]} left-cursor right-cursor]
                    (cond-> (CrossJoinCursor. allocator left-cursor right-cursor (ArrayList.) nil nil)
                      (or explain-analyze? (and tracer query-span)) (ICursor/wrapTracing tracer query-span)))})))
@@ -320,10 +320,12 @@
 (defn- emit-join-expr {:style/indent 2}
   [{:keys [condition left right]}
    {:keys [param-fields]}
-   {:keys [build-side merge-fields-fn join-type
+   {:keys [build-side merge-vec-types-fn join-type
            with-nil-row? pushdown-blooms? track-unmatched-build-idxs? mark-col-name]}]
-  (let [{left-fields :fields, ->left-cursor :->cursor} left
-        {right-fields :fields, ->right-cursor :->cursor} right
+  (let [{left-vec-types :vec-types, ->left-cursor :->cursor} left
+        {right-vec-types :vec-types, ->right-cursor :->cursor} right
+        left-fields (types/vec-types->fields left-vec-types)
+        right-fields (types/vec-types->fields right-vec-types)
         {equis :equi-condition, thetas :pred-expr} (group-by first condition)
 
         theta-expr (when-let [theta-exprs (seq (map second thetas))]
@@ -335,13 +337,13 @@
                         vec)
 
         left-projections (vec (concat
-                               (for [[_col-name ^Field field] left-fields]
-                                 (project/->identity-projection-spec field))
+                               (for [[col-name vec-type] left-vec-types]
+                                 (project/->identity-projection-spec (types/vec-type->field vec-type col-name)))
                                (keep (comp :projection :left) equi-specs)))
 
         right-projections (vec (concat
-                                (for [[_col-name ^Field field] right-fields]
-                                  (project/->identity-projection-spec field))
+                                (for [[col-name vec-type] right-vec-types]
+                                  (project/->identity-projection-spec (types/vec-type->field vec-type col-name)))
                                 (keep (comp :projection :right) equi-specs)))
 
         left-fields-proj (projection-specs->fields left-projections)
@@ -360,7 +362,8 @@
           :right [right-fields-proj right-key-col-names ->right-project-cursor
                   left-fields-proj left-key-col-names ->left-project-cursor])
 
-        merged-fields (merge-fields-fn left-fields-proj right-fields-proj)
+        merged-vec-types (merge-vec-types-fn (types/fields->vec-types left-fields-proj) (types/fields->vec-types right-fields-proj))
+        merged-fields (types/vec-types->fields merged-vec-types)
         output-projections (->> (set/difference (set (keys merged-fields))
                                                 (into #{} (comp (mapcat (juxt :left :right))
                                                                 (filter :projection)
@@ -381,7 +384,7 @@
      :children [left right]
      :explain {:condition (pr-str (mapv second condition))}
 
-     :fields (projection-specs->fields output-projections)
+     :vec-types (types/fields->vec-types (projection-specs->fields output-projections))
 
      :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span args] :as opts}]
                  (util/with-close-on-catch [build-cursor (->build-cursor opts)
@@ -441,7 +444,7 @@
 (defn emit-inner-join-expr [join-expr args]
   (emit-join-expr join-expr args
                   {:build-side :left
-                   :merge-fields-fn (fn [left-fields right-fields] (merge-with types/merge-fields left-fields right-fields))
+                   :merge-vec-types-fn (fn [left-vec-types right-vec-types] (merge-with types/merge-vec-types left-vec-types right-vec-types))
                    :join-type ::inner-join
                    :pushdown-blooms? true}))
 
@@ -460,11 +463,11 @@
                     args
                     (if (= build-side :right)
                       {:build-side build-side
-                       :merge-fields-fn (fn [left-fields right-fields] (merge-with types/merge-fields left-fields (types/with-nullable-fields right-fields)))
+                       :merge-vec-types-fn (fn [left-vec-types right-vec-types] (merge-with types/merge-vec-types left-vec-types (types/with-nullable-vec-types right-vec-types)))
                        :join-type ::left-outer-join
                        :with-nil-row? true}
                       {:build-side build-side
-                       :merge-fields-fn (fn [left-fields right-fields] (merge-with types/merge-fields left-fields (types/with-nullable-fields right-fields)))
+                       :merge-vec-types-fn (fn [left-vec-types right-vec-types] (merge-with types/merge-vec-types left-vec-types (types/with-nullable-vec-types right-vec-types)))
                        :join-type ::left-outer-join-flipped
                        :track-unmatched-build-idxs? true
                        :pushdown-blooms? true}))))
@@ -475,7 +478,7 @@
                         (assoc :condition conditions))
                     args
                     {:build-side :left
-                     :merge-fields-fn (fn [left-fields right-fields] (merge-with types/merge-fields (types/with-nullable-fields left-fields) (types/with-nullable-fields right-fields)))
+                     :merge-vec-types-fn (fn [left-vec-types right-vec-types] (merge-with types/merge-vec-types (types/with-nullable-vec-types left-vec-types) (types/with-nullable-vec-types right-vec-types)))
                      :join-type ::full-outer-join
                      :with-nil-row? true
                      :track-unmatched-build-idxs? true})))
@@ -486,7 +489,7 @@
                         (assoc :condition conditions))
                     args
                     {:build-side :right
-                     :merge-fields-fn (fn [left-fields _] left-fields)
+                     :merge-vec-types-fn (fn [left-vec-types _] left-vec-types)
                      :join-type ::semi-join
                      :pushdown-blooms? true})))
 
@@ -496,7 +499,7 @@
                         (assoc :condition conditions))
                     args
                     {:build-side :right
-                     :merge-fields-fn (fn [left-fields _] left-fields)
+                     :merge-vec-types-fn (fn [left-vec-types _] left-vec-types)
                      :join-type ::anti-semi-join})))
 
 (defmethod lp/emit-expr :mark-join [{:keys [opts] :as join-expr} args]
@@ -506,7 +509,7 @@
                         (assoc :condition mark-condition))
                     args
                     {:build-side :right
-                     :merge-fields-fn (fn [left-fields _] (assoc left-fields mark-col-name (types/->field [:? :bool] mark-col-name)))
+                     :merge-vec-types-fn (fn [left-vec-types _] (assoc left-vec-types mark-col-name (VectorType/maybe types/BOOL true)))
                      :mark-col-name mark-col-name
                      :join-type ::mark-join
                      :track-unmatched-build-idxs? true
@@ -518,13 +521,13 @@
                         (assoc :condition conditions))
                     args
                     {:build-side :right
-                     :merge-fields-fn (fn [left-fields right-fields] (merge-with types/merge-fields left-fields (types/with-nullable-fields right-fields)))
+                     :merge-vec-types-fn (fn [left-vec-types right-vec-types] (merge-with types/merge-vec-types left-vec-types (types/with-nullable-vec-types right-vec-types)))
                      :join-type ::single-join
                      :with-nil-row? true})))
 
 
 (defn columns [relation]
-  (set (keys (:fields relation))))
+  (set (keys (:vec-types relation))))
 
 (defn expr->columns [expr]
   (-> (if (symbol? expr)
