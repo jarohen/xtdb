@@ -137,8 +137,9 @@
   (let [{:keys [projections windows]} specs
         [_window-name {:keys [partition-cols order-specs]}] (first windows)]
     (lp/unary-expr (lp/emit-expr relation args)
-      (fn [{:keys [fields] :as inner-rel}]
-        (let [window-fn-factories (vec (for [p projections]
+      (fn [{:keys [vec-types] :as inner-rel}]
+        (let [inner-fields (types/vec-types->fields vec-types)
+              window-fn-factories (vec (for [p projections]
                                          ;; ignoring window-name for now
                                          (let [[to-column {:keys [_window-name window-agg]}] (first p)]
                                            (->window-fn-factory (into {:to-name to-column
@@ -149,10 +150,11 @@
 
                                                                         [:unary _agg-opts]
                                                                         (throw (UnsupportedOperationException.))))))))
-              out-fields (-> (into fields
-                                   (->> window-fn-factories
-                                        (into {} (map (juxt #(.getToColumnName ^IWindowFnSpecFactory %)
-                                                            #(.getToColumnField ^IWindowFnSpecFactory %)))))))]
+              out-vec-types (into vec-types
+                                  (->> window-fn-factories
+                                       (into {} (map (juxt #(.getToColumnName ^IWindowFnSpecFactory %)
+                                                           (fn [^IWindowFnSpecFactory factory]
+                                                             (types/field->vec-type (.getToColumnField factory))))))))]
           {:op :window
            :children [inner-rel]
            :explain {:partition-by (vec partition-cols)
@@ -161,16 +163,17 @@
                                            (mapv (fn [p]
                                                    (let [[to-column {:keys [window-agg]}] (first p)]
                                                      [to-column (pr-str window-agg)]))))}
-           :fields out-fields
+           :vec-types out-vec-types
 
            :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span]} in-cursor]
-                       (cond-> (util/with-close-on-catch [window-fn-specs (LinkedList.)]
-                                 (doseq [^IWindowFnSpecFactory factory window-fn-factories]
-                                   (.add window-fn-specs (.build factory allocator)))
+                       (let [fields (types/vec-types->fields vec-types)]
+                         (cond-> (util/with-close-on-catch [window-fn-specs (LinkedList.)]
+                                   (doseq [^IWindowFnSpecFactory factory window-fn-factories]
+                                     (.add window-fn-specs (.build factory allocator)))
 
-                                 (WindowFnCursor. allocator in-cursor (order-by/rename-fields fields)
-                                                  (group-by/->group-mapper allocator (select-keys fields partition-cols))
-                                                  order-specs
-                                                  (vec window-fn-specs)
-                                                  false))
-                         (or explain-analyze? (and tracer query-span)) (ICursor/wrapTracing tracer query-span)))})))))
+                                   (WindowFnCursor. allocator in-cursor (order-by/rename-fields fields)
+                                                    (group-by/->group-mapper allocator (select-keys fields partition-cols))
+                                                    order-specs
+                                                    (vec window-fn-specs)
+                                                    false))
+                           (or explain-analyze? (and tracer query-span)) (ICursor/wrapTracing tracer query-span))))})))))

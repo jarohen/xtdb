@@ -39,6 +39,17 @@
   ;; they statically can't intersect - but maybe that's one step too far for now.
   (merge-with types/merge-fields left-fields right-fields))
 
+(defn- union-vec-types [left-vec-types right-vec-types]
+  (when-not (= (set (keys left-vec-types)) (set (keys right-vec-types)))
+    (throw (err/illegal-arg :union-incompatible-cols
+                            {::err/message "union incompatible cols"
+                             :left-col-names (set (keys left-vec-types))
+                             :right-col-names (set (keys right-vec-types))})))
+
+  ;; NOTE: this overestimates types for intersection - if one side's string and the other int,
+  ;; they statically can't intersect - but maybe that's one step too far for now.
+  (merge-with types/merge-vec-types left-vec-types right-vec-types))
+
 (deftype UnionAllCursor [^ICursor left-cursor
                          ^ICursor right-cursor]
   ICursor
@@ -68,10 +79,10 @@
 
 (defmethod lp/emit-expr :union-all [{:keys [_opts left right]} args]
   (lp/binary-expr (lp/emit-expr left args) (lp/emit-expr right args)
-                  (fn [{left-fields :fields :as left-rel} {right-fields :fields :as right-rel}]
+                  (fn [{left-vec-types :vec-types :as left-rel} {right-vec-types :vec-types :as right-rel}]
                     {:op :union-all
                      :children [left-rel right-rel]
-                     :fields (union-fields left-fields right-fields)
+                     :vec-types (union-vec-types left-vec-types right-vec-types)
                      :->cursor (fn [{:keys [explain-analyze? tracer query-span]} left-cursor right-cursor]
                                  (cond-> (UnionAllCursor. left-cursor right-cursor)
                                    (or explain-analyze? (and tracer query-span)) (ICursor/wrapTracing tracer query-span)))})))
@@ -123,40 +134,40 @@
 
 (defmethod lp/emit-expr :intersect [{:keys [left right]} args]
   (lp/binary-expr (lp/emit-expr left args) (lp/emit-expr right args)
-                  (fn [{left-fields :fields :as left-rel} {right-fields :fields :as right-rel}]
-                    (let [fields (union-fields left-fields right-fields)
-                          key-col-names (set (keys fields))]
+                  (fn [{left-vec-types :vec-types :as left-rel} {right-vec-types :vec-types :as right-rel}]
+                    (let [vec-types (union-vec-types left-vec-types right-vec-types)
+                          key-col-names (set (keys vec-types))]
                       {:op :intersect
                        :children [left-rel right-rel]
-                       :fields fields
+                       :vec-types vec-types
                        :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span]} left-cursor right-cursor]
                                    (let [build-side (join/->build-side allocator
-                                                                       {:fields left-fields
+                                                                       {:fields (types/vec-types->fields left-vec-types)
                                                                         :key-col-names key-col-names})]
 
                                      (cond-> (IntersectionCursor. left-cursor right-cursor
                                                                   build-side (mapv name key-col-names)
-                                                                  (join/->cmp-factory {:fields right-fields
+                                                                  (join/->cmp-factory {:fields (types/vec-types->fields right-vec-types)
                                                                                        :key-col-names key-col-names})
                                                                   false false)
                                        (or explain-analyze? (and tracer query-span)) (ICursor/wrapTracing tracer query-span))))}))))
 
 (defmethod lp/emit-expr :difference [{:keys [left right]} args]
   (lp/binary-expr (lp/emit-expr left args) (lp/emit-expr right args)
-                  (fn [{left-fields :fields :as left-rel} {right-fields :fields :as right-rel}]
-                    (let [fields (union-fields left-fields right-fields)
-                          key-col-names (set (keys fields))]
+                  (fn [{left-vec-types :vec-types :as left-rel} {right-vec-types :vec-types :as right-rel}]
+                    (let [vec-types (union-vec-types left-vec-types right-vec-types)
+                          key-col-names (set (keys vec-types))]
                       {:op :difference
                        :children [left-rel right-rel]
-                       :fields fields
+                       :vec-types vec-types
                        :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span]} left-cursor right-cursor]
                                    (let [build-side (join/->build-side allocator
-                                                                       {:fields left-fields
+                                                                       {:fields (types/vec-types->fields left-vec-types)
                                                                         :key-col-names key-col-names})]
 
                                      (cond-> (IntersectionCursor. left-cursor right-cursor
                                                                   build-side (mapv name key-col-names)
-                                                                  (join/->cmp-factory {:fields right-fields
+                                                                  (join/->cmp-factory {:fields (types/vec-types->fields right-vec-types)
                                                                                        :key-col-names key-col-names})
                                                                   true false)
                                        (or explain-analyze? (and tracer query-span)) (ICursor/wrapTracing tracer query-span))))}))))
