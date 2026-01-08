@@ -214,8 +214,8 @@
                                :param-fields param-fields
                                :db-cat db-cat
                                :scan-emitter scan-emitter})
-                (update :fields (fn [fs]
-                                  (->result-fields col-names fs))))))))
+                (update :vec-types (fn [vts]
+                                     (->result-vec-types col-names vts))))))))
 
 (defn- ->explain-plan [emitted-expr]
   (letfn [(->explain-plan* [{:keys [op children explain]} depth]
@@ -363,7 +363,8 @@
                              :else (throw (ex-info "invalid args"
                                                    {:type (class args)})))
 
-                      {:keys [fields ->cursor] :as emitted-query} (emit-query planned-query scan-emitter db-cat snaps (->arg-fields args) query-opts)
+                      {:keys [vec-types ->cursor] :as emitted-query} (emit-query planned-query scan-emitter db-cat snaps (->arg-fields args) query-opts)
+                      fields (types/vec-types->fields vec-types)
                       current-time (or (some-> (or (:current-time planned-query) current-time)
                                                (expr->value {:args args})
                                                (time/->instant {:default-tz default-tz}))
