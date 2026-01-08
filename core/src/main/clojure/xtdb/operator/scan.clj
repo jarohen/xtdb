@@ -241,7 +241,7 @@
                    :columns (vec col-names)
                    :predicates (mapv pr-str (vals selects))}
 
-         :fields fields
+         :vec-types (types/fields->vec-types fields)
          :stats {:row-count row-count}
          :->cursor (fn [{:keys [allocator, snaps, snapshot-token, schema, args pushdown-blooms pushdown-iids explain-analyze? tracer query-span] :as opts}]
                      (let [^Snapshot snapshot (get snaps db-name)

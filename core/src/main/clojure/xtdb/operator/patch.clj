@@ -8,7 +8,7 @@
   (:import org.apache.arrow.memory.BufferAllocator
            org.apache.arrow.vector.types.pojo.Schema
            (xtdb ICursor)
-           [xtdb.arrow Relation RelationReader]
+           [xtdb.arrow Relation RelationReader VectorType]
            xtdb.operator.PatchGapsCursor))
 
 (s/def ::instantable
@@ -34,14 +34,15 @@
 
 (defmethod lp/emit-expr :patch-gaps [{:keys [relation], {:keys [valid-from valid-to]} :opts} opts]
   (lp/unary-expr (lp/emit-expr relation opts)
-    (fn [{inner-fields :fields :as inner-rel}]
-      (let [fields (-> inner-fields
-                       (update 'doc types/->nullable-field))]
+    (fn [{inner-vec-types :vec-types :as inner-rel}]
+      (let [vec-types (-> inner-vec-types
+                          (update 'doc #(VectorType/maybe % true)))
+            fields (types/vec-types->fields vec-types)]
         {:op :patch-gaps
          :children [inner-rel]
          :explain {:valid-from (pr-str valid-from)
                    :valid-to (pr-str valid-to)}
-         :fields fields
+         :vec-types vec-types
          :->cursor (fn [{:keys [^BufferAllocator allocator current-time explain-analyze? tracer query-span] :as qopts} inner]
                      (let [valid-from (time/instant->micros (->instant (or valid-from [:literal current-time]) qopts))
                            valid-to (or (some-> valid-to (->instant qopts) time/instant->micros) Long/MAX_VALUE)]

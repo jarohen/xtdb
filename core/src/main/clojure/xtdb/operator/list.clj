@@ -18,9 +18,9 @@
          :list (s/map-of ::lp/column any?, :count 1)))
 
 
-(defn- restrict-cols [fields {:keys [explicit-col-names]}]
-  (cond-> fields
-    explicit-col-names (-> (->> (merge (zipmap explicit-col-names (repeat types/null-field))))
+(defn- restrict-cols [vec-types {:keys [explicit-col-names]}]
+  (cond-> vec-types
+    explicit-col-names (-> (->> (merge (zipmap explicit-col-names (repeat types/NULL))))
                            (select-keys explicit-col-names))))
 
 (def ^:dynamic *batch-size* 1024)
@@ -56,10 +56,10 @@
         expr (expr/form->expr v input-types) 
         {:keys [field ->list-expr]} (expr-list/compile-list-expr expr input-types)
         named-field (types/field-with-name field (str out-col))
-        fields {(symbol (.getName named-field)) named-field}]
+        vec-types {(symbol (.getName named-field)) (types/field->vec-type named-field)}]
     {:op :list
      :children []
-     :fields (restrict-cols fields list-expr)
+     :vec-types (restrict-cols vec-types list-expr)
      :->cursor (fn [{:keys [allocator ^RelationReader args explain-analyze? tracer query-span]}]
                  (cond-> (ListCursor. allocator (->list-expr schema args) named-field
                                       *batch-size* 0)
