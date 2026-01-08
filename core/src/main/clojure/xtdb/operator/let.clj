@@ -18,7 +18,7 @@
         {->body-cursor :->cursor, :as emitted-body-rel} (lp/emit-expr relation (assoc-in emit-opts [:let-bindings binding] emitted-bound-rel))]
     {:op :let
      :children [emitted-bound-rel emitted-body-rel]
-     :fields (:fields emitted-body-rel)
+     :vec-types (:vec-types emitted-body-rel)
      :stats (:stats emitted-body-rel)
      :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span] :as opts}]
                  (cond-> (util/with-close-on-catch [bound-cursor (->bound-cursor opts)
@@ -36,7 +36,7 @@
          :opts (s/keys :req-un [::col-names])))
 
 (defmethod lp/emit-expr :relation [{:keys [relation]} emit-opts]
-  (let [{:keys [fields stats]} (or (get-in emit-opts [:let-bindings relation])
+  (let [{:keys [vec-types stats]} (or (get-in emit-opts [:let-bindings relation])
                                    (let [available (set (keys (:let-bindings emit-opts)))]
                                      (throw (err/fault ::missing-relation
                                                        (format "Can't find relation '%s', available %s"
@@ -46,7 +46,7 @@
 
     {:op :relation
      :children []
-     :fields fields, :stats stats
+     :vec-types vec-types, :stats stats
      :->cursor (fn [{:keys [explain-analyze? tracer query-span] :as opts}]
                  (let [^ICursor$Factory cursor-factory (or (get-in opts [:let-bindings relation])
                                                            (let [available (set (keys (:let-bindings opts)))]

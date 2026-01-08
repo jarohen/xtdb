@@ -43,10 +43,11 @@
 (defn- path->cursor [^Path path on-close-fn]
   {:op :arrow
    :children []
-   :fields (with-open [al (RootAllocator.)
-                       loader (path->loader al path)]
-             (->> (.getFields (.getSchema loader))
-                  (into {} (map (juxt #(symbol (.getName ^Field %)) identity)))))
+   :vec-types (with-open [al (RootAllocator.)
+                          loader (path->loader al path)]
+                (types/fields->vec-types
+                 (->> (.getFields (.getSchema loader))
+                      (into {} (map (juxt #(symbol (.getName ^Field %)) identity))))))
    :->cursor (fn [{:keys [^BufferAllocator allocator explain-analyze? tracer query-span]}]
                (util/with-close-on-catch [loader (path->loader allocator path)
                                           rel (Relation. allocator (.getSchema loader))]

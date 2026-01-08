@@ -372,8 +372,9 @@
         {group-cols :group-by, aggs :aggregate} (group-by first columns)
         group-cols (mapv second group-cols)]
     (lp/unary-expr (lp/emit-expr relation args)
-      (fn [{:keys [fields], :as inner-rel}]
-        (let [agg-factories (for [[_ agg] aggs]
+      (fn [{:keys [vec-types], :as inner-rel}]
+        (let [fields (types/vec-types->fields vec-types)
+              agg-factories (for [[_ agg] aggs]
                               (let [[to-column agg-form] (first agg)]
                                 (->aggregate-factory (into {:to-name to-column
                                                             :zero-row? (empty? group-cols)}
@@ -383,7 +384,7 @@
 
                                                              [:unary agg-opts]
                                                              (let [{:keys [f from-column]} agg-opts
-                                                                   from-field (get fields from-column types/null-field)]
+                                                                   from-field (types/vec-type->field (get vec-types from-column types/NULL) from-column)]
                                                                {:f f
                                                                 :from-name from-column
                                                                 :from-field from-field}))))))]
@@ -394,11 +395,12 @@
                                       (mapv (fn [[_ agg]]
                                               (let [[to-column agg-form] (first agg)]
                                                 [(str to-column) (pr-str agg-form)]))))}
-           :fields (into (->> group-cols
-                              (into {} (map (juxt identity fields))))
-                         (->> agg-factories
-                              (into {} (map (comp (juxt #(symbol (.getName ^Field %)) identity)
-                                                  #(.getField ^AggregateSpec$Factory %))))))
+           :vec-types (into (->> group-cols
+                                 (into {} (map (juxt identity vec-types))))
+                            (->> agg-factories
+                                 (into {} (map (fn [^AggregateSpec$Factory factory]
+                                                 (let [^Field field (.getField factory)]
+                                                   [(symbol (.getName field)) (types/field->vec-type field)]))))))
 
            :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span]} in-cursor]
                        (cond-> (util/with-close-on-catch [agg-specs (LinkedList.)]

@@ -168,25 +168,21 @@
          :vec-types (s/? (s/map-of simple-symbol? #(instance? VectorType %)))
          :pages vector?))
 
-(defn rows->fields [rows]
+(defn rows->vec-types [rows]
   (->> (for [col-name (into #{} (mapcat keys) rows)]
          [(symbol col-name) (-> rows
                                 (->> (into #{} (map (fn [row]
                                                       (types/value->vec-type (get row col-name)))))
-                                     (apply types/merge-types))
-                                (types/->field (str (symbol col-name))))])
+                                     (apply types/merge-types)))])
        (into {})))
 
 (defmethod lp/emit-expr ::pages [{:keys [vec-types pages stats]} _args]
-  (let [fields (or (some->> vec-types
-                            (into {} (map (fn [[col-name vec-type]]
-                                            [col-name (types/vec-type->field vec-type col-name)]))))
-                   (rows->fields (into [] cat pages)))
-        ^Schema schema (Schema. (for [[col-name field] fields]
-                                  (types/field-with-name field (str col-name))))]
+  (let [vec-types (or vec-types (rows->vec-types (into [] cat pages)))
+        ^Schema schema (Schema. (for [[col-name vec-type] vec-types]
+                                  (types/vec-type->field vec-type col-name)))]
     {:op :pages
      :children []
-     :fields fields
+     :vec-types vec-types
      :stats stats
      :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span]}]
                  (cond-> (->cursor allocator schema pages)
@@ -199,11 +195,11 @@
 
 (defmethod lp/emit-expr :prn [{:keys [relation]} _args]
   (lp/unary-expr (lp/emit-expr relation _args)
-    (fn [{inner-fields :fields, :as inner-rel}]
+    (fn [{inner-vec-types :vec-types, :as inner-rel}]
       {:op :prn
        :stats (:stats inner-rel)
        :children [inner-rel]
-       :fields inner-fields
+       :vec-types inner-vec-types
        :->cursor (fn [{:keys [explain-analyze? tracer query-span]}, ^ICursor in-cursor]
                    (cond-> (reify ICursor
                              (getCursorType [_] "prn")

@@ -184,6 +184,31 @@
   (^org.apache.arrow.vector.types.pojo.Field [^VectorType vec-type field-name] (->field vec-type (str field-name)))
   (^org.apache.arrow.vector.types.pojo.Field [^VectorType vec-type] (->field vec-type)))
 
+(defn field->vec-type ^xtdb.arrow.VectorType [^Field field]
+  (VectorType/fromField field))
+
+(defn merge-vec-types [& vec-types]
+  (apply merge-types vec-types))
+
+(defn vec-types->fields
+  "Converts a map of column-name -> VectorType to column-name -> Field"
+  [vec-types]
+  (into {} (map (fn [[col-name ^VectorType vec-type]]
+                  [col-name (vec-type->field vec-type col-name)]))
+        vec-types))
+
+(defn fields->vec-types
+  "Converts a map of column-name -> Field to column-name -> VectorType"
+  [fields]
+  (into {} (map (fn [[col-name ^Field field]]
+                  [col-name (field->vec-type field)]))
+        fields))
+
+(defn with-nullable-vec-types [vec-types]
+  (into {} (map (fn [[col-name ^VectorType vec-type]]
+                  [col-name (VectorType/maybe vec-type true)]))
+        vec-types))
+
 ;;; time units
 
 (defn ts-units-per-second ^long [time-unit]
