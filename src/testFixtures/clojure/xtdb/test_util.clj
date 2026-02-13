@@ -122,7 +122,7 @@
   ([node] (flush-block! node #xt/duration "PT5S"))
   ([node timeout]
    (let [db-cat (db/<-node node)]
-     (doseq [db-name (.getDatabaseNames db-cat)]
+     (doseq [^String db-name (.getDatabaseNames db-cat)]
        (xt-log/send-flush-block-msg! (.databaseOrNull db-cat db-name))))
 
    (xt-log/sync-node node timeout)))
@@ -408,7 +408,7 @@
       (println (format "Run %d/%d" i n)))
     (t/test-vars [test-var])))
 
-(defn database-or-null ^Database [node db-name]
+(defn database-or-null ^Database [node ^String db-name]
   (let [^Database$Catalog db-cat (util/component node :xtdb/db-catalog)]
     (-> db-cat
         (.databaseOrNull db-name))))
@@ -417,10 +417,10 @@
   ([node] (get-output-log node "xtdb"))
   ([node db-name]
    (-> (database-or-null node db-name)
-       (.getTxSource)
+       .getSourceIndexer .getTxSource
        :output-log)))
 
 (defn get-trie-cat
   ([node] (get-trie-cat node "xtdb"))
   ([node db-name]
-   (.getTrieCatalog (database-or-null node db-name))))
+   (.getTrieCatalog (.getQueryState (database-or-null node db-name)))))

@@ -51,7 +51,7 @@
            (xtdb.arrow RelationReader VectorReader VectorType)
            (xtdb.indexer Snapshot)
            xtdb.operator.scan.IScanEmitter
-           (xtdb.query IQuerySource PreparedQuery)
+           (xtdb.query IQuerySource IQuerySource$QueryCatalog PreparedQuery)
            xtdb.util.RefCounter))
 
 (defn- wrap-result-types [^ICursor cursor, result-types]
@@ -189,14 +189,15 @@
     conformed-plan))
 
 (defn- emit-query [{:keys [conformed-plan scan-cols col-names ^Cache emit-cache, explain-analyze?]},
-                   scan-emitter, db-cat, snaps
+                   scan-emitter, ^IQuerySource$QueryCatalog db-cat, snaps
                    param-types, {:keys [default-tz]}]
   (.get emit-cache {:scan-vec-types (scan/scan-vec-types db-cat snaps scan-cols)
 
                     ;; this one is just to reset the cache for up-to-date stats
                     ;; probably over-zealous
-                    :last-known-blocks (->> (for [db-name (.getDatabaseNames db-cat)]
-                                              [db-name (some-> (.databaseOrNull db-cat db-name) .getState .getBlockCatalog .getCurrentBlockIndex)]))
+                    :last-known-blocks (->> (for [db-name (.getDatabaseNames db-cat)
+                                                   :let [db (.databaseOrNull db-cat db-name)]]
+                                              [db-name (some-> db .getQueryState .getBlockCatalog .getCurrentBlockIndex)]))
 
                     :default-tz default-tz
                     :param-types param-types

@@ -6,7 +6,6 @@
             [xtdb.node :as xtn]
             [xtdb.object-store :as os]
             [xtdb.test-util :as tu]
-            [xtdb.types :as types]
             [xtdb.util :as util])
   (:import (io.micrometer.core.instrument Counter)
            (io.micrometer.core.instrument.simple SimpleMeterRegistry)

@@ -39,7 +39,7 @@
     (tu/flush-block! node)
     (c/compact-all! node #xt/duration "PT1S")
 
-    (let [block-cat (.getBlockCatalog (db/primary-db node))]
+    (let [block-cat (.getBlockCatalog (.getQueryState (db/primary-db node)))]
       (letfn [(test-query-ivan [expected]
                 (t/is (= expected
                          (set (tu/query-ra '[:scan {:table #xt/table xt_docs, :columns [_id name {ordinal (> ordinal 1)}]}]
@@ -102,7 +102,7 @@
     (tu/flush-block! node)
     (c/compact-all! node #xt/duration "PT1S")
 
-    (let [block-cat (.getBlockCatalog (db/primary-db node))]
+    (let [block-cat (.getBlockCatalog (.getQueryState (db/primary-db node)))]
       (t/is (= 1 (.getCurrentBlockIndex block-cat)))
 
       (t/testing "only needs to scan block 1, page 1"

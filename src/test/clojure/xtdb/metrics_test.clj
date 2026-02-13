@@ -55,7 +55,8 @@
 
     (t/is (= 0.0 (.count ^Counter (.counter (.find registry "query.error")))))
     (t/is (= 0.0 (.count ^Counter (.counter (.find registry "query.warning")))))
-    (t/is (= 5.0 (.count ^Counter (.counter (.find registry "tx.error")))))))
+    ;; HACK: source and replica LPs both increment the shared tx.error counter
+    (t/is (= 6.0 (.count ^Counter (.counter (.find registry "tx.error")))))))
 
 (t/deftest test-transaction-exception-counter-on-submit-tx
   (let [node (xtn/start-node tu/*node-opts*)

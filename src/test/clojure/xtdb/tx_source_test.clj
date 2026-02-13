@@ -203,7 +203,7 @@
       (xt/execute-tx node [[:delete-docs :docs 1]])
 
       (let [xtdb-db (db/primary-db node)
-            live-index (.getLiveIndex xtdb-db)
+            live-index (.getLiveIndex (.getQueryState xtdb-db))
             live-table (.liveTable live-index #xt/table docs)
             live-rel (.getLiveRelation live-table)
             rows (tx-source/read-relation-rows live-rel)]
@@ -238,7 +238,7 @@
       (let [allocator (.getAllocator node)
             xtdb-db (db/primary-db node)
             bp (.getBufferPool xtdb-db)
-            cat (.getTrieCatalog xtdb-db)
+            cat (.getTrieCatalog (.getQueryState xtdb-db))
             blocks (trie-cat/l0-blocks cat)
             table-events (fn [table-filter events]
                            (->> events
@@ -672,7 +672,7 @@
         ;; Read L0 directly
         (let [xtdb-db (db/primary-db node)
               bp (.getBufferPool xtdb-db)
-              trie-cat (.getTrieCatalog xtdb-db)
+              trie-cat (.getTrieCatalog (.getQueryState xtdb-db))
               allocator (.getAllocator node)
               [{:keys [tables]}] (trie-cat/l0-blocks trie-cat)
               events (tx-source/read-l0-events allocator bp tables)

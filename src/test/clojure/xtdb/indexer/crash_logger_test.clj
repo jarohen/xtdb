@@ -28,7 +28,7 @@
             ^BufferAllocator al (.getAllocator node)
             db (db/primary-db node)
             bp (.getBufferPool db)
-            live-idx (.getLiveIndex db)
+            live-idx (.getLiveIndex (.getQueryState db))
             crash-logger (CrashLogger. al bp node-id (InstantSource/fixed Instant/EPOCH))
             tx-ops [[:put-docs :public/foo {:xt/id 3, :version 0}]
                     [:put-docs :public/foo {:xt/id 4, :version 0}]]]

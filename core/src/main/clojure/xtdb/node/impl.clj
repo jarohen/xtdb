@@ -73,21 +73,26 @@
         (metrics/wrap-query query-timer))))
 
 (defn- await-msg-result [node ^Database db msg-id]
-  (or (let [^TransactionResult tx-res (-> @(.awaitAsync (.getLogProcessor db) msg-id)
-                                          (util/rethrowing-cause))]
-        (when (and tx-res
-                   (= (.getTxId tx-res) msg-id))
-          tx-res))
+  ;; Await source LP first (for side effects like tx-source onCommit),
+  ;; then replica LP (for query-visible state and the tx result).
+  (some-> db .getSourceIndexer .getLogProcessorOrNull (.awaitAsync msg-id) deref)
+  (or (when-let [lp (-> db .getReplicaIndexer .getLogProcessorOrNull)]
+        (let [^TransactionResult tx-res (-> @(.awaitAsync lp msg-id)
+                                            (util/rethrowing-cause))]
+          (when (and tx-res
+                     (= (.getTxId tx-res) msg-id))
+            tx-res)))
 
       (with-open [res (xtp/open-sql-query node "SELECT system_time, committed AS \"committed?\", error FROM xt.txs FOR ALL VALID_TIME WHERE _id = ?"
                                           {:args [msg-id]
                                            :key-fn (serde/read-key-fn :kebab-case-keyword)
                                            :default-db (.getName db)})]
-        (let [{:keys [system-time committed? error]} (-> (.findFirst res) (.orElse nil))
-              system-time (time/->instant system-time)]
-          (if committed?
-            (serde/->tx-committed msg-id system-time)
-            (serde/->tx-aborted msg-id system-time error))))))
+        (if-let [{:keys [system-time committed? error]} (-> (.findFirst res) (.orElse nil))]
+          (let [system-time (time/->instant system-time)]
+            (if committed?
+              (serde/->tx-committed msg-id system-time)
+              (serde/->tx-aborted msg-id system-time error)))
+          (throw (err/fault :xtdb/log-processor-not-running "Log processor not running - transaction not processed"))))))
 
 (defrecord Node [^BufferAllocator allocator, ^Database$Catalog db-cat
                  ^IQuerySource q-src
@@ -222,6 +227,7 @@
          (into {} (map (fn [^String db-name]
                          ;; TODO multi-part
                          [db-name [(-> (.databaseOrNull db-cat db-name)
+                                       (.getQueryState)
                                        (.getLiveIndex)
                                        (.getLatestCompletedTx))]])))))
 
@@ -235,11 +241,10 @@
 
   (latest-processed-msg-ids [_]
     (->> (.getDatabaseNames db-cat)
-         (into {} (map (fn [^String db-name]
-                         ;; TODO multi-part
-                         [db-name [(-> (.databaseOrNull db-cat db-name)
-                                       (.getLogProcessor)
-                                       (.getLatestProcessedMsgId))]])))))
+         (into {} (keep (fn [^String db-name]
+                          (when-let [lp (some-> (.databaseOrNull db-cat db-name)
+                                                .getReplicaIndexer .getLogProcessorOrNull)]
+                            [db-name [(.getLatestProcessedMsgId lp)]]))))))
 
   (await-token [this]
     (basis/->tx-basis-str (xtp/latest-submitted-msg-ids this)))

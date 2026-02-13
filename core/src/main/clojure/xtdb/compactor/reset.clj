@@ -13,7 +13,7 @@
            xtdb.table.TableRef
            (xtdb.trie Trie)))
 
-(defn reset-compactor! [node-opts db-name {:keys [dry-run?]}]
+(defn reset-compactor! [node-opts ^String db-name {:keys [dry-run?]}]
   (let [config (doto (xtn/->config node-opts)
                  (-> (.getCompactor) (.threads 0))
                  (.setServer nil)
@@ -30,8 +30,9 @@
         (log/info "Node caught up - resetting compaction...")
 
         (let [bp (.getBufferPool db)
-              trie-cat (.getTrieCatalog db)
-              live-idx (.getLiveIndex db)
+              src-idxer-state (.getState (.getSourceIndexer db))
+              trie-cat (.getTrieCatalog src-idxer-state)
+              live-idx (.getLiveIndex src-idxer-state)
               compacted-file-keys (vec (for [^TableRef table (.getTables trie-cat)
                                              ^String trie-key (trie-cat/compacted-trie-keys (trie-cat/trie-state trie-cat table))
 

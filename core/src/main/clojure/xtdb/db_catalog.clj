@@ -25,12 +25,12 @@
 (defmethod ig/halt-key! ::allocator [_ allocator]
   (util/close allocator))
 
-(defmethod ig/expand-key ::state [k {:keys [db-name]}]
-  {k {:db-name db-name
-      :block-cat (ig/ref :xtdb/block-catalog)
-      :table-cat (ig/ref :xtdb/table-catalog)
-      :trie-cat (ig/ref :xtdb/trie-catalog)
-      :live-index (ig/ref :xtdb.indexer/live-index)}})
+(defmethod ig/expand-key ::state [k opts]
+  {k (into {:block-cat (ig/ref :xtdb/block-catalog)
+            :table-cat (ig/ref :xtdb/table-catalog)
+            :trie-cat (ig/ref :xtdb/trie-catalog)
+            :live-index (ig/ref :xtdb.indexer/live-index)}
+           opts)})
 
 (defmethod ig/init-key ::state [_ {:keys [db-name block-cat table-cat trie-cat live-index]}]
   (DatabaseState. db-name block-cat table-cat trie-cat live-index))
@@ -60,24 +60,17 @@
         mode (.getMode db-config)
         opts {:base base, :db-name db-name}]
     (-> {::allocator opts
-         :xtdb/block-catalog opts
-         :xtdb/table-catalog opts
-         :xtdb/trie-catalog opts
          :xtdb.metadata/metadata-manager opts
          :xtdb/log (assoc opts :factory (.getLog db-config) :mode mode)
          :xtdb/source-log opts
          :xtdb/replica-log opts
          :xtdb/buffer-pool (assoc opts :factory (.getStorage db-config) :mode mode)
-         :xtdb.indexer/live-index (assoc opts :indexer-conf indexer-conf)
-         :xtdb.indexer/crash-logger opts
 
          ::storage opts
-         ::state opts
 
-         :xtdb.tx-source/for-db (assoc opts :tx-source-conf (.getTxSource conf))
-         :xtdb.indexer/for-db opts
-         :xtdb.compactor/for-db (assoc opts :mode mode)
-         :xtdb.log/processor (assoc opts :indexer-conf indexer-conf :mode mode)}
+         :xtdb.indexer/source-log (assoc opts :indexer-conf indexer-conf :mode mode
+                                              :tx-source-conf (.getTxSource conf))
+         :xtdb.indexer/replica-log (assoc opts :indexer-conf indexer-conf)}
         (cond-> (:db-catalog base) (assoc :xtdb.log/control-plane opts))
         (doto ig/load-namespaces))))
 
@@ -99,11 +92,12 @@
                        (throw (doto e (.addSuppressed t))))))
 
                  (throw (ex-cause e))))]
-    {:db (Database. (::allocator sys) db-config (::storage sys) (::state sys)
-                    (:processor (:xtdb.log/processor sys))
-                    (:consumer (:xtdb.log/control-plane sys))
-                    (:xtdb.compactor/for-db sys) (:xtdb.tx-source/for-db sys))
-     :sys sys}))
+    (let [{:keys [source-indexer]} (:xtdb.indexer/source-log sys)
+          {:keys [replica-indexer]} (:xtdb.indexer/replica-log sys)
+          control-plane (:consumer (:xtdb.log/control-plane sys))]
+      {:db (Database. (::allocator sys) db-config (::storage sys)
+                      source-indexer replica-indexer control-plane)
+       :sys sys})))
 
 (defmethod ig/init-key :xtdb/db-catalog [_ {:keys [base]}]
   (util/with-close-on-catch [!dbs (HashMap.)]
@@ -158,7 +152,7 @@
           (.put !dbs "xtdb" xtdb-db)
 
           (let [^Database xtdb-db (:db xtdb-db)]
-            (doseq [[db-name ^Database$Config db-config] (-> (.getSecondaryDatabases (.getBlockCatalog xtdb-db))
+            (doseq [[db-name ^Database$Config db-config] (-> (.getSecondaryDatabases (.getBlockCatalog (.getQueryState xtdb-db)))
                                                              (update-vals Database$Config/fromProto))
                     :when (not= db-name "xtdb")]
               (let [db-config (cond-> db-config

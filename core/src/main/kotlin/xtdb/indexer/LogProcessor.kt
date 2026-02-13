@@ -56,6 +56,7 @@ private val LOG = LogProcessor::class.logger
 class LogProcessor @JvmOverloads constructor(
     allocator: BufferAllocator,
     meterRegistry: MeterRegistry,
+    private val log: Log,
     private val dbStorage: DatabaseStorage,
     private val dbState: DatabaseState,
     private val indexer: Indexer.ForDatabase,
@@ -68,11 +69,6 @@ class LogProcessor @JvmOverloads constructor(
 
     private val readOnly: Boolean get() = mode == Database.Mode.READ_ONLY
 
-    // LogProcessor subscribes to the source-log, which contains transaction messages.
-    // For now, both source-log and replica-log point to the same underlying log,
-    // so we still receive TriesAdded messages here even though they're written to replica-log.
-    // This is intentional for the transition period.
-    private val log = dbStorage.sourceLog
     private val epoch = log.epoch
     private val bufferPool = dbStorage.bufferPool
 
@@ -388,9 +384,8 @@ class LogProcessor @JvmOverloads constructor(
                 .also { fb.trieMetadata.let { tm -> it.setTrieMetadata(tm) } }
                 .build()
         }
-        dbStorage.replicaLog.appendMessage(
-            Message.TriesAdded(Storage.VERSION, bufferPool.epoch, addedTries)
-        )
+
+        dbStorage.replicaLog.appendMessage(Message.TriesAdded(Storage.VERSION, bufferPool.epoch, addedTries)).get()
 
         // Add tries to trie catalog
         finishedBlocks.forEach { (table, _) ->
@@ -419,7 +414,7 @@ class LogProcessor @JvmOverloads constructor(
         blockCatalog.refresh(block)
 
         // Notify read-only nodes that the block is available
-        log.appendMessage(Message.BlockUploaded(blockIdx, latestProcessedMsgId, bufferPool.epoch))
+        dbStorage.replicaLog.appendMessage(Message.BlockUploaded(blockIdx, latestProcessedMsgId, bufferPool.epoch)).get()
 
         liveIndex.nextBlock()
         compactor.signalBlock()

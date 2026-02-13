@@ -41,7 +41,7 @@
   (let [db (.getPrimary db-cat)
         !cache (atom {})
         plan-stmt sql/plan
-        live-idx (.getLiveIndex db)]
+        live-idx (.getLiveIndex (.getQueryState db))]
 
     ;; we remove _id from non-direct SLT queries because `SELECT *` doesn't expect it to be there
     (with-redefs [sql/plan (fn self
