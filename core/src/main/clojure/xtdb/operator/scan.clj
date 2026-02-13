@@ -25,9 +25,9 @@
            [org.roaringbitmap.buffer MutableRoaringBitmap]
            xtdb.arrow.RelationReader
            (xtdb.bloom BloomUtils)
-           xtdb.catalog.TableCatalog
            (xtdb ICursor Bytes)
            (xtdb.indexer Snapshot Snapshot$Source)
+           xtdb.query.IQuerySource$QueryCatalog
            (xtdb.metadata MetadataPredicate PageMetadata PageMetadata$Factory)
            (xtdb.operator.scan MultiIidSelector ScanCursor SingleIidSelector)
            (xtdb.segment BufferPoolSegment MemorySegment MergePlanner)
@@ -203,7 +203,7 @@
             {:allocator (ig/ref :xtdb/allocator)
              :info-schema (ig/ref :xtdb/information-schema)})})
 
-(defn scan-vec-types [db-catalog, snaps, scan-cols]
+(defn scan-vec-types [^IQuerySource$QueryCatalog db-catalog, snaps, scan-cols]
   (letfn [(->vec-type [[^TableRef table col-name]]
             (let [col-name (str col-name)]
               (or (types/temporal-vec-types col-name)
@@ -212,9 +212,9 @@
                   (-> (info-schema/template-table table)
                       (get (symbol col-name)))
                   (let [db-name (.getDbName table)
-                        state (.getState (.databaseOrNull db-catalog db-name))
+                        state (.getQueryState (.databaseOrNull db-catalog db-name))
                         table-catalog (.getTableCatalog state)
-                        snap (get snaps db-name)]
+                        ^Snapshot snap (get snaps db-name)]
                     (types/merge-types (some-> (.getType table-catalog table col-name))
                                        (some-> (.getLiveIndex snap)
                                                (.liveTable table)
@@ -224,12 +224,12 @@
 
 (defmethod ig/init-key ::scan-emitter [_ {:keys [info-schema]}]
   (reify IScanEmitter
-    (emitScan [_ db-cat {:keys [opts]} scan-vec-types param-types]
+    (emitScan [_ ^IQuerySource$QueryCatalog db-cat {:keys [opts]} scan-vec-types param-types]
       (let [{:keys [^TableRef table columns] :as scan-opts} opts
             db-name (.getDbName table)
             db (.databaseOrNull db-cat db-name)
             storage (.getStorage db)
-            state (.getState db)
+            state (.getQueryState db)
             metadata-mgr (.getMetadataManager storage)
             buffer-pool (.getBufferPool storage)
             trie-catalog (.getTrieCatalog state)

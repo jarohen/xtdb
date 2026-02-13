@@ -1222,7 +1222,7 @@ VALUES(1, OBJECT (foo: OBJECT(bibble: true), bar: OBJECT(baz: 1001)))"]])
 (t/deftest test-log-processor-disabled
   (with-open [node (xtn/start-node {:indexer {:enabled? false}
                                     :compactor {:threads 0}})]
-    (t/is (anomalous? [:fault nil "log processor not initialised"]
+    (t/is (anomalous? [:fault nil "Log processor not running"]
                       (xt/execute-tx node [[:put-docs :docs {:xt/id 1}]])))
 
     (t/is (= [{:v 1}] (xt/q node "SELECT 1 AS v")))))

@@ -35,33 +35,41 @@ import xtdb.trie.TrieCatalog
 import java.time.Duration
 import java.util.*
 
+data class SourceIndexer(
+    val logProcessorOrNull: LogProcessor?,
+    val compactor: Compactor.ForDatabase,
+    val txSource: TxSource?,
+    val state: DatabaseState,
+) {
+    val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("source log processor not initialised")
+}
+
+data class ReplicaIndexer(
+    val logProcessorOrNull: LogProcessor?,
+    val state: DatabaseState,
+) {
+    val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("replica log processor not initialised")
+}
+
 data class Database(
     val allocator: BufferAllocator,
     val config: Config,
     override val storage: DatabaseStorage,
-    override val state: DatabaseState,
 
-    val logProcessorOrNull: LogProcessor?,
+    val sourceIndexer: SourceIndexer,
+    val replicaIndexer: ReplicaIndexer,
     val controlPlaneConsumerOrNull: ControlPlaneConsumer?,
-    private val compactorOrNull: Compactor.ForDatabase?,
-    val txSource: TxSource?,
 ) : IQuerySource.QueryDatabase {
-    val name: DatabaseName get() = state.name
-    override fun openSnapshot(): Snapshot = state.liveIndex.openSnapshot()
-
-    val blockCatalog: BlockCatalog get() = state.blockCatalog
-    val tableCatalog: TableCatalog get() = state.tableCatalog
-    val trieCatalog: TrieCatalog get() = state.trieCatalog
-    val liveIndex: LiveIndex get() = state.liveIndex
+    override val queryState: DatabaseState get() = replicaIndexer.state
+    val name: DatabaseName get() = queryState.name
+    override fun openSnapshot(): Snapshot = queryState.liveIndex.openSnapshot()
 
     val sourceLog: Log get() = storage.sourceLog
     val replicaLog: Log get() = storage.replicaLog
     val bufferPool: BufferPool get() = storage.bufferPool
     val metadataManager: PageMetadata.Factory get() = storage.metadataManager
 
-    val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("log processor not initialised")
     val controlPlaneConsumer: ControlPlaneConsumer get() = controlPlaneConsumerOrNull ?: error("control-plane consumer not initialised")
-    val compactor: Compactor.ForDatabase get() = compactorOrNull ?: error("compactor not initialised")
 
     override fun equals(other: Any?): Boolean =
         this === other || (other is Database && name == other.name)
@@ -69,7 +77,7 @@ data class Database(
     override fun hashCode() = Objects.hash(name)
 
     fun sendFlushBlockMessage(): Log.MessageMetadata = runBlocking {
-        sourceLog.appendMessage(Message.FlushBlock(blockCatalog.currentBlockIndex ?: -1)).await()
+        sourceLog.appendMessage(Message.FlushBlock(queryState.blockCatalog.currentBlockIndex ?: -1)).await()
     }
 
     fun sendAttachDbMessage(dbName: DatabaseName, config: Database.Config): Log.MessageMetadata = runBlocking {
@@ -134,11 +142,19 @@ data class Database(
 
     interface Catalog : ILookup, Seqable, Iterable<Database>, IQuerySource.QueryCatalog {
         companion object {
+            // Currently source and replica process concurrent logs, so we await both.
+            // Eventually, replica will be downstream of source and we'll only need to await replica.
             private suspend fun Database.await(msgId: MessageId) {
-                logProcessor.awaitAsync(msgId).await()
+                sourceIndexer.logProcessorOrNull?.awaitAsync(msgId)?.await()
+                replicaIndexer.logProcessorOrNull?.awaitAsync(msgId)?.await()
                 controlPlaneConsumerOrNull?.awaitAsync(msgId)?.await()
             }
-            private suspend fun Database.sync() = await(logProcessor.latestSubmittedMsgId)
+
+            private suspend fun Database.sync() {
+                sourceIndexer.logProcessorOrNull?.let { lp -> lp.awaitAsync(lp.latestSubmittedMsgId).await() }
+                replicaIndexer.logProcessorOrNull?.let { lp -> lp.awaitAsync(lp.latestSubmittedMsgId).await() }
+                controlPlaneConsumerOrNull?.awaitAsync(sourceLog.latestSubmittedMsgId)?.await()
+            }
 
             private suspend fun Catalog.awaitAll0(token: String) = coroutineScope {
                 val basis = token.decodeTxBasisToken()
@@ -150,7 +166,6 @@ data class Database(
 
                 databaseNames
                     .mapNotNull { databaseOrNull(it) }
-                    .filter { it.logProcessorOrNull != null }
                     .map { db -> launch { basis[db.name]?.first()?.let { db.await(it) } } }
                     .joinAll()
             }
@@ -164,7 +179,6 @@ data class Database(
 
                 databaseNames
                     .mapNotNull { databaseOrNull(it) }
-                    .filter { it.logProcessorOrNull != null }
                     .map { db -> launch { db.sync() } }
                     .joinAll()
             }

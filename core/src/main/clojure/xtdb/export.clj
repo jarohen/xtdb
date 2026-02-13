@@ -48,8 +48,9 @@
                                                     (format "Database not found: '%s'" db-name)
                                                     {:db-name db-name})))
              buffer-pool (.getBufferPool db)
-             block-cat (.getBlockCatalog db)
-             trie-cat (.getTrieCatalog db)
+             query-state (.getQueryState db)
+             block-cat (.getBlockCatalog query-state)
+             trie-cat (.getTrieCatalog query-state)
              
              start-time (Instant/now)]
 

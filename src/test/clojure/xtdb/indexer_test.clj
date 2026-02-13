@@ -91,7 +91,7 @@
 
       (util/with-open [node (tu/->local-node {:node-dir node-dir :compactor-threads 0})]
         (let [db (db/primary-db node)
-              block-cat (.getBlockCatalog db)]
+              block-cat (.getBlockCatalog (.getQueryState db))]
           (t/is (nil? (.getCurrentBlockIndex block-cat)))
 
           (t/is (= {:tx-id magic-last-tx-id}
@@ -228,7 +228,7 @@
           (cpb/check-pbuf (.toPath (io/file expected-dir "pbuf")) node-dir))
 
         (let [db (db/primary-db node)
-              tc (.getTableCatalog db)]
+              tc (.getTableCatalog (.getQueryState db))]
           (t/is (= #xt/type #{:utf8 :keyword :i64}
                    (.getType tc #xt/table xt_docs "_id")))
 
@@ -341,7 +341,7 @@
                 readings-reader (io/reader (io/resource "devices_mini_readings.csv"))]
       (let [db (db/primary-db node)
             bp (.getBufferPool db)
-            block-cat (.getBlockCatalog db)
+            block-cat (.getBlockCatalog (.getQueryState db))
             device-infos (map ts/device-info-csv->doc (csv/read-csv info-reader))
             readings (map ts/readings-csv->doc (csv/read-csv readings-reader))
             [initial-readings rest-readings] (split-at (count device-infos) readings)
@@ -401,11 +401,11 @@
                 first-half-await-token (xtp/await-token node1)]
             (.close node1)
 
-            (util/with-close-on-catch [node2 (tu/->local-node (assoc node-opts :buffers-dir "objects-1"))]
+            (util/with-close-on-catch [node2 (tu/->local-node (assoc node-opts :storage-epoch 1))]
               (let [db (db/primary-db node2)
                     bp (.getBufferPool db)
-                    block-cat (.getBlockCatalog db)
-                    tc (.getTableCatalog db)]
+                    block-cat (.getBlockCatalog (.getQueryState db))
+                    tc (.getTableCatalog (.getQueryState db))]
 
                 (xt-log/await-node node2 first-half-await-token (Duration/ofSeconds 10))
                 (t/is (= first-half-tx-id
@@ -441,7 +441,7 @@
 
                   (.close node2)
 
-                  (with-open [node3 (tu/->local-node (assoc node-opts :buffers-dir "objects-2"))]
+                  (with-open [node3 (tu/->local-node (assoc node-opts :storage-epoch 2))]
                     (xt-log/await-node node3 first-half-await-token (Duration/ofSeconds 10))
                     (t/is (<= first-half-tx-id
                               (-> (xtp/latest-completed-txs node3) (get-in ["xtdb" 0 :tx-id]))
@@ -472,7 +472,7 @@
     (util/delete-dir node-dir)
 
     (with-open [node1 (tu/->local-node (assoc node-opts :buffers-dir "objects-1"))]
-      (let [tc1 (.getTableCatalog (db/primary-db node1))]
+      (let [tc1 (.getTableCatalog (.getQueryState (db/primary-db node1)))]
 
         (xt/execute-tx node1 [[:put-docs :xt_docs {:xt/id 0, :v "foo"}]])
 
@@ -491,7 +491,7 @@
                  (.getType tc1 #xt/table xt_docs "v")))))
 
     (with-open [node2 (tu/->local-node (assoc node-opts :buffers-dir "objects-1"))]
-      (let [tc2 (.getTableCatalog (db/primary-db node2))]
+      (let [tc2 (.getTableCatalog (.getQueryState (db/primary-db node2)))]
         (xt-log/sync-node node2 (Duration/ofMillis 200))
 
         ;; this one comes out with union with type-ids null vs union with type-ids [].
@@ -531,7 +531,7 @@
       (with-open [node (tu/->local-node {:node-dir node-dir
                                          :instant-src (tu/->mock-clock)
                                          :compactor-threads 0})]
-        (let [block-cat (.getBlockCatalog (db/primary-db node))]
+        (let [block-cat (.getBlockCatalog (.getQueryState (db/primary-db node)))]
           (t/is (nil? (.getCurrentBlockIndex block-cat)))
 
           (t/is (= (serde/->TxKey 0 (time/->instant #inst "2020-01-01"))

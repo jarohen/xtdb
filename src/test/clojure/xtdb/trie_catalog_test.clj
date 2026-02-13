@@ -5,6 +5,7 @@
             [xtdb.compactor :as c]
             [xtdb.db-catalog :as db]
             [xtdb.garbage-collector :as gc]
+            [xtdb.log :as xt-log]
             [xtdb.node :as xtn]
             [xtdb.test-util :as tu]
             [xtdb.time :as time]
@@ -16,8 +17,8 @@
            (java.util.concurrent ConcurrentHashMap)
            (xtdb.api.storage ObjectStore$StoredObject)
            (xtdb.log.proto TemporalMetadata TrieMetadata)
-           (xtdb.trie_catalog TrieCatalog)
-           (xtdb.table TableRef)))
+           (xtdb.table TableRef)
+           (xtdb.trie_catalog TrieCatalog)))
 
 (t/use-fixtures :once tu/with-allocator)
 
@@ -327,7 +328,7 @@
     (util/delete-dir node-dir)
 
     (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0})]
-      (let [cat (.getTrieCatalog (db/primary-db node))]
+      (let [cat (.getTrieCatalog (.getQueryState (db/primary-db node)))]
         (xt/execute-tx node [[:put-docs :foo {:xt/id 1}]])
         (tu/flush-block! node)
 
@@ -340,16 +341,15 @@
                       (into #{} (map :trie-key)))))))
 
     (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0})]
-      (let [cat (.getTrieCatalog (db/primary-db node))]
+      (let [cat (.getTrieCatalog (.getQueryState (db/primary-db node)))]
         (t/is (= #{#xt/table foo, #xt/table xt/txs} (.getTables cat)))
         (t/is (= #{"l00-rc-b01" "l00-rc-b00"}
                  (->> (cat/current-tries (cat/trie-state cat #xt/table foo))
                       (into #{} (map :trie-key)))))))
 
     (t/testing "artifically adding tries"
-
       (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0})]
-        (let [cat (.getTrieCatalog (db/primary-db node))]
+        (let [cat (.getTrieCatalog (.getState (.getSourceIndexer (db/primary-db node))))]
           (.addTries cat #xt/table foo
                      (->> [["l00-rc-b00" 1] ["l00-rc-b01" 1] ["l00-rc-b02" 1] ["l00-rc-b03" 1]
                            ["l01-rc-b00" 2] ["l01-rc-b01" 2] ["l01-rc-b02" 2]
@@ -359,7 +359,7 @@
           (tu/flush-block! node))))
 
     (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 0})]
-      (let [cat (.getTrieCatalog (db/primary-db node))]
+      (let [cat (.getTrieCatalog (.getQueryState (db/primary-db node)))]
         (t/is (= #{"l00-rc-b03"
                    "l01-rc-b02"
                    "l02-rc-p0-b01"
@@ -605,7 +605,9 @@
         (let [gc (gc/garbage-collector node)
               db (db/primary-db node)
               bp (.getBufferPool db)
-              cat (.getTrieCatalog db)]
+              ;; HACK: GC currently mutates the source trie catalog directly (not via log),
+              ;; so it doesn't affect the replica. Read source state here until GC goes through the log.
+              cat (-> db .getSourceIndexer .getState .getTrieCatalog)]
           (doseq [i (range 4)]
             (xt/execute-tx node [[:put-docs :foo {:xt/id i}]])
             (tu/flush-block! node)
@@ -766,7 +768,7 @@
 (t/deftest test-l0-blocks
   (tu/with-tmp-dirs #{node-dir}
     (with-open [node (tu/->local-node {:node-dir node-dir :compactor-threads 0})]
-      (let [trie-cat (.getTrieCatalog (db/primary-db node))]
+      (let [trie-cat (.getTrieCatalog (.getQueryState (db/primary-db node)))]
         (t/is (empty? (cat/l0-blocks trie-cat))
               "Empty node should have no L0 blocks")
 
@@ -797,7 +799,7 @@
         (tu/flush-block! node))
       (c/compact-all! node #xt/duration "PT1S")
 
-      (let [trie-cat (.getTrieCatalog (db/primary-db node))
+      (let [trie-cat (.getTrieCatalog (.getState (.getSourceIndexer (db/primary-db node))))
             blocks (cat/l0-blocks trie-cat)]
         (t/is (seq (cat/compacted-trie-keys (cat/trie-state trie-cat #xt/table foo)))
               "Compaction should have created non-L0 files")

@@ -27,7 +27,7 @@
 (defn- ->block-lag [^Database db]
   ;; we could add a gauge for this too
   (max 0 (- (BufferPoolKt/getLatestAvailableBlockIndex (.getBufferPool db))
-            (or (.getCurrentBlockIndex (.getBlockCatalog db)) -1))))
+            (or (.getCurrentBlockIndex (.getBlockCatalog (.getQueryState db))) -1))))
 
 (def index-html-str
   "<!DOCTYPE html>
@@ -54,20 +54,25 @@
 
                 ["/healthz/started" {:name :started
                                      :get (fn [{:keys [^long initial-target-message-id, ^Database db]}]
-                                            (let [lpm-id (.getLatestProcessedMsgId (.getLogProcessor db))]
-                                              (into {:headers {"X-XTDB-Target-Message-Id" (str initial-target-message-id)
-                                                               "X-XTDB-Current-Message-Id" (str lpm-id)}}
-                                                    (if (< lpm-id initial-target-message-id)
-                                                      {:status 503,
-                                                       :body (format "Catching up - at: %d, target: %d" lpm-id initial-target-message-id)}
+                                            (if-let [lp (-> db .getReplicaIndexer .getLogProcessorOrNull)]
+                                              (let [lpm-id (.getLatestProcessedMsgId lp)]
+                                                (into {:headers {"X-XTDB-Target-Message-Id" (str initial-target-message-id)
+                                                                 "X-XTDB-Current-Message-Id" (str lpm-id)}}
+                                                      (if (< lpm-id initial-target-message-id)
+                                                        {:status 503,
+                                                         :body (format "Catching up - at: %d, target: %d" lpm-id initial-target-message-id)}
 
-                                                      {:status 200,
-                                                       :body "Started."}))))}]
+                                                        {:status 200,
+                                                         :body "Started."})))
+                                              {:status 503, :body "Log processor disabled"}))}]
 
                 ["/healthz/alive" {:name :alive
                                    :get (fn [{:keys [^Database db]}]
-                                          (or (when-let [ingestion-error (get-ingestion-error (.getLogProcessor db))]
-                                                {:status 503, :body (str "Ingestion error - " ingestion-error)})
+                                          (or (when-let [ingestion-error (some-> db .getSourceIndexer .getLogProcessorOrNull get-ingestion-error)]
+                                                {:status 503, :body (str "Ingestion error (source) - " ingestion-error)})
+
+                                              (when-let [ingestion-error (some-> db .getReplicaIndexer .getLogProcessorOrNull get-ingestion-error)]
+                                                {:status 503, :body (str "Ingestion error (replica) - " ingestion-error)})
 
                                               (let [block-lag (->block-lag db)
                                                     block-lag-healthy? (<= block-lag 5)]
@@ -83,7 +88,7 @@
                 ["/system/finish-block" {:name :finish-block
                                          :post (fn [{:keys [^Database db]}]
                                                  (try
-                                                   (let [flush-msg (Log$Message$FlushBlock. (or (.getCurrentBlockIndex (.getBlockCatalog db)) -1))
+                                                   (let [flush-msg (Log$Message$FlushBlock. (or (.getCurrentBlockIndex (.getBlockCatalog (.getQueryState db))) -1))
                                                          msg-id @(.appendMessage (.getSourceLog db) flush-msg)]
                                                      {:status 200, :body "Block flush message sent successfully."
                                                       :headers {"X-XTDB-Message-Id" (str msg-id)}})
@@ -126,7 +131,7 @@
   (let [db (.getPrimary db-cat)
         ^Server server (-> (handler {:meter-registry meter-registry
                                      :db db
-                                     :initial-target-message-id (.getLatestSubmittedMsgId (.getLogProcessor db))
+                                     :initial-target-message-id (or (some-> db .getReplicaIndexer .getLogProcessorOrNull .getLatestSubmittedMsgId) -1)
                                      :node node})
                            (j/run-jetty {:host (some-> host (.getHostAddress)), :port port, :async? true, :join? false}))]
 

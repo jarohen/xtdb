@@ -60,12 +60,14 @@
 
                 (case (long (:status resp))
                   503 (do
+                        ;; HACK: msg-ids shifted due to BlockUploaded + doubled TriesAdded messages
                         (t/is (= {"X-XTDB-Target-Message-Id" "2502"}
                                  (-> (:headers resp)
                                      (select-keys ["X-XTDB-Target-Message-Id"]))))
                         (Thread/sleep 250)
                         (recur))
                   200 (do
+                        ;; HACK: msg-ids shifted due to BlockUploaded + doubled TriesAdded messages
                         (t/is (= {"X-XTDB-Target-Message-Id" "2502", "X-XTDB-Current-Message-Id" "2502"}
                                  (-> (:headers resp)
                                      (select-keys ["X-XTDB-Target-Message-Id" "X-XTDB-Current-Message-Id"]))))
@@ -121,7 +123,7 @@
     (let [port (tu/free-port)]
       (with-open [node (tu/->local-node {:node-dir local-path
                                          :healthz-port port})]
-        (let [block-cat (.getBlockCatalog (db/primary-db node))]
+        (let [block-cat (.getBlockCatalog (.getQueryState (db/primary-db node)))]
 
           (t/testing "no latest completed tx"
             (clj-http/post (->system-url port "finish-block") {:throw-exceptions false}))

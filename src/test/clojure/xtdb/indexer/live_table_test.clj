@@ -147,8 +147,9 @@
     (util/with-open [allocator (RootAllocator.)]
       (let [db (db/primary-db tu/*node*)
             bp (.getBufferPool db)
-            block-cat (.getBlockCatalog db)
-            table-catalog (.getTableCatalog db)
+            query-state (.getQueryState db)
+            block-cat (.getBlockCatalog query-state)
+            table-catalog (.getTableCatalog query-state)
             live-index-allocator (util/->child-allocator allocator "live-index")]
         (util/with-open [^LiveIndex live-index (li/->LiveIndex live-index-allocator bp
                                                                block-cat table-catalog

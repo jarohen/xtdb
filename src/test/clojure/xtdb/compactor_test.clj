@@ -426,7 +426,7 @@
   (binding [c/*recency-partition* RecencyPartition/YEAR]
     (with-open [node (xtn/start-node (assoc-in tu/*node-opts* [:log]
                                                [:in-memory {:instant-src (tu/->mock-clock (tu/->instants :year))}]))]
-      (let [tc (.getTrieCatalog (db/primary-db node))]
+      (let [tc (.getTrieCatalog (.getState (.getSourceIndexer (db/primary-db node))))]
         (xt/execute-tx node [[:put-docs :docs {:xt/id 1 :version 1}]])
         (xt/execute-tx node [[:put-docs :docs {:xt/id 1 :version 2}]])
         (xt/execute-tx node [[:put-docs :docs {:xt/id 1 :version 3}]])

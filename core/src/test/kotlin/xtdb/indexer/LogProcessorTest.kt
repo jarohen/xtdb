@@ -85,7 +85,7 @@ class LogProcessorTest {
         RootAllocator().use { allocator ->
             val lp = LogProcessor(
                 allocator, SimpleMeterRegistry(),
-                dbStorage, dbState,
+                log, dbStorage, dbState,
                 mockk<Indexer.ForDatabase>(relaxed = true),
                 mockk<Compactor.ForDatabase>(relaxed = true),
                 Duration.ofHours(1), emptySet(),
@@ -138,7 +138,7 @@ class LogProcessorTest {
 
             val lp = LogProcessor(
                 allocator, SimpleMeterRegistry(),
-                dbStorage, dbState,
+                log, dbStorage, dbState,
                 mockk<Indexer.ForDatabase>(relaxed = true),
                 mockk<Compactor.ForDatabase>(relaxed = true),
                 Duration.ofHours(1), emptySet(),

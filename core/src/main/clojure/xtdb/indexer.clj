@@ -32,7 +32,7 @@
            (xtdb.error Anomaly$Caller Interrupted)
            (xtdb.indexer CrashLogger Indexer Indexer$ForDatabase Indexer$TxSource LiveIndex LiveIndex$Tx LiveTable$Tx OpIndexer RelationIndexer Snapshot Snapshot$Source)
            (xtdb.table TableRef)
-           (xtdb.query IQuerySource PreparedQuery)))
+           (xtdb.query IQuerySource IQuerySource$QueryCatalog PreparedQuery)))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -377,8 +377,8 @@
                      #(.copyRow doc-copier idx))))))))
 
 (defn- ->patch-docs-indexer [^LiveIndex live-idx, ^LiveIndex$Tx live-idx-tx, ^VectorReader tx-ops-rdr,
-                             ^IQuerySource q-src, db-cat, ^Instant system-time
-                             {:keys [default-db ^Tracer tracer] :as tx-opts}]
+                             ^IQuerySource q-src, ^IQuerySource$QueryCatalog db-cat, ^Instant system-time
+                             {:keys [^String default-db ^Tracer tracer] :as tx-opts}]
   (let [patch-leg (.vectorFor tx-ops-rdr "patch-docs")
         iids-rdr (.vectorFor patch-leg "iids")
         iid-rdr (.getListElements iids-rdr)
@@ -708,13 +708,13 @@
 (defmethod ig/halt-key! :xtdb/indexer [_ indexer]
   (util/close indexer))
 
-(defmethod ig/expand-key ::for-db [k {:keys [base]}]
-  {k {:base base
-      :allocator (ig/ref :xtdb.db-catalog/allocator)
-      :db-storage (ig/ref :xtdb.db-catalog/storage)
-      :db-state (ig/ref :xtdb.db-catalog/state)
-      :crash-logger (ig/ref ::crash-logger)
-      :tx-source (ig/ref :xtdb.tx-source/for-db)}})
+(defmethod ig/expand-key ::for-db [k opts]
+  {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)
+            :db-storage (ig/ref :xtdb.db-catalog/storage)
+            :db-state (ig/ref :xtdb.db-catalog/state)
+            :crash-logger (ig/ref :xtdb.indexer/crash-logger)
+            :tx-source (ig/ref :xtdb.tx-source/for-db)}
+           opts)})
 
 (defmethod ig/init-key ::for-db [_ {{:keys [^Indexer indexer]} :base
                                     :keys [allocator db-storage db-state ^CrashLogger crash-logger tx-source]}]

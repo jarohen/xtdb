@@ -30,7 +30,7 @@
   (let [^BufferAllocator allocator (.getAllocator tu/*node*)
         db (db/primary-db tu/*node*)
         buffer-pool (.getBufferPool db)
-        live-index (.getLiveIndex db)
+        live-index (-> db .getSourceIndexer .getState .getLiveIndex)
 
         iids (let [rnd (Random. 0)]
                (repeatedly 12000 #(UUID. (.nextLong rnd) (.nextLong rnd))))
@@ -138,7 +138,7 @@
           (cpb/check-pbuf (.toPath (io/file expected-dir "pbuf")) node-dir))))))
 
 (t/deftest test-new-table-discarded-on-abort-2721
-  (let [live-index (.getLiveIndex (db/primary-db tu/*node*))]
+  (let [live-index (.getLiveIndex (.getQueryState (db/primary-db tu/*node*)))]
 
     (with-open [live-tx0 (.startTx live-index #xt/tx-key {:tx-id 0, :system-time #xt/instant "2020-01-01T00:00:00Z"})]
       (let [foo-table-tx (.liveTable live-tx0 #xt/table foo)
@@ -209,7 +209,7 @@
 ;; -----------------------------------------------------------------------------
 
 (t/deftest external-snapshot-does-not-see-uncommitted-data
-  (let [live-index (.getLiveIndex (db/primary-db tu/*node*))
+  (let [live-index (.getLiveIndex (.getQueryState (db/primary-db tu/*node*)))
         table #xt/table test-table
         iid (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))]
 
@@ -246,7 +246,7 @@
                 "External snapshot should see committed row"))))))
 
 (t/deftest concurrent-external-snapshot-unaffected-by-later-commit
-  (let [live-index (.getLiveIndex (db/primary-db tu/*node*))
+  (let [live-index (.getLiveIndex (.getQueryState (db/primary-db tu/*node*)))
         table #xt/table test-table
         iid1 (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))
         iid2 (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))]
@@ -286,7 +286,7 @@
                 "Post-commit snapshot should have 2 rows"))))))
 
 (t/deftest abort-updates-latest-completed-tx
-  (let [live-index (.getLiveIndex (db/primary-db tu/*node*))
+  (let [live-index (.getLiveIndex (.getQueryState (db/primary-db tu/*node*)))
         table #xt/table test-table
         iid (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))
         tx-key-1 #xt/tx-key {:tx-id 1, :system-time #xt/instant "2020-01-01T00:00:00Z"}
@@ -316,7 +316,7 @@
           "After abort, latest_completed_tx should advance to tx-2 (processed, not committed)")))
 
 (t/deftest get-table-tx-multiple-times-returns-same-tx
-  (let [live-index (.getLiveIndex (db/primary-db tu/*node*))
+  (let [live-index (.getLiveIndex (.getQueryState (db/primary-db tu/*node*)))
         table #xt/table test-table
         iid (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))]
 
@@ -336,7 +336,7 @@
                   "Row written via first reference should be visible in txRelation")))))))
 
 (t/deftest multiple-puts-same-iid-records-all
-  (let [live-index (.getLiveIndex (db/primary-db tu/*node*))
+  (let [live-index (.getLiveIndex (.getQueryState (db/primary-db tu/*node*)))
         table #xt/table test-table
         iid (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))]
 
@@ -360,8 +360,9 @@
   (util/with-open [allocator (RootAllocator.)]
     (let [db (db/primary-db tu/*node*)
           bp (.getBufferPool db)
-          block-cat (.getBlockCatalog db)
-          table-catalog (.getTableCatalog db)
+          query-state (.getQueryState db)
+          block-cat (.getBlockCatalog query-state)
+          table-catalog (.getTableCatalog query-state)
           tables (HashMap.)
           live-index-allocator (util/->child-allocator allocator "live-index")]
 
@@ -392,7 +393,7 @@
                 "Table should be removed after nextBlock (not just emptied)"))))))
 
 (t/deftest transaction-snapshot-shows-read-your-writes
-  (let [live-index (.getLiveIndex (db/primary-db tu/*node*))
+  (let [live-index (.getLiveIndex (.getQueryState (db/primary-db tu/*node*)))
         table #xt/table test-table
         iid1 (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))
         iid2 (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))]

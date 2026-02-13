@@ -227,7 +227,7 @@
                  (not (record? tx-op)) tx-ops/parse-tx-op)))))
 
 (defn submit-tx ^long
-  [{:keys [^BufferAllocator allocator, ^Database$Catalog db-cat, default-tz]} tx-ops {:keys [default-db, system-time] :as opts}]
+  [{:keys [^BufferAllocator allocator, ^Database$Catalog db-cat, default-tz]} tx-ops {:keys [^String default-db, system-time] :as opts}]
 
   (let [^Database db (or (.databaseOrNull db-cat default-db)
                          (throw (err/incorrect :xtdb/unknown-db (format "Unknown database: %s" default-db)
@@ -242,27 +242,28 @@
                                                                                                              :system-time (some-> system-time time/expect-instant))))))]
         (MsgIdUtil/offsetToMsgId (.getEpoch log) (.getLogOffset message-meta))))))
 
-(defmethod ig/expand-key :xtdb.log/processor [k {:keys [base ^IndexerConfig indexer-conf ^Database$Mode mode]}]
-  {k {:base base
-      :allocator (ig/ref :xtdb.db-catalog/allocator)
-      :storage (ig/ref :xtdb.db-catalog/storage)
-      :state (ig/ref :xtdb.db-catalog/state)
-      :indexer (ig/ref :xtdb.indexer/for-db)
-      :compactor (ig/ref :xtdb.compactor/for-db)
-      :block-flush-duration (.getFlushDuration indexer-conf)
-      :skip-txs (.getSkipTxs indexer-conf)
-      :enabled? (.getEnabled indexer-conf)
-      :mode mode}})
+(defmethod ig/expand-key :xtdb.log/processor [k {:keys [^IndexerConfig indexer-conf] :as opts}]
+  {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)
+            :db-storage (ig/ref :xtdb.db-catalog/storage)
+            :db-state (ig/ref :xtdb.db-catalog/state)
+            :indexer (ig/ref :xtdb.indexer/for-db)
+            :compactor (ig/ref :xtdb.compactor/for-db)
+            :block-flush-duration (.getFlushDuration indexer-conf)
+            :skip-txs (.getSkipTxs indexer-conf)
+            :enabled? (.getEnabled indexer-conf)}
+           (dissoc opts :indexer-conf))})
 
 (defmethod ig/init-key :xtdb.log/processor [_ {{:keys [meter-registry]} :base
-                                               :keys [allocator ^DatabaseStorage storage state indexer compactor block-flush-duration skip-txs enabled? ^Database$Mode mode]}]
+                                               :keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
+                                                      ^Log log indexer compactor block-flush-duration skip-txs enabled? ^Database$Mode mode]}]
   (when enabled?
-    (let [lp (LogProcessor. allocator meter-registry
-                            storage state
+    (let [log (or log (.getSourceLog db-storage))
+          lp (LogProcessor. allocator meter-registry
+                            log db-storage db-state
                             indexer compactor block-flush-duration (set skip-txs)
                             (or mode Database$Mode/READ_WRITE))]
       {:processor lp
-       :subscription (.tailAll (.getSourceLog storage) lp (.getLatestProcessedOffset lp))})))
+       :subscription (.tailAll log lp (.getLatestProcessedOffset lp))})))
 
 (defmethod ig/resolve-key :xtdb.log/processor [_ {:keys [processor]}]
   processor)
@@ -271,20 +272,30 @@
   (util/close subscription)
   (util/close processor))
 
+;; Source and replica process the same log concurrently.
+;; Replica is read-only: it waits for blocks written by the source.
+;; We await both because the replica may lag behind waiting for source blocks.
+
 (defn await-db
   ([db msg-id] (await-db db msg-id nil))
   ([^Database db, ^long msg-id, ^Duration timeout]
-   @(cond-> (.awaitAsync (.getLogProcessor db) msg-id)
-      timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS))
-   (when-let [cp (.getControlPlaneConsumerOrNull db)]
-     @(cond-> (.awaitAsync cp msg-id)
-        timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS)))))
+   (let [await-lp (fn [^LogProcessor lp]
+                    @(cond-> (.awaitAsync lp msg-id)
+                       timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS)))]
+     (some-> db .getSourceIndexer .getLogProcessorOrNull await-lp)
+     (await-lp (-> db .getReplicaIndexer .getLogProcessor))
+     (when-let [cp (.getControlPlaneConsumerOrNull db)]
+       @(cond-> (.awaitAsync cp msg-id)
+          timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS))))))
 
 (defn sync-db
   ([db] (sync-db db nil))
   ([^Database db, ^Duration timeout]
-   (let [msg-id (.getLatestSubmittedMsgId (.getLogProcessor db))]
-     (await-db db msg-id timeout))))
+   (let [sync-lp (fn [^LogProcessor lp]
+                   @(cond-> (.awaitAsync lp (.getLatestSubmittedMsgId lp))
+                      timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS)))]
+     (some-> db .getSourceIndexer .getLogProcessorOrNull sync-lp)
+     (sync-lp (-> db .getReplicaIndexer .getLogProcessor)))))
 
 (defn await-node
   ([node token] (await-node node token nil))

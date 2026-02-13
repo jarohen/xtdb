@@ -30,17 +30,16 @@
 (defmethod ig/halt-key! :xtdb/compactor [_ compactor]
   (util/close compactor))
 
-(defmethod ig/expand-key ::for-db [k {:keys [base mode]}]
-  {k {:base base
-      :mode mode
-      :allocator (ig/ref :xtdb.db-catalog/allocator)
-      :storage (ig/ref :xtdb.db-catalog/storage)
-      :state (ig/ref :xtdb.db-catalog/state)}})
+(defmethod ig/expand-key ::for-db [k opts]
+  {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)
+            :db-storage (ig/ref :xtdb.db-catalog/storage)
+            :db-state (ig/ref :xtdb.db-catalog/state)}
+           opts)})
 
-(defmethod ig/init-key ::for-db [_ {{:keys [^Compactor compactor]} :base, :keys [allocator storage state ^Database$Mode mode]}]
+(defmethod ig/init-key ::for-db [_ {{:keys [^Compactor compactor]} :base, :keys [allocator db-storage db-state ^Database$Mode mode]}]
   (if (= mode Database$Mode/READ_ONLY)
-    (.openForDatabase Compactor/NOOP allocator storage state)
-    (.openForDatabase compactor allocator storage state)))
+    (.openForDatabase Compactor/NOOP allocator db-storage db-state)
+    (.openForDatabase compactor allocator db-storage db-state)))
 
 (defmethod ig/halt-key! ::for-db [_ compactor-for-db]
   (util/close compactor-for-db))
@@ -49,5 +48,6 @@
   "`timeout` is now required, explicitly specify `nil` if you want to wait indefinitely."
   [node timeout]
 
-  (-> (.getCompactor (db/primary-db node))
+  (-> (.getSourceIndexer (db/primary-db node))
+      .getCompactor
       (.compactAllSync timeout)))
