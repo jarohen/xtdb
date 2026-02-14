@@ -49,7 +49,8 @@
                                            :endpoint "http://127.0.0.1:9000"}]}]
     :disk-cache {:path (.resolve node-dir "local-cache")}
     :log [:kafka {:topic (str "xtdb.kafka-test." prefix)
-                  :bootstrap-servers "localhost:9092"}]}))
+                  :bootstrap-servers "localhost:9092"
+                  :group-id (str "group." prefix)}]}))
 
 (t/deftest ^:minio list-test
   (util/with-tmp-dirs #{local-disk-cache}

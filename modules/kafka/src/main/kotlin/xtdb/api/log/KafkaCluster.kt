@@ -392,6 +392,7 @@ class KafkaCluster(
                 this.topic = this@LogFactory.topic
                 this.epoch = this@LogFactory.epoch
                 this.logClusterAlias = cluster
+                this@LogFactory.groupId?.let { this.groupId = it }
             }, "proto.xtdb.com"))
         }
     }
@@ -404,7 +405,10 @@ class KafkaCluster(
 
         override fun fromProto(msg: ProtoAny) =
             msg.unpack(KafkaLogConfig::class.java).let {
-                LogFactory(it.logClusterAlias, it.topic)
+                LogFactory(it.logClusterAlias, it.topic).also { factory ->
+                    if (it.hasEpoch()) factory.epoch = it.epoch
+                    if (it.hasGroupId()) factory.groupId = it.groupId
+                }
             }
 
         override fun registerSerde(builder: PolymorphicModuleBuilder<Log.Factory>) {

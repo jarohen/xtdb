@@ -16,7 +16,7 @@
          ;; READ_ONLY forces NOOP compactor
          :xtdb.compactor/for-db (assoc child-opts :mode Database$Mode/READ_ONLY)
          ;; replica LP is always read-only: it waits for blocks written by the source
-         :xtdb.log/processor (assoc child-opts :log replica-log :indexer-conf indexer-conf :mode Database$Mode/READ_ONLY)}
+         :xtdb.log/processor (assoc child-opts :log replica-log :indexer-conf indexer-conf :mode Database$Mode/READ_ONLY :subscribe-mode :tail-all)}
         (doto ig/load-namespaces))))
 
 (defmethod ig/expand-key :xtdb.indexer/replica-log [k opts]

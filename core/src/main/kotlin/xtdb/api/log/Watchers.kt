@@ -37,7 +37,9 @@ class Watchers @JvmOverloads constructor(
         for (event in channel) {
             when (event) {
                 is Notify -> {
-                    check(event.msgId > currentMsgId)
+                    check(event.msgId > currentMsgId) {
+                        "Watchers: expected msgId > $currentMsgId, got ${event.msgId}"
+                    }
 
                     currentMsgId = event.msgId
                     for (watcher in watchers) {

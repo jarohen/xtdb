@@ -8,4 +8,5 @@ message KafkaLogConfig {
     string log_cluster_alias = 1;
     string topic = 2;
     int32 epoch = 3;
+    string group_id = 4;
 }
