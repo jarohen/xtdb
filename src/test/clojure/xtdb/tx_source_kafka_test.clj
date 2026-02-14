@@ -82,7 +82,7 @@
           output-topic (str "xtdb.kafka-test." (random-uuid))
           node-opts (merge tu/*node-opts*
                            {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                            :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                            :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                             :storage [:local {:path (.resolve node-dir "storage")}]
                             :compactor {:threads 0}
                             :tx-source {:enable true
@@ -109,7 +109,7 @@
           output-topic (str "xtdb.kafka-test." (random-uuid))
           node-opts (merge tu/*node-opts*
                            {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                            :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                            :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                             :storage [:local {:path (.resolve node-dir "storage")}]
                             :compactor {:threads 0}})]
       (with-open [node (xtn/start-node node-opts)]
@@ -134,7 +134,7 @@
       ;; Create block 0
       (with-open [node (xtn/start-node {:storage [:local {:path (.resolve node-dir "storage")}]
                                         :log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                                        :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                                        :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                                         :compactor {:threads 0}})]
         (xt/submit-tx node [[:put-docs :docs {:xt/id 0}]])
         (tu/flush-block! node))
@@ -154,7 +154,7 @@
                           @resume-backfill))]
               (with-open [node (xtn/start-node {:storage [:local {:path (.resolve node-dir "storage")}]
                                                 :log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                                                :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                                                :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                                                 :compactor {:threads 0}
                                                 :tx-source {:enable true
                                                             :initial-scan true
@@ -171,7 +171,7 @@
 
         (with-open [node (xtn/start-node {:storage [:local {:path (.resolve node-dir "storage")}]
                                           :log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                                          :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                                          :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                                           :compactor {:threads 0}
                                           :garbage-collector {:enabled true
                                                               :blocks-to-keep 1
@@ -206,7 +206,7 @@
       ;; Create block 0
       (with-open [node (xtn/start-node {:storage [:local {:path (.resolve node-dir "storage")}]
                                         :log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                                        :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                                        :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                                         :compactor {:threads 0}})]
         (xt/submit-tx node [[:put-docs :docs {:xt/id 0}]])
         (tu/flush-block! node))
@@ -226,7 +226,7 @@
                           @resume-backfill))]
               (with-open [node (xtn/start-node {:storage [:local {:path (.resolve node-dir "storage")}]
                                                 :log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                                                :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                                                :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                                                 :compactor {:threads 0}
                                                 :tx-source {:enable true
                                                             :initial-scan true
@@ -243,7 +243,7 @@
 
         (with-open [node (xtn/start-node {:storage [:local {:path (.resolve node-dir "storage")}]
                                           :log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
-                                          :log [:kafka {:cluster :my-kafka :topic log-topic}]
+                                          :log [:kafka {:cluster :my-kafka :topic log-topic :group-id (str "group." log-topic)}]
                                           :compactor {:threads 0}
                                           :garbage-collector {:enabled true
                                                               :blocks-to-keep 1

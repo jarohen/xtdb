@@ -14,7 +14,7 @@
          :xtdb.tx-source/for-db (assoc child-opts :tx-source-conf tx-source-conf)
          :xtdb.indexer/for-db child-opts
          :xtdb.compactor/for-db (assoc child-opts :mode mode)
-         :xtdb.log/processor (assoc child-opts :log source-log :indexer-conf indexer-conf :mode mode)}
+         :xtdb.log/processor (assoc child-opts :log source-log :indexer-conf indexer-conf :mode mode :subscribe-mode :subscribe)}
         (doto ig/load-namespaces))))
 
 (defmethod ig/expand-key :xtdb.indexer/source-log [k opts]

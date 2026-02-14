@@ -34,7 +34,8 @@
   (let [test-uuid (random-uuid)]
     (with-open [node (xtn/start-node {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
                                       :log [:kafka {:cluster :my-kafka
-                                                    :topic (str "xtdb.kafka-test." test-uuid)}]})]
+                                                    :topic (str "xtdb.kafka-test." test-uuid)
+                                                    :group-id (str "group." test-uuid)}]})]
       (t/is (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :foo}]]))
 
       (t/is (= [{:xt/id :foo}]
@@ -45,7 +46,8 @@
   (let [test-uuid (random-uuid)]
     (with-open [node (xtn/start-node {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*}]}
                                       :log [:kafka {:cluster :my-kafka
-                                                    :topic (str "xtdb.kafka-test." test-uuid)}]})
+                                                    :topic (str "xtdb.kafka-test." test-uuid)
+                                                    :group-id (str "group." test-uuid)}]})
                 xtdb-conn (.build (.createConnectionBuilder node))]
       (jdbc/execute! xtdb-conn [(format "ATTACH DATABASE secondary WITH $$
          log: !Kafka
@@ -74,7 +76,8 @@
                                                                         :properties-file nil}]}
                                       :log [:kafka {:cluster :my-kafka
                                                     :topic (str "xtdb.kafka-test." test-uuid)
-                                                    :create-topic? true}]})]
+                                                    :create-topic? true
+                                                    :group-id (str "group." test-uuid)}]})]
       (t/testing "KafkaLog successfully created"
         (t/is (instance? Log (.getSourceLog (db/primary-db node))))))))
 
@@ -86,7 +89,8 @@
                                                                           :properties-map {}
                                                                           :properties-file nil}]}
                                         :log [:kafka {:cluster :my-kafka
-                                                      :topic (str "xtdb.kafka-test." test-uuid)}]
+                                                      :topic (str "xtdb.kafka-test." test-uuid)
+                                                      :group-id (str "group." test-uuid)}]
                                         :storage [:remote {:object-store [:in-memory {}]}]
                                         :disk-cache {:path path}})]
         (t/testing "Send a transaction"
@@ -106,7 +110,8 @@
                                                                              :some-secret "foobar"}]}
                                            :log [:kafka {:cluster :my-kafka
                                                          :topic "topic"
-                                                         :create-topic? false}]}))))
+                                                         :create-topic? false
+                                                         :group-id "test-group"}]}))))
 
 (t/deftest ^:integration test-kafka-topic-cleared
   (let [original-topic (str "xtdb.kafka-test." (random-uuid))
@@ -119,7 +124,8 @@
                                                                           :properties-file nil}]}
                                         :log [:kafka {:cluster :my-kafka
                                                       :topic original-topic
-                                                      :create-topic? true}]
+                                                      :create-topic? true
+                                                      :group-id (str "group." original-topic)}]
                                         :storage [:local {:path local-disk-path}]})]
         ;; Submit a few transactions
         (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :foo}]])
@@ -149,7 +155,8 @@
                                                            :properties-file nil}]}
                          :log [:kafka {:cluster :my-kafka
                                        :topic empty-topic
-                                       :create-topic? true}]
+                                       :create-topic? true
+                                       :group-id (str "group." empty-topic)}]
                          :storage [:local {:path local-disk-path}]})))
 
       ;; Node with intact storage and topic 2 (ie, empty topic) along with setting log offset
@@ -160,7 +167,8 @@
                                         :log [:kafka {:cluster :my-kafka
                                                       :topic empty-topic
                                                       :create-topic? true
-                                                      :epoch 1}]
+                                                      :epoch 1
+                                                      :group-id (str "group." empty-topic)}]
                                         :storage [:local {:path local-disk-path}]})]
         (t/testing "can query previous indexed values, unindexed values will be lost"
           (t/is (= (set [{:xt/id :foo} {:xt/id :bar}])
@@ -185,7 +193,8 @@
                                         :log [:kafka {:cluster :my-kafka
                                                       :topic empty-topic
                                                       :create-topic? true
-                                                      :epoch 1}]
+                                                      :epoch 1
+                                                      :group-id (str "group." empty-topic)}]
                                         :storage [:local {:path local-disk-path}]})]
         (t/testing "can query all previously indexed values, including those after new epoch started"
           (t/is (= (set [{:xt/id :foo}
@@ -212,7 +221,8 @@
       ;; Start a node, write a few transactions to the original topic
       (with-open [node (xtn/start-node {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*
                                                                           :poll-duration "PT2S"}]}
-                                        :log [:kafka {:cluster :my-kafka, :topic original-topic}]
+                                        :log [:kafka {:cluster :my-kafka, :topic original-topic
+                                                      :group-id (str "group." original-topic)}]
                                         :storage [:local {:path local-disk-path}]})]
         (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :foo}]])
         (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :bar}]])
@@ -235,7 +245,8 @@
                                                                           :poll-duration "PT2S"}]}
                                         :log [:kafka {:cluster :my-kafka
                                                       :topic stale-topic
-                                                      :create-topic? true}]
+                                                      :create-topic? true
+                                                      :group-id (str "group." stale-topic)}]
                                         :storage [:in-memory {}]})]
         (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :foo}]])
         (xt/execute-tx node [[:put-docs :xt_docs {:xt/id :bar}]]))
@@ -249,7 +260,8 @@
                                                            :poll-duration "PT2S"}]}
                          :log [:kafka {:cluster :my-kafka
                                        :topic stale-topic
-                                       :create-topic? false}]
+                                       :create-topic? false
+                                       :group-id (str "group." stale-topic)}]
                          :storage [:local {:path local-disk-path}]})))
 
       ;; Attempt to restart the node with intact storage, a new topic + new epoch
@@ -260,7 +272,8 @@
                                         :log [:kafka {:cluster :my-kafka
                                                       :topic empty-topic
                                                       :create-topic? true
-                                                      :epoch 1}]
+                                                      :epoch 1
+                                                      :group-id (str "group." empty-topic)}]
                                         :storage [:local {:path local-disk-path}]})]
         (t/testing "can query previous indexed values, unindexed values will be lost"
           (t/is (= (set [{:xt/id :foo} {:xt/id :bar} {:xt/id :baz}])
@@ -287,7 +300,8 @@
                                                                           :properties-file nil}]}
                                         :log [:kafka {:cluster :my-kafka
                                                       :topic empty-topic
-                                                      :epoch 1}]
+                                                      :epoch 1
+                                                      :group-id (str "group." empty-topic)}]
                                         :storage [:local {:path local-disk-path}]})]
         (t/testing "can query same transactions + nothing has been re-indexed"
           (t/is (= (set [{:xt/id :foo}
@@ -316,7 +330,7 @@
       (t/testing "Start a node, write a number of transactions to the topic - ensure block is cut"
         (with-open [node (xtn/start-node {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*
                                                                             :poll-duration "PT2S"}]}
-                                          :log [:kafka {:cluster :my-kafka, :topic topic}]
+                                          :log [:kafka {:cluster :my-kafka, :topic topic, :group-id (str "group." topic)}]
                                           :storage [:local {:path local-disk-path}]
                                           :indexer {:rows-per-block 20}
                                           :compactor {:threads 0}})]
@@ -333,7 +347,7 @@
       (t/testing "Restart the node, ensure it picks up from the correct position in the log"
         (with-open [node (xtn/start-node {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*
                                                                             :poll-duration "PT2S"}]}
-                                          :log [:kafka {:cluster :my-kafka, :topic topic}]
+                                          :log [:kafka {:cluster :my-kafka, :topic topic, :group-id (str "group." topic)}]
                                           :storage [:local {:path local-disk-path}]
                                           :indexer {:rows-per-block 20}
                                           :compactor {:threads 0}})]
@@ -356,7 +370,7 @@
       (t/testing "Start a node, write a number of transactions to the log - ensure block is cut"
         (with-open [node (xtn/start-node {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*
                                                                             :poll-duration "PT2S"}]}
-                                          :log [:kafka {:cluster :my-kafka, :topic topic}]
+                                          :log [:kafka {:cluster :my-kafka, :topic topic, :group-id (str "group." topic)}]
                                           :storage [:local {:path local-disk-path}]
                                           :compactor {:threads 0}})]
 
@@ -371,7 +385,7 @@
       (t/testing "Restart the node, ensure it picks up from the correct position in the log"
         (with-open [node (xtn/start-node {:log-clusters {:my-kafka [:kafka {:bootstrap-servers *bootstrap-servers*
                                                                             :poll-duration "PT2S"}]}
-                                          :log [:kafka {:cluster :my-kafka, :topic topic}]
+                                          :log [:kafka {:cluster :my-kafka, :topic topic, :group-id (str "group." topic)}]
                                           :storage [:local {:path local-disk-path}]
                                           :compactor {:threads 0}})]
 

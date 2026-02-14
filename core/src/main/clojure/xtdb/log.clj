@@ -255,7 +255,8 @@
 
 (defmethod ig/init-key :xtdb.log/processor [_ {{:keys [meter-registry]} :base
                                                :keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
-                                                      ^Log log indexer compactor block-flush-duration skip-txs enabled? ^Database$Mode mode]}]
+                                                      ^Log log indexer compactor block-flush-duration skip-txs enabled? ^Database$Mode mode
+                                                      subscribe-mode]}]
   (when enabled?
     (let [log (or log (.getSourceLog db-storage))
           lp (LogProcessor. allocator meter-registry
@@ -263,7 +264,9 @@
                             indexer compactor block-flush-duration (set skip-txs)
                             (or mode Database$Mode/READ_WRITE))]
       {:processor lp
-       :subscription (.tailAll log lp (.getLatestProcessedOffset lp))})))
+       :subscription (case subscribe-mode
+                       :subscribe (.subscribe log lp)
+                       :tail-all (.tailAll log lp (.getLatestProcessedOffset lp)))})))
 
 (defmethod ig/resolve-key :xtdb.log/processor [_ {:keys [processor]}]
   processor)

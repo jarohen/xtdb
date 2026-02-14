@@ -11,6 +11,7 @@
     properties-map (.propertiesMap properties-map)
     properties-file (.propertiesFile (util/->path properties-file))))
 
-(defmethod log/->log-factory ::kafka [_ {:keys [cluster topic epoch] :as opts}]
+(defmethod log/->log-factory ::kafka [_ {:keys [cluster topic epoch group-id] :as opts}]
   (cond-> (KafkaCluster$LogFactory. (str (symbol cluster)) topic (boolean (:create-topic? opts true)))
-    epoch (.epoch epoch)))
+    epoch (.epoch epoch)
+    group-id (.groupId group-id)))

@@ -11,6 +11,7 @@ import xtdb.api.TransactionKey
 import xtdb.api.TransactionResult
 import xtdb.api.log.Log
 import xtdb.api.log.Log.Message
+import xtdb.api.log.LogOffset
 import xtdb.api.log.MessageId
 import xtdb.api.log.Watchers
 import xtdb.api.storage.Storage
@@ -65,7 +66,7 @@ class LogProcessor @JvmOverloads constructor(
     private val skipTxs: Set<MessageId>,
     private val mode: Database.Mode = Database.Mode.READ_WRITE,
     private val maxBufferedRecords: Int = 1024
-) : Log.Subscriber, AutoCloseable {
+) : Log.GroupSubscriber, AutoCloseable {
 
     private val readOnly: Boolean get() = mode == Database.Mode.READ_ONLY
 
@@ -151,6 +152,11 @@ class LogProcessor @JvmOverloads constructor(
     override fun close() {
         allocator.close()
     }
+
+    override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> =
+        mapOf(0 to latestProcessedOffset + 1)
+
+    override fun onPartitionsRevoked(partitions: Collection<Int>) {}
 
     private val flusher = Flusher(flushTimeout, blockCatalog)
 
