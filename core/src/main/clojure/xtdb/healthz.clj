@@ -18,11 +18,11 @@
            (xtdb.api.metrics HealthzConfig)
            xtdb.api.Xtdb$Config
            (xtdb.database Database Database$Catalog)
-           (xtdb.indexer LogProcessor)
+           (xtdb.indexer LogProcessor ReplicaLogProcessor)
            xtdb.storage.BufferPoolKt))
 
-(defn get-ingestion-error [^LogProcessor log-processor]
-  (.getIngestionError log-processor))
+(defn get-ingestion-error [^LogProcessor lp]
+  (.getIngestionError lp))
 
 (defn- ->block-lag [^Database db]
   ;; we could add a gauge for this too
@@ -54,7 +54,7 @@
 
                 ["/healthz/started" {:name :started
                                      :get (fn [{:keys [^long initial-target-message-id, ^Database db]}]
-                                            (if-let [lp (-> db .getReplicaIndexer .getLogProcessorOrNull)]
+                                            (if-let [^ReplicaLogProcessor lp (-> db .getReplicaIndexer .getLogProcessorOrNull)]
                                               (let [lpm-id (.getLatestProcessedMsgId lp)]
                                                 (into {:headers {"X-XTDB-Target-Message-Id" (str initial-target-message-id)
                                                                  "X-XTDB-Current-Message-Id" (str lpm-id)}}
@@ -131,7 +131,8 @@
   (let [db (.getPrimary db-cat)
         ^Server server (-> (handler {:meter-registry meter-registry
                                      :db db
-                                     :initial-target-message-id (or (some-> db .getReplicaIndexer .getLogProcessorOrNull .getLatestSubmittedMsgId) -1)
+                                     :initial-target-message-id (if-let [^ReplicaLogProcessor lp (some-> db .getReplicaIndexer .getLogProcessorOrNull)]
+                                                                    (.getLatestSubmittedMsgId lp) -1)
                                      :node node})
                            (j/run-jetty {:host (some-> host (.getHostAddress)), :port port, :async? true, :join? false}))]
 

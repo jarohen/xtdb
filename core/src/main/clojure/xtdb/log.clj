@@ -19,7 +19,7 @@
            (xtdb.arrow Relation Vector)
            xtdb.catalog.BlockCatalog
            (xtdb.database Database DatabaseStorage Database$Catalog Database$Mode)
-           xtdb.indexer.LogProcessor
+           (xtdb.indexer LogProcessor ReplicaLogProcessor SourceLogProcessor)
            xtdb.table.TableRef
            (xtdb.tx TxOp$DeleteDocs TxOp$EraseDocs TxOp$PatchDocs TxOp$PutDocs TxOp$Sql TxOpts TxWriter)
            (xtdb.tx_ops DeleteDocs EraseDocs PatchDocs PutDocs PutRel Sql SqlByteArgs)
@@ -242,7 +242,7 @@
                                                                                                              :system-time (some-> system-time time/expect-instant))))))]
         (MsgIdUtil/offsetToMsgId (.getEpoch log) (.getLogOffset message-meta))))))
 
-(defmethod ig/expand-key :xtdb.log/processor [k {:keys [^IndexerConfig indexer-conf] :as opts}]
+(defn- ->processor-expand [k {:keys [^IndexerConfig indexer-conf] :as opts}]
   {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)
             :db-storage (ig/ref :xtdb.db-catalog/storage)
             :db-state (ig/ref :xtdb.db-catalog/state)
@@ -253,25 +253,43 @@
             :enabled? (.getEnabled indexer-conf)}
            (dissoc opts :indexer-conf))})
 
-(defmethod ig/init-key :xtdb.log/processor [_ {{:keys [meter-registry]} :base
-                                               :keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
-                                                      ^Log log indexer compactor block-flush-duration skip-txs enabled? ^Database$Mode mode
-                                                      subscribe-mode]}]
-  (when enabled?
-    (let [log (or log (.getSourceLog db-storage))
-          lp (LogProcessor. allocator meter-registry
-                            log db-storage db-state
-                            indexer compactor block-flush-duration (set skip-txs)
-                            (or mode Database$Mode/READ_WRITE))]
-      {:processor lp
-       :subscription (case subscribe-mode
-                       :subscribe (.subscribe log lp)
-                       :tail-all (.tailAll log lp (.getLatestProcessedOffset lp)))})))
+(defmethod ig/expand-key :xtdb.log/source-processor [k opts] (->processor-expand k opts))
+(defmethod ig/expand-key :xtdb.log/replica-processor [k opts] (->processor-expand k opts))
 
-(defmethod ig/resolve-key :xtdb.log/processor [_ {:keys [processor]}]
+(defmethod ig/init-key :xtdb.log/source-processor [_ {{:keys [meter-registry]} :base
+                                                       :keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
+                                                              ^Log log indexer compactor block-flush-duration skip-txs enabled?
+                                                              ^Database$Mode mode]}]
+  (when (and enabled? (not= mode Database$Mode/READ_ONLY))
+    (let [log (or log (.getSourceLog db-storage))
+          lp (SourceLogProcessor. allocator meter-registry
+                                  log db-storage db-state
+                                  indexer compactor block-flush-duration (set skip-txs))]
+      {:processor lp
+       :subscription (.subscribe log lp)})))
+
+(defmethod ig/resolve-key :xtdb.log/source-processor [_ {:keys [processor]}]
   processor)
 
-(defmethod ig/halt-key! :xtdb.log/processor [_ {:keys [processor subscription]}]
+(defmethod ig/halt-key! :xtdb.log/source-processor [_ {:keys [processor subscription]}]
+  (util/close subscription)
+  (util/close processor))
+
+(defmethod ig/init-key :xtdb.log/replica-processor [_ {{:keys [meter-registry]} :base
+                                                        :keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
+                                                               ^Log log indexer skip-txs enabled?]}]
+  (when enabled?
+    (let [log (or log (.getSourceLog db-storage))
+          lp (ReplicaLogProcessor. allocator meter-registry
+                                   log db-storage db-state
+                                   indexer (set skip-txs))]
+      {:processor lp
+       :subscription (.tailAll log lp (.getLatestProcessedOffset lp))})))
+
+(defmethod ig/resolve-key :xtdb.log/replica-processor [_ {:keys [processor]}]
+  processor)
+
+(defmethod ig/halt-key! :xtdb.log/replica-processor [_ {:keys [processor subscription]}]
   (util/close subscription)
   (util/close processor))
 

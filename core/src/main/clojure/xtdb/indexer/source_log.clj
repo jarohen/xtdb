@@ -13,7 +13,7 @@
          :xtdb.db-catalog/state child-opts
          :xtdb.indexer/for-db (assoc child-opts :tx-source nil)
          :xtdb.compactor/for-db (assoc child-opts :mode mode)
-         :xtdb.log/processor (assoc child-opts :log source-log :indexer-conf indexer-conf :mode mode :subscribe-mode :subscribe)}
+         :xtdb.log/source-processor (assoc child-opts :log source-log :indexer-conf indexer-conf :mode mode)}
         (doto ig/load-namespaces))))
 
 (defmethod ig/expand-key :xtdb.indexer/source-log [k opts]
@@ -27,7 +27,7 @@
   [_ {:keys [source-log indexer-conf mode] :as opts}]
   (let [sys (-> (source-system opts indexer-conf mode)
                 ig/expand ig/init)
-        lp (:processor (:xtdb.log/processor sys))
+        lp (:processor (:xtdb.log/source-processor sys))
         ^DatabaseState state (:xtdb.db-catalog/state sys)]
     {:source-indexer (SourceIndexer. lp (:xtdb.compactor/for-db sys) state)
      :sys sys}))

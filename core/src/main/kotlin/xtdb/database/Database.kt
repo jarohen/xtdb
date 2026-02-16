@@ -25,7 +25,8 @@ import xtdb.database.proto.DatabaseConfig
 import xtdb.database.proto.DatabaseMode
 import xtdb.indexer.ControlPlaneConsumer
 import xtdb.indexer.LiveIndex
-import xtdb.indexer.LogProcessor
+import xtdb.indexer.ReplicaLogProcessor
+import xtdb.indexer.SourceLogProcessor
 import xtdb.indexer.Snapshot
 import xtdb.indexer.Indexer.TxSource
 import xtdb.metadata.PageMetadata
@@ -36,19 +37,19 @@ import java.time.Duration
 import java.util.*
 
 data class SourceIndexer(
-    val logProcessorOrNull: LogProcessor?,
+    val logProcessorOrNull: SourceLogProcessor?,
     val compactor: Compactor.ForDatabase,
     val state: DatabaseState,
 ) {
-    val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("source log processor not initialised")
+    val logProcessor: SourceLogProcessor get() = logProcessorOrNull ?: error("source log processor not initialised")
 }
 
 data class ReplicaIndexer(
-    val logProcessorOrNull: LogProcessor?,
+    val logProcessorOrNull: ReplicaLogProcessor?,
     val txSource: TxSource?,
     val state: DatabaseState,
 ) {
-    val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("replica log processor not initialised")
+    val logProcessor: ReplicaLogProcessor get() = logProcessorOrNull ?: error("replica log processor not initialised")
 }
 
 data class Database(

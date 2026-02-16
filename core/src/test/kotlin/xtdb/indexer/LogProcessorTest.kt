@@ -13,8 +13,6 @@ import xtdb.api.storage.ObjectStore
 import xtdb.block.proto.block
 import xtdb.catalog.BlockCatalog
 import xtdb.catalog.TableCatalog
-import xtdb.compactor.Compactor
-import xtdb.database.Database
 import xtdb.database.DatabaseState
 import xtdb.database.DatabaseStorage
 import xtdb.storage.BufferPool
@@ -31,7 +29,7 @@ class LogProcessorTest {
     private fun inst(day: Int) =
         LocalDate.of(2020, 1, day).atStartOfDay().toInstant(ZoneOffset.UTC)
 
-    private fun flusher(prevBlockTxId: Long, flushedTxId: Long) = LogProcessor.Flusher(
+    private fun flusher(prevBlockTxId: Long, flushedTxId: Long) = SourceLogProcessor.Flusher(
         Duration.ofDays(2),
         inst(1),
         previousBlockTxId = prevBlockTxId,
@@ -83,13 +81,11 @@ class LogProcessorTest {
         )
 
         RootAllocator().use { allocator ->
-            val lp = LogProcessor(
+            val lp = ReplicaLogProcessor(
                 allocator, SimpleMeterRegistry(),
                 log, dbStorage, dbState,
                 mockk<Indexer.ForDatabase>(relaxed = true),
-                mockk<Compactor.ForDatabase>(relaxed = true),
-                Duration.ofHours(1), emptySet(),
-                Database.Mode.READ_ONLY,
+                emptySet(),
                 maxBufferedRecords = 2
             )
 
@@ -136,13 +132,11 @@ class LogProcessorTest {
                 liveIndex
             )
 
-            val lp = LogProcessor(
+            val lp = ReplicaLogProcessor(
                 allocator, SimpleMeterRegistry(),
                 log, dbStorage, dbState,
                 mockk<Indexer.ForDatabase>(relaxed = true),
-                mockk<Compactor.ForDatabase>(relaxed = true),
-                Duration.ofHours(1), emptySet(),
-                Database.Mode.READ_ONLY,
+                emptySet(),
             )
 
             val now = Instant.now()

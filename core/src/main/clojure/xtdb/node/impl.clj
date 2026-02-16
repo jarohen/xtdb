@@ -28,6 +28,7 @@
            xtdb.api.module.XtdbModule$Factory
            (xtdb.database Database Database$Catalog)
            xtdb.error.Anomaly
+           xtdb.indexer.LogProcessor
            (xtdb.query IQuerySource PreparedQuery)
            (xtdb.tx TxWriter)
            (xtdb.util MsgIdUtil)))
@@ -73,7 +74,7 @@
         (metrics/wrap-query query-timer))))
 
 (defn- await-msg-result [node ^Database db msg-id]
-  (or (when-let [lp (-> db .getReplicaIndexer .getLogProcessorOrNull)]
+  (or (when-let [^LogProcessor lp (-> db .getReplicaIndexer .getLogProcessorOrNull)]
         (let [^TransactionResult tx-res (-> @(.awaitAsync lp msg-id)
                                             (util/rethrowing-cause))]
           (when (and tx-res
@@ -239,8 +240,8 @@
   (latest-processed-msg-ids [_]
     (->> (.getDatabaseNames db-cat)
          (into {} (keep (fn [^String db-name]
-                          (when-let [lp (some-> (.databaseOrNull db-cat db-name)
-                                                .getReplicaIndexer .getLogProcessorOrNull)]
+                          (when-let [^LogProcessor lp (some-> (.databaseOrNull db-cat db-name)
+                                                              .getReplicaIndexer .getLogProcessorOrNull)]
                             [db-name [(.getLatestProcessedMsgId lp)]]))))))
 
   (await-token [this]
