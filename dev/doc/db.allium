@@ -1,25 +1,17 @@
 -- db.allium
 --
 -- The processing model of a single database within an XTDB node:
--- transaction submission → log processing → block flushing → query.
+-- transaction submission → source log processing → replica log processing → query.
 -- Compaction is specified separately: see compaction.allium.
+--
+-- Two log processors per database:
+--   SourceLogProcessor: consumes source log, resolves txs, writes OutputTx to replica log.
+--   ReplicaLogProcessor: consumes replica log, applies pre-resolved txs, serves queries.
 --
 -- Scope: one database (e.g. "xtdb" or a secondary).
 -- External: the multi-database orchestration layer (attach/detach).
 
 use "./trie-cat.allium" as trie_cat
-
-------------------------------------------------------------
--- Context
-------------------------------------------------------------
-
-context {
-    database: Database
-    live_index: LiveIndex
-    block_catalog: BlockCatalog
-    table_catalog: TableCatalog
-    log_processor: LogProcessor
-}
 
 ------------------------------------------------------------
 -- External Entities
@@ -33,8 +25,7 @@ external entity Client {
 
 external entity Log {
     -- An ordered, append-only message stream.
-    -- Two instances per database: source-log and replica-log.
-    -- Currently they MAY point to the same underlying log.
+    -- Two instances per database: source_log and replica_log.
     -- See: api/log/Log.kt
 }
 
@@ -80,14 +71,32 @@ entity TableCatalog {
     table_metadata: Map<trie_cat/TableRef, TableMetadata>
 }
 
-entity LogProcessor {
-    -- See: indexer/LogProcessor.kt
+entity SourceLogProcessor {
+    -- Consumes source log, resolves transactions, writes OutputTx to replica log.
+    -- Has its own LiveIndex, BlockCatalog, TableCatalog, TrieCatalog.
+    -- See: indexer/LogProcessor.kt (will be split)
     latest_processed_msg_id: MessageId
     last_flush_check: Instant
+
+    live_index: LiveIndex
+    block_catalog: BlockCatalog
+    table_catalog: TableCatalog
+}
+
+entity ReplicaLogProcessor {
+    -- Consumes replica log, applies pre-resolved OutputTx messages.
+    -- Has its own LiveIndex, BlockCatalog, TableCatalog, TrieCatalog.
+    -- Queries are served from this processor's live index.
+    -- See: indexer/LogProcessor.kt (will be split)
+    latest_processed_msg_id: MessageId
+
+    live_index: LiveIndex
+    block_catalog: BlockCatalog
+    table_catalog: TableCatalog
 }
 
 -- Storage.VERSION is a compile-time constant; storage_epoch is per-BufferPool.
--- The LogProcessor checks incoming TriesAdded messages against these values
+-- The ReplicaLogProcessor checks incoming TriesAdded messages against these values
 -- to discard stale notifications from a previous epoch.
 external value current_storage_version: Int   -- See: storage/Storage.kt (VERSION)
 external value current_storage_epoch: Int     -- See: buffer_pool/BufferPool.kt (epoch)
@@ -115,6 +124,7 @@ value Block {
     block_index: Long
     latest_completed_tx: TransactionKey
     latest_processed_msg_id: MessageId
+    replica_log_offset: MessageId   -- replica-log offset of the BlockBoundary that concluded this block
 }
 
 value Snapshot {
@@ -129,19 +139,19 @@ value TableMetadata {
 }
 
 ------------------------------------------------------------
--- Log Messages
+-- Source Log Messages
 ------------------------------------------------------------
 
--- The LogProcessor dispatches on message kind.
--- See: log/proto/log.proto (LogMessage oneof)
+-- Messages on the source log: client-submitted transactions and control messages.
+-- See: log/proto/log.proto
 
-entity Message {
+entity SourceMessage {
     msg_id: MessageId
     log_timestamp: Instant
-    kind: TxMessage | FlushBlockMessage | TriesAddedMessage | BlockUploadedMessage | AttachDbMessage | DetachDbMessage
+    kind: TxMessage | FlushBlockMessage | AttachDbMessage | DetachDbMessage
 }
 
-variant TxMessage : Message {
+variant TxMessage : SourceMessage {
     -- Client-submitted transaction operations.
     -- See: tx/TxWriter.kt, api/log/Log.kt (Log$Message$Tx) — serialised via TxWriter, not proto.
     system_time: Instant?
@@ -149,13 +159,54 @@ variant TxMessage : Message {
     user: String?
 }
 
-variant FlushBlockMessage : Message {
+variant FlushBlockMessage : SourceMessage {
     -- Request to finish the current block.
     -- See: log/proto/log.proto (FlushBlock)
     expected_block_idx: Long?
 }
 
-variant TriesAddedMessage : Message {
+variant AttachDbMessage : SourceMessage {
+    -- See: log/proto/log.proto (AttachDatabase)
+    db_name: String
+}
+
+variant DetachDbMessage : SourceMessage {
+    -- See: log/proto/log.proto (DetachDatabase)
+    db_name: String
+}
+
+------------------------------------------------------------
+-- Replica Log Messages
+------------------------------------------------------------
+
+-- Messages on the replica log: resolved transactions, block lifecycle, trie notifications.
+
+entity ReplicaMessage {
+    msg_id: MessageId
+    log_timestamp: Instant
+    kind: OutputTxMessage | BlockBoundaryMessage | TriesAddedMessage | BlockUploadedMessage
+}
+
+variant OutputTxMessage : ReplicaMessage {
+    -- A resolved transaction: the source has executed the tx against its live index
+    -- and serialised the per-table results.
+    -- Replicas import these directly into their live indexes.
+    source_msg_id: MessageId                            -- offset of the original TxMessage on the source log
+    tx_key: TransactionKey
+    committed: Boolean
+    error: Bytes?                                       -- transit-msgpack encoded error, if aborted
+    user_metadata: Bytes?                               -- transit-msgpack encoded user metadata
+    table_relations: Map<trie_cat/TableRef, Bytes>      -- per-table Arrow IPC payloads (log-data schema)
+}
+
+variant BlockBoundaryMessage : ReplicaMessage {
+    -- Marks where the source decides to cut the block, before any block I/O.
+    -- Serves as the replay anchor for source recovery.
+    block_index: Long
+    latest_source_msg_id: MessageId     -- source-log offset at the cut point
+}
+
+variant TriesAddedMessage : ReplicaMessage {
     -- Notification that new tries exist (from block flush or compaction).
     -- See: log/proto/log.proto (TriesAdded)
     storage_version: Int
@@ -163,23 +214,13 @@ variant TriesAddedMessage : Message {
     tries: List<trie_cat/TrieDetails>
 }
 
-variant BlockUploadedMessage : Message {
+variant BlockUploadedMessage : ReplicaMessage {
     -- Notification that a block has been written to the object store.
-    -- Sent by the writer after finishBlock(); consumed by read-only nodes to refresh catalogs without polling.
+    -- Sent by the source after finishBlock(); consumed by replicas to refresh catalogs.
     -- See: log/proto/log.proto (BlockUploaded)
     block_index: Long
     latest_processed_msg_id: MessageId
-    storage_epoch: StorageEpoch
-}
-
-variant AttachDbMessage : Message {
-    -- See: log/proto/log.proto (AttachDatabase)
-    db_name: String
-}
-
-variant DetachDbMessage : Message {
-    -- See: log/proto/log.proto (DetachDatabase)
-    db_name: String
+    storage_epoch: Int
 }
 
 ------------------------------------------------------------
@@ -192,10 +233,8 @@ config {
 }
 
 ------------------------------------------------------------
--- Rules
+-- Rules: Transaction Submission
 ------------------------------------------------------------
-
--- == Transaction Submission ==
 
 rule ClientSubmitsTransaction {
     when: ClientSubmitsTx(client, database, tx_ops, opts)
@@ -211,182 +250,301 @@ rule ClientSubmitsTransaction {
         msg appended to database.source_log
 }
 
+------------------------------------------------------------
+-- Rules: Source Log Processing
+------------------------------------------------------------
 
--- == Log Processing ==
---
--- LogProcessor subscribes to the source-log and processes messages sequentially.
--- This is the heart of the system.
+-- The SourceLogProcessor subscribes to the source log (consumer group)
+-- and processes messages sequentially.
+-- For each transaction, it resolves against its own live index,
+-- then writes the result as an OutputTxMessage to the replica log.
 
-rule ProcessTxMessage {
-    -- A transaction message arrives from the source log.
+rule SourceProcessesTx {
     when: msg: TxMessage appended to database.source_log
 
-    requires: msg.msg_id > log_processor.latest_processed_msg_id
+    requires: msg.msg_id > source.latest_processed_msg_id
 
     ensures:
-        -- The indexer resolves and applies the transaction.
-        -- Result is either committed or aborted.
-        let result = IndexTransaction(msg)
-        log_processor.latest_processed_msg_id = msg.msg_id
+        -- Resolve the transaction against the source's live index.
+        let result = ResolveTransaction(msg, source.live_index)
 
-        -- If the live index is now full, a block flush is needed.
-        if live_index.is_full:
-            BlockFlushNeeded(msg.log_timestamp)
+        -- Write the resolved result to the replica log.
+        let output = OutputTxMessage.created(
+            source_msg_id: msg.msg_id,
+            tx_key: result.tx_key,
+            committed: result.committed,
+            error: result.error,
+            user_metadata: result.user_metadata,
+            table_relations: result.table_relations
+        )
+        output appended to database.replica_log
+
+        source.latest_processed_msg_id = msg.msg_id
+
+        if source.live_index.is_full:
+            SourceBlockFlushNeeded(msg.log_timestamp)
 }
 
-rule ProcessFlushBlockMessage {
+rule SourceProcessesFlushBlock {
     when: msg: FlushBlockMessage appended to database.source_log
 
-    requires: msg.msg_id > log_processor.latest_processed_msg_id
-    requires: msg.expected_block_idx == block_catalog.current_block_index
+    requires: msg.msg_id > source.latest_processed_msg_id
+    requires: msg.expected_block_idx == source.block_catalog.current_block_index
 
     ensures:
-        log_processor.latest_processed_msg_id = msg.msg_id
-        BlockFlushNeeded(msg.log_timestamp)
+        source.latest_processed_msg_id = msg.msg_id
+        SourceBlockFlushNeeded(msg.log_timestamp)
 }
 
-rule ProcessTriesAddedMessage {
-    -- Tries-added messages are idempotent notifications.
-    -- They arrive on the replica-log but currently also on the source-log (because both point to the same underlying log).
-    when: msg: TriesAddedMessage appended to database.source_log
+rule SourceProcessesAttachDb {
+    when: msg: AttachDbMessage appended to database.source_log
 
-    requires: msg.msg_id > log_processor.latest_processed_msg_id
-    requires: msg.storage_version == current_storage_version
-    requires: msg.storage_epoch == current_storage_epoch
+    requires: msg.msg_id > source.latest_processed_msg_id
 
     ensures:
-        trie_cat/trie_catalog.addTries(msg.tries, msg.log_timestamp)
-        log_processor.latest_processed_msg_id = msg.msg_id
+        source.latest_processed_msg_id = msg.msg_id
+        -- Attach handling delegated to multi-database layer.
 }
 
+rule SourceProcessesDetachDb {
+    when: msg: DetachDbMessage appended to database.source_log
 
--- == Block Flushing ==
---
--- Two paths: the leader writes blocks and notifies via BlockUploaded on the source log;
--- read-only nodes buffer messages until BlockUploaded arrives, then transition and replay.
-
-rule LeaderFinishesBlock {
-    -- log_timestamp is the log timestamp of the message that triggered the flush
-    -- (either the transaction that filled the block, or a FlushBlock message).
-    -- This becomes the as_of for trie registration, used later by GC to determine
-    -- deletion eligibility. The 24-hour garbage_lifetime grace period absorbs
-    -- any practical difference between these two sources.
-    when: BlockFlushNeeded(log_timestamp)
-
-    requires: database.mode == read_write
-
-    let block_index = (block_catalog.current_block_index ?? -1) + 1
-    -- finishBlock returns a per-table map of finished blocks,
-    -- each containing tries and table metadata.
-    -- See: indexer/LiveIndex.kt (finishBlock), indexer/LiveTable.kt (FinishedBlock)
-    let finished_tables = live_index.finishBlock(block_index)
-    let tries = finished_tables.collectTries()
+    requires: msg.msg_id > source.latest_processed_msg_id
 
     ensures:
-        -- Write tries-added to the replica-log so followers can see them.
+        source.latest_processed_msg_id = msg.msg_id
+        -- Detach handling delegated to multi-database layer.
+}
+
+------------------------------------------------------------
+-- Rules: Source Block Flushing
+------------------------------------------------------------
+
+-- When the source's live index is full or a FlushBlock is received,
+-- the source writes a BlockBoundary, flushes to object store,
+-- and writes TriesAdded + BlockUploaded to the replica log.
+
+rule SourceFinishesBlock {
+    -- log_timestamp is from the message that triggered the flush.
+    -- Becomes the as_of for trie registration; the 24-hour garbage_lifetime
+    -- grace period absorbs any practical difference between trigger sources.
+    when: SourceBlockFlushNeeded(log_timestamp)
+
+    let block_index = (source.block_catalog.current_block_index ?? -1) + 1
+
+    ensures:
+        -- 1. Mark the cut point on the replica log.
+        let boundary = BlockBoundaryMessage.created(
+            block_index: block_index,
+            latest_source_msg_id: source.latest_processed_msg_id
+        )
+        boundary appended to database.replica_log
+
+        -- 2. Finish the block: writes trie data files to object store.
+        let finished_tables = source.live_index.finishBlock(block_index)
+        let tries = finished_tables.collectTries()
+
+        -- 3. Notify replicas that tries exist.
         let tries_added = TriesAddedMessage.created(tries: tries)
         tries_added appended to database.replica_log
 
-        -- Register tries locally.
+        -- Register tries locally on the source.
         trie_cat/trie_catalog.addTries(tries, log_timestamp)
 
-        -- Update table catalog with new metadata from finished tables.
-        -- The leader updates in-memory via finishBlock (merges delta metadata);
-        -- the follower achieves the same result via refresh (reloads from object store).
-        -- See: table_catalog.clj (finishBlock), TableCatalog (refresh)
-        table_catalog.finishBlock(finished_tables)
+        -- Update source's table catalog.
+        source.table_catalog.finishBlock(finished_tables)
 
-        -- Persist block to object store.
-        Block.created(
+        -- 4. Write block file to object store.
+        let block = Block.created(
             block_index: block_index,
-            latest_completed_tx: live_index.latest_completed_tx,
-            latest_processed_msg_id: log_processor.latest_processed_msg_id
+            latest_completed_tx: source.live_index.latest_completed_tx,
+            latest_processed_msg_id: source.latest_processed_msg_id,
+            replica_log_offset: boundary.msg_id
         )
+        block persisted to ObjectStore
+        source.block_catalog.refresh(block)
 
-        block_catalog.refresh(block)
-
-        -- Notify read-only nodes that the block is available.
+        -- 5. Notify replicas that the block is available.
         let block_uploaded = BlockUploadedMessage.created(
             block_index: block_index,
-            latest_processed_msg_id: log_processor.latest_processed_msg_id,
-            storage_epoch: buffer_pool.epoch
+            latest_processed_msg_id: source.latest_processed_msg_id,
+            storage_epoch: current_storage_epoch
         )
-        block_uploaded appended to database.source_log
+        block_uploaded appended to database.replica_log
 
-        -- Reset for next block.
-        live_index.nextBlock()
+        -- 6. Reset for next block.
+        source.live_index.nextBlock()
 
         -- Wake up compaction.
         CompactorSignalled()
 }
 
-rule FollowerBuffersUntilBlockEnd {
-    -- The follower cannot process further txs while the live index is full.
-    -- It consumes messages from the source log, buffering them until BlockUploaded arrives.
-    when: BlockFlushNeeded(log_timestamp)
+------------------------------------------------------------
+-- Rules: Replica Log Processing
+------------------------------------------------------------
 
-    requires: database.mode == read_only
+-- The ReplicaLogProcessor tails the replica log.
+-- It applies pre-resolved OutputTxMessages directly (no query engine needed).
+-- On BlockBoundary, it buffers until BlockUploaded, then transitions.
 
-    let block_index = (block_catalog.current_block_index ?? -1) + 1
+rule ReplicaProcessesOutputTx {
+    when: msg: OutputTxMessage appended to database.replica_log
+
+    requires: msg.msg_id > replica.latest_processed_msg_id
 
     ensures:
-        let (buffered, msg) = consumeUntil BlockUploadedMessage from database.source_log
-            where msg.block_index == block_index
-              and msg.storage_epoch == buffer_pool.epoch
-
-        FollowerProcessesBlockEnd(block_index, buffered)
+        -- Import the pre-resolved table relations into the replica's live index.
+        ApplyOutputTx(msg, replica.live_index)
+        replica.latest_processed_msg_id = msg.msg_id
 }
 
-rule FollowerProcessesBlockEnd {
-    when: FollowerProcessesBlockEnd(block_index, buffered)
+rule ReplicaProcessesTriesAdded {
+    when: msg: TriesAddedMessage appended to database.replica_log
+
+    requires: msg.msg_id > replica.latest_processed_msg_id
+    requires: msg.storage_version == current_storage_version
+    requires: msg.storage_epoch == current_storage_epoch
 
     ensures:
-        -- The reader doesn't write tries — it refreshes catalogs from what the writer wrote.
-        block_catalog.refresh(block_index)
-        table_catalog.refresh()
+        trie_cat/trie_catalog.addTries(msg.tries, msg.log_timestamp)
+        replica.latest_processed_msg_id = msg.msg_id
+}
+
+rule ReplicaBuffersAtBlockBoundary {
+    -- When the replica sees a BlockBoundary, it stops processing OutputTxMessages
+    -- and buffers until BlockUploaded arrives for that block.
+    when: msg: BlockBoundaryMessage appended to database.replica_log
+
+    requires: msg.msg_id > replica.latest_processed_msg_id
+
+    let block_index = msg.block_index
+
+    ensures:
+        let (buffered, uploaded_msg) = consumeUntil BlockUploadedMessage from database.replica_log
+            where uploaded_msg.block_index == block_index
+              and uploaded_msg.storage_epoch == current_storage_epoch
+
+        ReplicaTransitionsBlock(block_index, buffered)
+}
+
+rule ReplicaTransitionsBlock {
+    when: ReplicaTransitionsBlock(block_index, buffered)
+
+    ensures:
+        -- Refresh catalogs from what the source wrote to the object store.
+        replica.block_catalog.refresh(block_index)
+        replica.table_catalog.refresh()
         trie_cat/trie_catalog.refresh()
-        live_index.nextBlock()
+        replica.live_index.nextBlock()
 
         -- Replay buffered messages into the new live index.
         for each buffered_msg in buffered:
-            ProcessMessage(buffered_msg)
+            ReplicaProcessMessage(buffered_msg)
 }
 
+------------------------------------------------------------
+-- Rules: Flush Timeout
+------------------------------------------------------------
 
--- == Flush Timeout ==
---
 -- If transactions have been accumulating without a block flush,
--- the leader sends itself a FlushBlock message.
+-- the source sends itself a FlushBlock message.
 
 rule FlushTimeoutFires {
-    when: log_processor: LogProcessor.last_flush_check + config.flush_timeout <= now
+    when: source.last_flush_check + config.flush_timeout <= now
 
     requires: database.mode == read_write
-    requires: live_index.has_data
-    requires: block_catalog.current_block_index unchanged since log_processor.last_flush_check
+    requires: source.live_index.has_data
+    requires: source.block_catalog.current_block_index unchanged since source.last_flush_check
 
     ensures:
         FlushBlockMessage.created(
-            expected_block_idx: block_catalog.current_block_index
+            expected_block_idx: source.block_catalog.current_block_index
         ) appended to database.source_log
 }
 
+------------------------------------------------------------
+-- Rules: Source Recovery
+------------------------------------------------------------
 
--- == Query Serving ==
+-- The two-log problem: the source consumes from source log and writes to replica log.
+-- A crash between consume and write creates inconsistency.
+-- Recovery uses a three-phase Replay-then-Resume protocol.
+
+rule SourceHydratesFromBlock {
+    -- Phase 1: On partition assignment, hydrate state from the latest block.
+    when: SourcePartitionAssigned(database)
+
+    ensures:
+        let block = source.block_catalog.latest_block
+
+        -- Hydrate source's live index, catalogs from block (as today).
+        source.hydrateFrom(block)
+
+        -- Continue to phase 2.
+        SourceCatchesUpFromReplicaLog(block)
+}
+
+rule SourceCatchesUpFromReplicaLog {
+    -- Phase 2: Replay from replica log to rebuild in-memory state.
+    -- The source acts as a replica during this phase.
+    when: SourceCatchesUpFromReplicaLog(block)
+
+    let resume_offset = block?.replica_log_offset ?? beginning
+
+    ensures:
+        -- Tail replica log from block's replica_log_offset to current end.
+        let last_source_msg_id = block?.latest_processed_msg_id
+
+        for each msg in database.replica_log from resume_offset:
+            match msg:
+                OutputTxMessage ->
+                    ApplyOutputTx(msg, source.live_index)
+                    last_source_msg_id = msg.source_msg_id
+                TriesAddedMessage ->
+                    trie_cat/trie_catalog.addTries(msg.tries, msg.log_timestamp)
+                BlockUploadedMessage ->
+                    -- Block transition during catch-up.
+                    source.block_catalog.refresh(msg.block_index)
+                    source.table_catalog.refresh()
+                    source.live_index.nextBlock()
+                BlockBoundaryMessage ->
+                    -- Handled implicitly by subsequent BlockUploaded.
+                    pass
+
+        -- Continue to phase 3 with the resume point.
+        SourceResumesFromSourceLog(last_source_msg_id)
+}
+
+rule SourceResumesFromSourceLog {
+    -- Phase 3: Resume from source log with transactional producer.
+    when: SourceResumesFromSourceLog(last_source_msg_id)
+
+    ensures:
+        -- Seek source log to last_source_msg_id + 1.
+        -- Open transactional producer on replica log.
+        -- Enter steady-state processing (SourceProcessesTx etc).
+        source.latest_processed_msg_id = last_source_msg_id
+        SourceEntersSteadyState()
+}
+
+------------------------------------------------------------
+-- Rules: Query Serving
+------------------------------------------------------------
 
 rule ClientOpensSnapshot {
     when: ClientOpensSnapshot(client, database)
 
     ensures:
-        -- A snapshot sees all committed transactions up to this point.
-        -- The snapshot is a consistent read of live index + block data.
+        -- Queries are served from the replica's live index,
+        -- even on the leader node.
         Snapshot.created(
-            as_of: live_index.latest_completed_tx
+            as_of: replica.live_index.latest_completed_tx
         )
 }
 
-
--- == Error Handling ==
+------------------------------------------------------------
+-- Rules: Error Handling
+------------------------------------------------------------
 
 rule ProcessingErrorHaltsNode {
     -- Any unrecoverable error during log processing is fatal.
@@ -418,7 +576,7 @@ surface TransactionSubmission {
             when db.mode == read_write
 
     invariant: OrderedProcessing
-        -- Transactions are processed in the order they appear in the source log, not the order they were submitted.
+        -- Transactions are processed in source-log order, not submission order.
 }
 
 surface QueryAccess {
@@ -431,18 +589,20 @@ surface QueryAccess {
 
     invariant: SnapshotIsolation
         -- A snapshot sees a consistent point-in-time view.
-        -- It includes all transactions up to latest_completed_tx.
+        -- It includes all transactions up to the replica's latest_completed_tx.
 }
 
 ------------------------------------------------------------
 -- Deferred Specifications
 ------------------------------------------------------------
 
-deferred IndexTransaction           -- transaction resolution (put/delete/erase logic)
+deferred ResolveTransaction        -- source-side tx resolution: put/delete/erase logic, SQL execution
+deferred ApplyOutputTx             -- replica-side import of pre-resolved table relations into live index
+deferred TxSourceConsumesOutputTx  -- tx-source reads resolved txs from replica log, not source txs
 
 ------------------------------------------------------------
 -- Open Questions
 ------------------------------------------------------------
 
-open_question "Should the flush timeout be per-database or global?"
-open_question "What happens if a read-only node's latestProcessedMsgId is behind the block? (currently a Fault)"
+open_question "Source recovery phase 2: should catch-up be synchronous within onPartitionsAssigned? Risk of exceeding Kafka's max.poll.interval.ms for large replay windows."
+open_question "Transactional producer design: AtomicProducer.Tx needs commitWithConsumerOffsets for Kafka's sendOffsetsToTransaction. InMemory/Local implementations: no-op (single process)."
