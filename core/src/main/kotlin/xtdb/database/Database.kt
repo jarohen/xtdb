@@ -38,7 +38,6 @@ import java.util.*
 data class SourceIndexer(
     val logProcessorOrNull: LogProcessor?,
     val compactor: Compactor.ForDatabase,
-    val txSource: TxSource?,
     val state: DatabaseState,
 ) {
     val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("source log processor not initialised")
@@ -46,6 +45,7 @@ data class SourceIndexer(
 
 data class ReplicaIndexer(
     val logProcessorOrNull: LogProcessor?,
+    val txSource: TxSource?,
     val state: DatabaseState,
 ) {
     val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("replica log processor not initialised")

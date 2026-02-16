@@ -73,9 +73,6 @@
         (metrics/wrap-query query-timer))))
 
 (defn- await-msg-result [node ^Database db msg-id]
-  ;; Await source LP first (for side effects like tx-source onCommit),
-  ;; then replica LP (for query-visible state and the tx result).
-  (some-> db .getSourceIndexer .getLogProcessorOrNull (.awaitAsync msg-id) deref)
   (or (when-let [lp (-> db .getReplicaIndexer .getLogProcessorOrNull)]
         (let [^TransactionResult tx-res (-> @(.awaitAsync lp msg-id)
                                             (util/rethrowing-cause))]

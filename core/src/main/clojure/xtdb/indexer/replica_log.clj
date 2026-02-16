@@ -3,16 +3,16 @@
             [xtdb.util :as util])
   (:import [xtdb.database DatabaseState Database$Mode ReplicaIndexer]))
 
-(defn- replica-system [{:keys [replica-log] :as opts} indexer-conf]
-  (let [child-opts (dissoc opts :replica-log :indexer-conf :mode)]
+(defn- replica-system [{:keys [replica-log] :as opts} indexer-conf tx-source-conf]
+  (let [child-opts (dissoc opts :replica-log :indexer-conf :mode :tx-source-conf)]
     (-> {:xtdb/block-catalog child-opts
          :xtdb/table-catalog child-opts
          :xtdb/trie-catalog child-opts
          :xtdb.indexer/live-index (assoc child-opts :indexer-conf indexer-conf)
          :xtdb.indexer/crash-logger child-opts
          :xtdb.db-catalog/state child-opts
-         ;; no tx-source in replica
-         :xtdb.indexer/for-db (assoc child-opts :tx-source nil)
+         :xtdb.tx-source/for-db (assoc child-opts :tx-source-conf tx-source-conf)
+         :xtdb.indexer/for-db child-opts
          ;; READ_ONLY forces NOOP compactor
          :xtdb.compactor/for-db (assoc child-opts :mode Database$Mode/READ_ONLY)
          ;; replica LP is always read-only: it waits for blocks written by the source
@@ -27,12 +27,12 @@
            opts)})
 
 (defmethod ig/init-key :xtdb.indexer/replica-log
-  [_ {:keys [replica-log indexer-conf] :as opts}]
-  (let [sys (-> (replica-system opts indexer-conf)
+  [_ {:keys [replica-log indexer-conf tx-source-conf] :as opts}]
+  (let [sys (-> (replica-system opts indexer-conf tx-source-conf)
                 ig/expand ig/init)
         lp (:processor (:xtdb.log/processor sys))
         ^DatabaseState state (:xtdb.db-catalog/state sys)]
-    {:replica-indexer (ReplicaIndexer. lp state)
+    {:replica-indexer (ReplicaIndexer. lp (:xtdb.tx-source/for-db sys) state)
      :sys sys}))
 
 (defmethod ig/halt-key! :xtdb.indexer/replica-log [_ {:keys [sys]}]

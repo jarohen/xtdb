@@ -417,7 +417,7 @@
   ([node] (get-output-log node "xtdb"))
   ([node db-name]
    (-> (database-or-null node db-name)
-       .getSourceIndexer .getTxSource
+       .getReplicaIndexer .getTxSource
        :output-log)))
 
 (defn get-trie-cat

@@ -68,9 +68,9 @@
 
          ::storage opts
 
-         :xtdb.indexer/source-log (assoc opts :indexer-conf indexer-conf :mode mode
-                                              :tx-source-conf (.getTxSource conf))
-         :xtdb.indexer/replica-log (assoc opts :indexer-conf indexer-conf)}
+         :xtdb.indexer/source-log (assoc opts :indexer-conf indexer-conf :mode mode)
+         :xtdb.indexer/replica-log (assoc opts :indexer-conf indexer-conf
+                                               :tx-source-conf (.getTxSource conf))}
         (cond-> (:db-catalog base) (assoc :xtdb.log/control-plane opts))
         (doto ig/load-namespaces))))
 
