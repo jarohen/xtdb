@@ -60,15 +60,13 @@
 
                 (case (long (:status resp))
                   503 (do
-                        ;; HACK: msg-ids shifted due to BlockUploaded + doubled TriesAdded messages
-                        (t/is (= {"X-XTDB-Target-Message-Id" "2502"}
+                        (t/is (= {"X-XTDB-Target-Message-Id" "2531"}
                                  (-> (:headers resp)
                                      (select-keys ["X-XTDB-Target-Message-Id"]))))
                         (Thread/sleep 250)
                         (recur))
                   200 (do
-                        ;; HACK: msg-ids shifted due to BlockUploaded + doubled TriesAdded messages
-                        (t/is (= {"X-XTDB-Target-Message-Id" "2502", "X-XTDB-Current-Message-Id" "2502"}
+                        (t/is (= {"X-XTDB-Target-Message-Id" "2531", "X-XTDB-Current-Message-Id" "2531"}
                                  (-> (:headers resp)
                                      (select-keys ["X-XTDB-Target-Message-Id" "X-XTDB-Current-Message-Id"]))))
                         (t/is (= "Started." (:body resp)))))))))))))

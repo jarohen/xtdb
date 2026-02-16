@@ -43,7 +43,6 @@ import xtdb.util.logger
 import xtdb.util.warn
 import java.nio.ByteBuffer
 import java.nio.channels.ClosedByInterruptException
-import java.time.Duration
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import kotlin.coroutines.cancellation.CancellationException
@@ -176,12 +175,11 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     }
 
     private fun processRecord(msgId: MessageId, record: Log.Record): TransactionResult? {
-        var toFinishBlock = false
         LOG.debug("Processing message $msgId, ${record.message.javaClass.simpleName}")
 
         return when (val msg = record.message) {
                 is Message.Tx -> {
-                    val result = if (skipTxs.isNotEmpty() && skipTxs.contains(msgId)) {
+                    if (skipTxs.isNotEmpty() && skipTxs.contains(msgId)) {
                         LOG.warn("Skipping transaction id $msgId - within XTDB_SKIP_TXS")
 
                         val skippedTxPath = "skipped-txs/${msgId.asLexDec}".asPath
@@ -217,26 +215,21 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                             }
                         }
                     }
-
-                    if (liveIndex.isFull())
-                        toFinishBlock = true
-
-                    result
                 }
 
-                is Message.FlushBlock -> {
-                    val expectedBlockIdx = msg.expectedBlockIdx
-                    if (expectedBlockIdx != null && expectedBlockIdx == (blockCatalog.currentBlockIndex ?: -1L))
-                        toFinishBlock = true
-
-                    null
-                }
+                is Message.FlushBlock -> null
 
                 is Message.TriesAdded -> {
                     if (msg.storageVersion == Storage.VERSION && msg.storageEpoch == bufferPool.epoch)
                         msg.tries.groupBy { it.tableName }.forEach { (tableName, tries) ->
                             trieCatalog.addTries(TableRef.parse(dbState.name, tableName), tries, record.logTimestamp)
                         }
+                    null
+                }
+
+                is Message.BlockBoundary -> {
+                    pendingBlockIdx = msg.blockIndex
+                    LOG.debug("received BlockBoundary, waiting for block 'b${msg.blockIndex.asLexHex}' via BlockUploaded message...")
                     null
                 }
 
@@ -291,11 +284,6 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                 }
             }.also {
                 latestProcessedMsgId = msgId
-                if (toFinishBlock) {
-                    pendingBlockIdx = (blockCatalog.currentBlockIndex ?: -1) + 1
-                    LOG.debug("read-only mode: waiting for block 'b${pendingBlockIdx!!.asLexHex}' via BlockUploaded message...")
-                }
-
                 LOG.debug("Processed message $msgId")
             }
     }

@@ -259,7 +259,7 @@ class SourceLogProcessor constructor(
                     null
                 }
 
-                is Message.BlockUploaded -> {
+                is Message.BlockBoundary, is Message.BlockUploaded -> {
                     null
                 }
 
@@ -319,6 +319,8 @@ class SourceLogProcessor constructor(
     fun finishBlock(systemTime: Instant) {
         val blockIdx = (blockCatalog.currentBlockIndex ?: -1) + 1
         LOG.debug("finishing block: 'b${blockIdx.asLexHex}'...")
+
+        dbStorage.replicaLog.appendMessage(Message.BlockBoundary(blockIdx, latestProcessedMsgId)).get()
 
         val finishedBlocks = liveIndex.finishBlock(blockIdx)
 

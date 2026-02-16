@@ -90,10 +90,10 @@ class LogProcessorTest {
             )
 
             val now = Instant.now()
-            // FlushBlock(-1) matches currentBlockIndex(null → -1), triggers pendingBlockIdx
-            // Subsequent FlushBlock(999) don't match → get buffered → overflow on 3rd
+            // BlockBoundary sets pendingBlockIdx=0
+            // Subsequent records get buffered → overflow on 3rd
             val records = listOf(
-                Log.Record(0, now, Log.Message.FlushBlock(-1)),
+                Log.Record(0, now, Log.Message.BlockBoundary(0, 0)),
                 Log.Record(1, now, Log.Message.FlushBlock(999)),
                 Log.Record(2, now, Log.Message.FlushBlock(999)),
                 Log.Record(3, now, Log.Message.FlushBlock(999)),
@@ -140,13 +140,13 @@ class LogProcessorTest {
             )
 
             val now = Instant.now()
-            // FlushBlock(-1) triggers pendingBlockIdx=0.
-            // FlushBlock(0) is buffered; during replay it triggers pendingBlockIdx=1.
+            // BlockBoundary(0) sets pendingBlockIdx=0.
+            // BlockBoundary(1) is buffered; during replay it sets pendingBlockIdx=1.
             // BlockUploaded(1) is buffered; during replay it should trigger block 1 transition.
             // BlockUploaded(0) triggers block 0 transition + replay of the above.
             val records = listOf(
-                Log.Record(0, now, Log.Message.FlushBlock(-1)),
-                Log.Record(1, now, Log.Message.FlushBlock(0)),
+                Log.Record(0, now, Log.Message.BlockBoundary(0, 0)),
+                Log.Record(1, now, Log.Message.BlockBoundary(1, 0)),
                 Log.Record(2, now, Log.Message.BlockUploaded(1, 0, 0)),
                 Log.Record(3, now, Log.Message.BlockUploaded(0, 0, 0)),
             )

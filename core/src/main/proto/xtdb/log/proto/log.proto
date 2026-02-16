@@ -15,6 +15,7 @@ message LogMessage {
         AttachDatabase attach_database = 3;
         DetachDatabase detach_database = 4;
         BlockUploaded block_uploaded = 5;
+        BlockBoundary block_boundary = 6;
     }
 }
 
@@ -65,6 +66,11 @@ message AttachDatabase {
 
 message DetachDatabase {
     string db_name = 1;
+}
+
+message BlockBoundary {
+    int64 block_index = 1;
+    int64 latest_source_msg_id = 2;
 }
 
 message BlockUploaded {

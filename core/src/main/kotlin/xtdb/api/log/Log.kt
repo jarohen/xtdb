@@ -106,6 +106,10 @@ interface Log : AutoCloseable {
 
                                 MessageCase.DETACH_DATABASE -> DetachDatabase(msg.detachDatabase.dbName)
 
+                                MessageCase.BLOCK_BOUNDARY -> msg.blockBoundary.let {
+                                    BlockBoundary(it.blockIndex, it.latestSourceMsgId)
+                                }
+
                                 MessageCase.BLOCK_UPLOADED -> msg.blockUploaded.let {
                                     BlockUploaded(it.blockIndex, it.latestProcessedMsgId, it.storageEpoch)
                                 }
@@ -147,6 +151,15 @@ interface Log : AutoCloseable {
             override fun toLogMessage() = logMessage {
                 detachDatabase = detachDatabase {
                     this.dbName = this@DetachDatabase.dbName
+                }
+            }
+        }
+
+        data class BlockBoundary(val blockIndex: BlockIndex, val latestSourceMsgId: MessageId) : ProtobufMessage() {
+            override fun toLogMessage() = logMessage {
+                blockBoundary = blockBoundary {
+                    this.blockIndex = this@BlockBoundary.blockIndex
+                    this.latestSourceMsgId = this@BlockBoundary.latestSourceMsgId
                 }
             }
         }
