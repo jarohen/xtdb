@@ -200,8 +200,8 @@ class ReplicaLogProcessor @JvmOverloads constructor(
 
                 val res = processRecord(msgId, record)
 
-                // Attach/Detach records share a msgId with the ResolvedTx that follows them
-                // (the source emits both); we only notify watchers for the ResolvedTx.
+                // Legacy AttachDatabase/DetachDatabase records don't notify watchers —
+                // their paired ResolvedTx (which follows) will.
                 val msg = record.message
                 if (msg !is Message.AttachDatabase && msg !is Message.DetachDatabase)
                     watchers.notify(msgId, res)
@@ -281,6 +281,25 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                 }
 
                 is Message.ResolvedTx -> {
+                    // Handle attach/detach catalog side-effects encoded in the ResolvedTx
+                    when (val dbOp = msg.dbOp) {
+                        is Message.DbOp.Attach -> {
+                            require(dbState.name == "xtdb") { "attach-db on non-primary ${dbState.name}" }
+                            if (dbOp.dbName != "xtdb" && dbOp.dbName !in secondaryDatabases) {
+                                secondaryDatabases[dbOp.dbName] = dbOp.config.serializedConfig
+                                dbCatalog!!.attach(dbOp.dbName, dbOp.config)
+                            }
+                        }
+                        is Message.DbOp.Detach -> {
+                            require(dbState.name == "xtdb") { "detach-db on non-primary ${dbState.name}" }
+                            if (dbOp.dbName != "xtdb" && dbOp.dbName in secondaryDatabases) {
+                                secondaryDatabases.remove(dbOp.dbName)
+                                dbCatalog!!.detach(dbOp.dbName)
+                            }
+                        }
+                        null -> {}
+                    }
+
                     liveIndex.importTx(msg)
 
                     txSource?.onCommit(msg)
@@ -306,10 +325,8 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                         )
                 }
 
-                // Source resolves attach/detach as a ResolvedTx that follows this record,
-                // so we only handle catalog side-effects here — watchers are notified
-                // by the subsequent ResolvedTx, not by these records.
-
+                // Legacy: AttachDatabase/DetachDatabase on the source log are still forwarded
+                // during the transition period. Extract side-effects and ignore.
                 is Message.AttachDatabase -> {
                     require(dbState.name == "xtdb") { "attach-db on non-primary ${dbState.name}" }
                     if (msg.dbName != "xtdb" && msg.dbName !in secondaryDatabases) {
