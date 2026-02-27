@@ -181,36 +181,36 @@ class LeaderLogProcessor(
 
         val secondaryDatabasesForBlock = secondaryDatabases.takeIf { dbState.name == "xtdb" }
 
-        // Write TriesAdded + BlockBoundary + BlockUploaded atomically to replica log
-        val tx = replicaProducer.openTx()
-        try {
-            tx.appendMessage(ReplicaMessage.TriesAdded(Storage.VERSION, bufferPool.epoch, addedTries))
-
-            val blockBoundaryFuture = tx.appendMessage(ReplicaMessage.BlockBoundary(
+        // Write TriesAdded + BlockBoundary atomically — followers enter pending mode.
+        val boundaryTx = replicaProducer.openTx()
+        val blockBoundaryMeta = try {
+            boundaryTx.appendMessage(ReplicaMessage.TriesAdded(Storage.VERSION, bufferPool.epoch, addedTries))
+            val blockBoundaryFuture = boundaryTx.appendMessage(ReplicaMessage.BlockBoundary(
                 blockIndex = blockIdx,
                 latestProcessedMsgId = latestProcessedMsgId
             ))
-
-            tx.appendMessage(ReplicaMessage.BlockUploaded(blockIdx, latestProcessedMsgId, bufferPool.epoch))
-
-            tx.commit()
-
-            // The BlockBoundary's replica log offset becomes the block's latestReplicaMsgId
-            val blockBoundaryMeta = blockBoundaryFuture.get()
-            val latestReplicaMsgId = offsetToMsgId(replicaLog.epoch, blockBoundaryMeta.logOffset)
-
-            val block = blockCatalog.buildBlock(
-                blockIdx, liveIndex.latestCompletedTx, latestProcessedMsgId,
-                tableBlocks.keys, secondaryDatabasesForBlock,
-                latestReplicaMsgId = latestReplicaMsgId
-            )
-
-            bufferPool.putObject(BlockCatalog.blockFilePath(blockIdx), ByteBuffer.wrap(block.toByteArray()))
-            blockCatalog.refresh(block)
+            boundaryTx.commit()
+            blockBoundaryFuture.get()
         } catch (e: Throwable) {
-            tx.abort()
+            boundaryTx.abort()
             throw e
         }
+
+        // Persist block to object store — must complete before BlockUploaded,
+        // because followers read the block file when they see BlockUploaded.
+        val latestReplicaMsgId = offsetToMsgId(replicaLog.epoch, blockBoundaryMeta.logOffset)
+
+        val block = blockCatalog.buildBlock(
+            blockIdx, liveIndex.latestCompletedTx, latestProcessedMsgId,
+            tableBlocks.keys, secondaryDatabasesForBlock,
+            latestReplicaMsgId = latestReplicaMsgId
+        )
+
+        bufferPool.putObject(BlockCatalog.blockFilePath(blockIdx), ByteBuffer.wrap(block.toByteArray()))
+        blockCatalog.refresh(block)
+
+        // Now signal followers that the block is available.
+        appendToReplica(ReplicaMessage.BlockUploaded(blockIdx, latestProcessedMsgId, bufferPool.epoch))
 
         liveIndex.nextBlock()
         compactor.signalBlock()
