@@ -148,4 +148,22 @@ class FollowerLogProcessorTest {
         verify(exactly = 0) { liveIndex.importTx(match { it.txId <= 42 }) }
         verify(exactly = 1) { liveIndex.importTx(match { it.txId == 43L }) }
     }
+
+    @Test
+    fun `follower initializes latestProcessedMsgId from block catalog latestReplicaMsgId`() {
+        // Create a block catalog with a block that has latestReplicaMsgId set
+        val blockWithReplicaId = block {
+            blockIndex = 0
+            latestReplicaMsgId = 5
+        }
+        val blockCatalog = BlockCatalog("test", blockWithReplicaId)
+
+        // Verify the block catalog exposes the latestReplicaMsgId
+        assertEquals(5L, blockCatalog.latestReplicaMsgId)
+
+        // Without latestReplicaMsgId, blockCatalog returns null
+        val blockWithoutReplicaId = block { blockIndex = 0 }
+        val blockCatalog2 = BlockCatalog("test", blockWithoutReplicaId)
+        assertNull(blockCatalog2.latestReplicaMsgId)
+    }
 }

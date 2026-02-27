@@ -6,6 +6,7 @@ class LogProcessor(private val factory: SystemFactory) : AutoCloseable {
 
     interface SystemFactory {
         fun openFollower(): System
+        fun openLeader(): System
     }
 
     private val system: System = factory.openFollower()

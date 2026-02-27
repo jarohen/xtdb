@@ -40,4 +40,8 @@ message Block {
 
     // present iff it's the cluster's primary ('xtdb') database
     map<string, xtdb.database.proto.DatabaseConfig> secondary_databases = 5;
+
+    // replica log offset of the BlockBoundary message for this block.
+    // TODO: make mandatory once all blocks have it
+    int64 latest_replica_msg_id = 6;
 }
