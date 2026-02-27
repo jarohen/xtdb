@@ -1,0 +1,229 @@
+package xtdb.indexer
+
+import io.micrometer.core.instrument.Gauge
+import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.runBlocking
+import org.apache.arrow.memory.BufferAllocator
+import xtdb.api.TransactionAborted
+import xtdb.api.TransactionCommitted
+import xtdb.api.TransactionResult
+import xtdb.api.log.DbOp
+import xtdb.api.log.Log
+import xtdb.api.log.MessageId
+import xtdb.api.log.ReplicaMessage
+import xtdb.api.log.Watchers
+import xtdb.api.storage.Storage
+import xtdb.block.proto.Block
+import xtdb.catalog.BlockCatalog
+import xtdb.catalog.BlockCatalog.Companion.allBlockFiles
+import xtdb.compactor.Compactor
+import xtdb.database.Database
+import xtdb.database.DatabaseState
+import xtdb.database.proto.DatabaseConfig
+import xtdb.error.Fault
+import xtdb.error.Interrupted
+import xtdb.storage.BufferPool
+import xtdb.table.TableRef
+import xtdb.time.InstantUtil
+import xtdb.trie.BlockIndex
+import xtdb.util.MsgIdUtil.offsetToMsgId
+import xtdb.util.StringUtil.asLexHex
+import xtdb.util.TransitFormat.MSGPACK
+import xtdb.util.debug
+import xtdb.util.error
+import xtdb.util.logger
+import xtdb.util.readTransit
+import java.nio.channels.ClosedByInterruptException
+import kotlin.coroutines.cancellation.CancellationException
+
+private val LOG = FollowerLogProcessor::class.logger
+
+/**
+ * Processes all log messages for the replica (follower) side of a database.
+ * Subscribes independently to the replica log and handles tx importing,
+ * block transitions, and trie catalog updates.
+ */
+class FollowerLogProcessor @JvmOverloads constructor(
+    allocator: BufferAllocator,
+    meterRegistry: MeterRegistry,
+    private val replicaLog: Log<ReplicaMessage>,
+    private val bufferPool: BufferPool,
+    private val dbState: DatabaseState,
+    private val indexer: Indexer.ForDatabase,
+    private val liveIndex: LiveIndex,
+    private val compactor: Compactor.ForDatabase,
+    private val skipTxs: Set<MessageId>,
+    private val watchers: Watchers,
+    private val maxBufferedRecords: Int = 1024,
+    private val dbCatalog: Database.Catalog? = null
+) : Log.Subscriber<ReplicaMessage>, AutoCloseable {
+
+    init {
+        require((dbCatalog != null) == (dbState.name == "xtdb")) {
+            "dbCatalog must be provided iff database is 'xtdb'"
+        }
+    }
+
+    private val epoch = replicaLog.epoch
+
+    private val blockCatalog = dbState.blockCatalog
+    private val tableCatalog = dbState.tableCatalog
+    private val trieCatalog = dbState.trieCatalog
+
+    private val secondaryDatabases: MutableMap<String, DatabaseConfig> =
+        blockCatalog.secondaryDatabases.toMutableMap()
+
+    private var pendingBlockIdx: BlockIndex? = null
+    private val bufferedRecords: MutableList<Log.Record<ReplicaMessage>> = mutableListOf()
+
+    private val allocator =
+        allocator.newChildAllocator("replica-log-processor", 0, Long.MAX_VALUE)
+            .also { allocator ->
+                Gauge.builder("watcher.allocator.allocated_memory", allocator) { it.allocatedMemory.toDouble() }
+                    .baseUnit("bytes")
+                    .register(meterRegistry)
+            }
+
+    override fun close() {
+        allocator.close()
+    }
+
+    override fun processRecords(records: List<Log.Record<ReplicaMessage>>) = runBlocking {
+        val queue = ArrayDeque(records)
+
+        while (queue.isNotEmpty()) {
+            val record = queue.removeFirst()
+            val msgId = offsetToMsgId(epoch, record.logOffset)
+
+            try {
+                if (pendingBlockIdx != null) {
+                    val msg = record.message
+                    if (msg is ReplicaMessage.BlockUploaded && msg.blockIndex == pendingBlockIdx && msg.storageEpoch == bufferPool.epoch) {
+                        doBlockTransition()
+
+                        // Splice buffered records to the front of the queue so they're
+                        // processed through the same pendingBlockIdx gate as every other record.
+                        bufferedRecords.add(record)
+                        queue.addAll(0, bufferedRecords)
+                        bufferedRecords.clear()
+                        continue
+                    } else {
+                        if (bufferedRecords.size >= maxBufferedRecords)
+                            throw Fault("buffer overflow: buffered $maxBufferedRecords records waiting for BlockUploaded(b${pendingBlockIdx!!.asLexHex})")
+
+                        bufferedRecords.add(record)
+                        continue
+                    }
+                }
+
+                val res = processRecord(msgId, record)
+
+                when (record.message) {
+                    is ReplicaMessage.ResolvedTx, is ReplicaMessage.BlockUploaded, is ReplicaMessage.TriesAdded ->
+                        watchers.notify(msgId, res)
+                    is ReplicaMessage.BlockBoundary -> {}
+                }
+            } catch (e: ClosedByInterruptException) {
+                watchers.notify(msgId, e)
+                throw CancellationException(e)
+            } catch (e: InterruptedException) {
+                watchers.notify(msgId, e)
+                throw CancellationException(e)
+            } catch (e: Interrupted) {
+                watchers.notify(msgId, e)
+                throw CancellationException(e)
+            } catch (e: Throwable) {
+                watchers.notify(msgId, e)
+                LOG.error(
+                    e,
+                    "Ingestion stopped for '${dbState.name}' database: error processing log record at id $msgId (epoch: $epoch, logOffset: ${record.logOffset})"
+                )
+                LOG.error(
+                    """
+                    XTDB transaction processing has encountered an unrecoverable error and has been stopped to prevent corruption of your data.
+                    This node has also been marked unhealthy, so if it is running within a container orchestration system (e.g. Kubernetes) it should be restarted shortly.
+
+                    Please see https://docs.xtdb.com/ops/troubleshooting#ingestion-stopped for more information and next steps.
+                """.trimIndent()
+                )
+                throw CancellationException(e)
+            }
+        }
+    }
+
+    private fun processRecord(msgId: MessageId, record: Log.Record<ReplicaMessage>): TransactionResult? {
+        LOG.debug("Processing message $msgId, ${record.message.javaClass.simpleName}")
+
+        return when (val msg = record.message) {
+                is ReplicaMessage.BlockBoundary -> {
+                    pendingBlockIdx = msg.blockIndex
+                    LOG.debug("waiting for block 'b${pendingBlockIdx!!.asLexHex}' via BlockUploaded message...")
+                    null
+                }
+
+                is ReplicaMessage.TriesAdded -> {
+                    if (msg.storageVersion == Storage.VERSION && msg.storageEpoch == bufferPool.epoch)
+                        msg.tries.groupBy { it.tableName }.forEach { (tableName, tries) ->
+                            trieCatalog.addTries(TableRef.parse(dbState.name, tableName), tries, record.logTimestamp)
+                        }
+                    null
+                }
+
+                is ReplicaMessage.ResolvedTx -> {
+                    val latestTxId = liveIndex.latestCompletedTx?.txId
+                    if (latestTxId != null && latestTxId >= msg.txId) {
+                        LOG.debug("Skipping already-applied tx ${msg.txId} (latest: $latestTxId)")
+                        null
+                    } else {
+                        liveIndex.importTx(msg)
+
+                        val systemTime = InstantUtil.fromMicros(msg.systemTimeMicros)
+
+                        if (msg.committed) {
+                            when (val dbOp = msg.dbOp) {
+                                is DbOp.Attach -> {
+                                    secondaryDatabases[dbOp.dbName] = dbOp.config.serializedConfig
+                                    dbCatalog!!.attach(dbOp.dbName, dbOp.config)
+                                }
+                                is DbOp.Detach -> {
+                                    secondaryDatabases.remove(dbOp.dbName)
+                                    dbCatalog!!.detach(dbOp.dbName)
+                                }
+                                null -> {}
+                            }
+
+                            TransactionCommitted(msg.txId, systemTime)
+                        } else {
+                            TransactionAborted(
+                                msg.txId, systemTime,
+                                readTransit(msg.error, MSGPACK) as Throwable
+                            )
+                        }
+                    }
+                }
+
+                is ReplicaMessage.BlockUploaded -> null
+            }.also {
+                LOG.debug("Processed message $msgId")
+            }
+    }
+
+    private fun doBlockTransition() {
+        val blockIdx = pendingBlockIdx!!
+        LOG.debug("received BlockUploaded for block 'b${blockIdx.asLexHex}', transitioning...")
+
+        val blockFile = bufferPool.allBlockFiles
+            .find { BlockCatalog.blockFilePath(blockIdx) == it.key }
+            ?: throw Fault("block file for 'b${blockIdx.asLexHex}' not found in object store")
+
+        val block = Block.parseFrom(bufferPool.getByteArray(blockFile.key))
+        blockCatalog.refresh(block)
+        tableCatalog.refresh(blockIdx)
+        trieCatalog.refresh(blockIdx)
+        liveIndex.nextBlock()
+        compactor.signalBlock()
+
+        pendingBlockIdx = null
+        LOG.debug("transitioned to block 'b${blockIdx.asLexHex}'")
+    }
+}

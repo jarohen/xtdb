@@ -118,6 +118,9 @@
                                                         :block-flush-duration (.getFlushDuration indexer-conf))
                                                (:db-catalog base) (assoc :db-catalog (:db-catalog base)))
 
+         :xtdb.log/processor (cond-> opts
+                               (:db-catalog base) (assoc :db-catalog (:db-catalog base)))
+
          ::database opts}
         (doto ig/load-namespaces))))
 
