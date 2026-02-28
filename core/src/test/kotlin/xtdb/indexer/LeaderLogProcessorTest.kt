@@ -12,6 +12,7 @@ import xtdb.api.log.Log
 import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.SourceMessage
 import xtdb.api.log.Watchers
+import xtdb.api.TransactionKey
 import xtdb.api.storage.Storage
 import xtdb.block.proto.Partition
 import xtdb.block.proto.TableBlock
@@ -24,6 +25,7 @@ import xtdb.log.proto.trieMetadata
 import xtdb.storage.BufferPool
 import xtdb.table.TableRef
 import xtdb.trie.TrieCatalog
+import kotlinx.coroutines.Dispatchers
 import java.time.Instant
 import java.time.InstantSource
 
@@ -176,15 +178,15 @@ class LeaderLogProcessorTest {
 
         // Collect all messages from replica log by subscribing
         val replicaMessages = mutableListOf<ReplicaMessage>()
-        val sub = replicaLog.tailAll(object : Log.Subscriber<ReplicaMessage> {
-            override fun processRecords(records: List<Log.Record<ReplicaMessage>>) {
-                replicaMessages.addAll(records.map { it.message })
-            }
-        }, -1)
+        val consumer = replicaLog.openConsumer()
+        val sub = consumer.tailAll(-1, Log.RecordProcessor<ReplicaMessage> { records ->
+            replicaMessages.addAll(records.map { it.message })
+        })
 
         // Give the subscription time to process
         Thread.sleep(200)
         sub.close()
+        consumer.close()
 
         // Should have exactly: TriesAdded, BlockBoundary, BlockUploaded
         assertEquals(3, replicaMessages.size, "expected 3 replica messages, got: $replicaMessages")
@@ -326,5 +328,147 @@ class LeaderLogProcessorTest {
         // The BlockBoundary is the second message (after TriesAdded), so its offset is 1
         assertEquals(1L, blockCatalog.latestReplicaMsgId,
             "latestReplicaMsgId should be the BlockBoundary's replica log offset")
+    }
+
+    // --- Leader startup / replay tests ---
+
+    private fun resolvedTx(txId: Long = 0) = ReplicaMessage.ResolvedTx(
+        txId = txId,
+        systemTimeMicros = Instant.now().toEpochMilli() * 1000,
+        committed = true,
+        error = ByteArray(0),
+        tableData = emptyMap()
+    )
+
+    @Test
+    fun `start - cold start with empty replica log`() {
+        val sourceLog = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
+        val replicaLog = InMemoryLog<ReplicaMessage>(InstantSource.system(), 0)
+        val liveIndex = mockk<LiveIndex>(relaxed = true) {
+            every { latestCompletedTx } returns null
+        }
+        val blockCatalog = BlockCatalog("test", null)
+        val trieCatalog = mockk<TrieCatalog>(relaxed = true)
+        val tableCatalog = mockk<TableCatalog>(relaxed = true)
+        val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
+        val bufferPool = mockk<BufferPool>(relaxed = true) { every { epoch } returns 0 }
+
+        val result = LeaderLogProcessor.start(
+            RootAllocator(), SimpleMeterRegistry(),
+            sourceLog, replicaLog, bufferPool, dbState,
+            mockk(relaxed = true), liveIndex, Watchers(-1), mockk(relaxed = true),
+            skipTxs = emptySet()
+        )
+
+        assertEquals(-1L, result.sourceResumeOffset, "cold start should resume from -1")
+
+        // No txs should have been imported
+        verify(exactly = 0) { liveIndex.importTx(any()) }
+
+        result.processor.close()
+    }
+
+    @Test
+    fun `start - replays resolved txs from replica log`() {
+        val sourceLog = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
+        val replicaLog = InMemoryLog<ReplicaMessage>(InstantSource.system(), 0)
+
+        // Pre-populate replica log with resolved txs (simulating a previous leader session)
+        val tx0 = resolvedTx(txId = 100)
+        val tx1 = resolvedTx(txId = 200)
+        replicaLog.appendMessage(tx0).get()
+        replicaLog.appendMessage(tx1).get()
+
+        val liveIndex = mockk<LiveIndex>(relaxed = true) {
+            every { latestCompletedTx } returns null
+        }
+        val blockCatalog = BlockCatalog("test", null)
+        val trieCatalog = mockk<TrieCatalog>(relaxed = true)
+        val tableCatalog = mockk<TableCatalog>(relaxed = true)
+        val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
+        val bufferPool = mockk<BufferPool>(relaxed = true) { every { epoch } returns 0 }
+
+        val result = LeaderLogProcessor.start(
+            RootAllocator(), SimpleMeterRegistry(),
+            sourceLog, replicaLog, bufferPool, dbState,
+            mockk(relaxed = true), liveIndex, Watchers(-1), mockk(relaxed = true),
+            skipTxs = emptySet()
+        )
+
+        // Both txs should have been imported
+        verify(exactly = 2) { liveIndex.importTx(any()) }
+
+        // Source resume offset should be derived from the last replayed tx's txId (200).
+        // txId 200 is a source msg id — with epoch 0, offset = 200.
+        assertEquals(200L, result.sourceResumeOffset)
+
+        result.processor.close()
+    }
+
+    @Test
+    fun `start - skips already-applied txs during replay`() {
+        val sourceLog = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
+        val replicaLog = InMemoryLog<ReplicaMessage>(InstantSource.system(), 0)
+
+        replicaLog.appendMessage(resolvedTx(txId = 100)).get()
+        replicaLog.appendMessage(resolvedTx(txId = 200)).get()
+
+        val liveIndex = mockk<LiveIndex>(relaxed = true) {
+            // Live index already has tx 100 applied
+            every { latestCompletedTx } returns TransactionKey(100, Instant.now())
+        }
+        val blockCatalog = BlockCatalog("test", null)
+        val trieCatalog = mockk<TrieCatalog>(relaxed = true)
+        val tableCatalog = mockk<TableCatalog>(relaxed = true)
+        val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
+        val bufferPool = mockk<BufferPool>(relaxed = true) { every { epoch } returns 0 }
+
+        val result = LeaderLogProcessor.start(
+            RootAllocator(), SimpleMeterRegistry(),
+            sourceLog, replicaLog, bufferPool, dbState,
+            mockk(relaxed = true), liveIndex, Watchers(-1), mockk(relaxed = true),
+            skipTxs = emptySet()
+        )
+
+        // Only tx 200 should be imported (tx 100 already applied)
+        verify(exactly = 1) { liveIndex.importTx(any()) }
+
+        result.processor.close()
+    }
+
+    @Test
+    fun `start - replays TriesAdded from replica log`() {
+        val sourceLog = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
+        val replicaLog = InMemoryLog<ReplicaMessage>(InstantSource.system(), 0)
+        val trieCatalog = mockk<TrieCatalog>(relaxed = true)
+
+        val tries = listOf(
+            TrieDetails.newBuilder()
+                .setTableName("public/bar")
+                .setTrieKey("trie-key-replay")
+                .setDataFileSize(50)
+                .setTrieMetadata(trieMetadata {})
+                .build()
+        )
+        replicaLog.appendMessage(ReplicaMessage.TriesAdded(Storage.VERSION, 0, tries)).get()
+
+        val liveIndex = mockk<LiveIndex>(relaxed = true) {
+            every { latestCompletedTx } returns null
+        }
+        val blockCatalog = BlockCatalog("test", null)
+        val tableCatalog = mockk<TableCatalog>(relaxed = true)
+        val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
+        val bufferPool = mockk<BufferPool>(relaxed = true) { every { epoch } returns 0 }
+
+        val result = LeaderLogProcessor.start(
+            RootAllocator(), SimpleMeterRegistry(),
+            sourceLog, replicaLog, bufferPool, dbState,
+            mockk(relaxed = true), liveIndex, Watchers(-1), mockk(relaxed = true),
+            skipTxs = emptySet()
+        )
+
+        verify { trieCatalog.addTries(any(), any(), any()) }
+
+        result.processor.close()
     }
 }

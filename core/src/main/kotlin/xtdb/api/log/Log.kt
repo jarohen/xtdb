@@ -85,7 +85,7 @@ interface Log<M> : AutoCloseable {
     }
 
     interface Consumer<M> : AutoCloseable {
-        fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>): Subscription
+        fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>, untilOffset: LogOffset = Long.MAX_VALUE): Subscription
     }
 
     fun interface Subscription : AutoCloseable

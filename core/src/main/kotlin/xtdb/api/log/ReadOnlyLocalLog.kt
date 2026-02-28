@@ -108,7 +108,7 @@ class ReadOnlyLocalLog<M>(
     }
 
     override fun openConsumer(): Log.Consumer<M> = object : Log.Consumer<M> {
-        override fun tailAll(afterOffset: LogOffset, processor: Log.RecordProcessor<M>): Log.Subscription {
+        override fun tailAll(afterOffset: LogOffset, processor: Log.RecordProcessor<M>, untilOffset: LogOffset): Log.Subscription {
             val ch = Channel<Log.Record<M>>(100)
 
             val producerJob = scope.launch(SupervisorJob()) {
@@ -170,8 +170,8 @@ class ReadOnlyLocalLog<M>(
         listener.onPartitionsAssigned(listOf(0))
         val inner = openConsumer()
         return object : Log.Consumer<M> {
-            override fun tailAll(afterOffset: LogOffset, processor: Log.RecordProcessor<M>) =
-                inner.tailAll(afterOffset, processor)
+            override fun tailAll(afterOffset: LogOffset, processor: Log.RecordProcessor<M>, untilOffset: LogOffset) =
+                inner.tailAll(afterOffset, processor, untilOffset)
             override fun close() {
                 inner.close()
                 listener.onPartitionsRevoked(listOf(0))

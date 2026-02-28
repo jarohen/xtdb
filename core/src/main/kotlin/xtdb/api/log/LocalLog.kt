@@ -251,7 +251,7 @@ class LocalLog<M>(
     }
 
     override fun openConsumer(): Consumer<M> = object : Consumer<M> {
-        override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>): Subscription {
+        override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>, untilOffset: LogOffset): Subscription {
             var latestCompletedOffset = afterOffset
 
             val ch = Channel<Record<M>>(100)
@@ -328,8 +328,8 @@ class LocalLog<M>(
         listener.onPartitionsAssigned(listOf(0))
         val inner = openConsumer()
         return object : Consumer<M> {
-            override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>) =
-                inner.tailAll(afterOffset, processor)
+            override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>, untilOffset: LogOffset) =
+                inner.tailAll(afterOffset, processor, untilOffset)
             override fun close() {
                 inner.close()
                 listener.onPartitionsRevoked(listOf(0))

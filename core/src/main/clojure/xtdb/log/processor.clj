@@ -4,7 +4,8 @@
   (:import [xtdb.api IndexerConfig]
            [xtdb.api.log Log]
            [xtdb.database Database$Mode DatabaseState DatabaseStorage]
-           [xtdb.indexer LogProcessor LogProcessor$System LogProcessor$SystemFactory
+           [xtdb.indexer LeaderLogProcessor LeaderLogProcessor$StartResult
+                         LogProcessor LogProcessor$System LogProcessor$SystemFactory
                          FollowerLogProcessor SourceLogProcessor]
            [xtdb.util MsgIdUtil]))
 
@@ -73,7 +74,7 @@
 (defn- subscribe-replica-log [^DatabaseStorage db-storage ^FollowerLogProcessor follower-proc]
   (let [replica-log (.getReplicaLog db-storage)]
     ;; latestReplicaMsgId isn't in the block proto yet, start from -1
-    (.tailAll replica-log follower-proc -1)))
+    (Log/tailAll replica-log -1 follower-proc)))
 
 (defn- open-follower-system [opts]
   (let [follower-proc (open-follower-processor opts)
@@ -82,6 +83,31 @@
       (close [_]
         (util/close subscription)
         (util/close follower-proc)))))
+
+(defn- open-leader-system [{:keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
+                                   indexer-for-db compactor-for-db tx-source-for-db watchers db-catalog
+                                   ^IndexerConfig indexer-conf block-flush-duration]
+                            {:keys [meter-registry]} :base}]
+  (let [source-log (.getSourceLog db-storage)
+        replica-log (.getReplicaLog db-storage)
+        buffer-pool (.getBufferPool db-storage)
+        ^LeaderLogProcessor$StartResult start-result
+        (LeaderLogProcessor/start allocator meter-registry
+                                  source-log replica-log
+                                  buffer-pool db-state
+                                  indexer-for-db (.getLiveIndex db-state)
+                                  watchers compactor-for-db
+                                  (set (.getSkipTxs indexer-conf))
+                                  tx-source-for-db
+                                  db-catalog
+                                  (or block-flush-duration (java.time.Duration/ofMinutes 5)))
+        leader-proc (.getProcessor start-result)
+        source-resume-offset (.getSourceResumeOffset start-result)
+        subscription (Log/tailAll source-log source-resume-offset leader-proc)]
+    (reify LogProcessor$System
+      (close [_]
+        (util/close subscription)
+        (util/close leader-proc)))))
 
 (defmethod ig/expand-key :xtdb.log/processor [k opts]
   {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)
@@ -95,7 +121,8 @@
 (defmethod ig/init-key :xtdb.log/processor [_ {:keys [^IndexerConfig indexer-conf] :as opts}]
   (when (.getEnabled indexer-conf)
     (let [factory (reify LogProcessor$SystemFactory
-                    (openFollower [_] (open-follower-system opts)))]
+                    (openFollower [_] (open-follower-system opts))
+                    (openLeader [_] (open-leader-system opts)))]
       (LogProcessor. factory))))
 
 (defmethod ig/halt-key! :xtdb.log/processor [_ processor]

@@ -312,7 +312,7 @@ class KafkaCluster(
         }
 
         override fun openConsumer(): Log.Consumer<M> = object : Log.Consumer<M> {
-            override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>): Subscription {
+            override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>, untilOffset: LogOffset): Subscription {
                 val c = kafkaConfigMap.openConsumer()
                 TopicPartition(topic, 0).also { tp ->
                     c.assign(listOf(tp))
@@ -329,7 +329,7 @@ class KafkaCluster(
             val consumerConfig = kafkaConfigMap + mapOf("group.id" to groupId)
 
             return object : Log.Consumer<M> {
-                override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>): Subscription {
+                override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>, untilOffset: LogOffset): Subscription {
                     val c = consumerConfig.openConsumer()
                     c.subscribe(listOf(topic), object : ConsumerRebalanceListener {
                         override fun onPartitionsRevoked(partitions: Collection<TopicPartition>) =

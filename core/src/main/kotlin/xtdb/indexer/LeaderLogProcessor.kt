@@ -15,6 +15,7 @@ import xtdb.api.storage.Storage
 import xtdb.arrow.Relation
 import xtdb.arrow.asChannel
 import xtdb.catalog.BlockCatalog
+import xtdb.catalog.BlockCatalog.Companion.allBlockFiles
 import xtdb.compactor.Compactor
 import xtdb.database.Database
 import xtdb.database.DatabaseState
@@ -35,6 +36,8 @@ import xtdb.util.asPath
 import xtdb.util.debug
 import xtdb.util.logger
 import xtdb.util.readTransit
+import xtdb.util.MsgIdUtil.msgIdToEpoch
+import xtdb.util.MsgIdUtil.msgIdToOffset
 import xtdb.util.warn
 import java.nio.ByteBuffer
 import java.time.Duration
@@ -66,7 +69,170 @@ class LeaderLogProcessor(
     private val txSource: Indexer.TxSource? = null,
     private val dbCatalog: Database.Catalog? = null,
     flushTimeout: Duration = Duration.ofMinutes(5),
-) : Log.Subscriber<SourceMessage>, AutoCloseable {
+) : Log.RecordProcessor<SourceMessage>, AutoCloseable {
+
+    /**
+     * Result of the leader startup replay sequence.
+     * Contains the constructed [LeaderLogProcessor] and the source log offset to resume from.
+     */
+    data class StartResult(
+        val processor: LeaderLogProcessor,
+        val sourceResumeOffset: Long
+    )
+
+    companion object {
+        /**
+         * Performs the leader startup replay: replays the replica log to catch up the live index,
+         * detects dangling block boundaries from a crashed previous leader, and determines
+         * the source log resume point.
+         *
+         * The returned [StartResult] contains the ready-to-use processor and the offset
+         * to pass to `sourceLog.tailAll`.
+         */
+        @JvmStatic
+        fun start(
+            allocator: BufferAllocator,
+            meterRegistry: MeterRegistry,
+            sourceLog: Log<SourceMessage>,
+            replicaLog: Log<ReplicaMessage>,
+            bufferPool: BufferPool,
+            dbState: DatabaseState,
+            indexer: Indexer.ForDatabase,
+            liveIndex: LiveIndex,
+            watchers: Watchers,
+            compactor: Compactor.ForDatabase,
+            skipTxs: Set<MessageId>,
+            txSource: Indexer.TxSource? = null,
+            dbCatalog: Database.Catalog? = null,
+            flushTimeout: Duration = Duration.ofMinutes(5),
+        ): StartResult {
+            val blockCatalog = dbState.blockCatalog
+            val trieCatalog = dbState.trieCatalog
+
+            // Construct the processor first — this fences the old leader via the atomic producer.
+            val processor = LeaderLogProcessor(
+                allocator, meterRegistry, sourceLog, replicaLog,
+                bufferPool, dbState, indexer, liveIndex, watchers, compactor,
+                skipTxs, txSource, dbCatalog, flushTimeout
+            )
+
+            try {
+                val replayTarget = replicaLog.latestSubmittedOffset
+
+                // Determine replay start from the last block's replica msg id.
+                val latestReplicaMsgId = blockCatalog.latestReplicaMsgId
+                val replayStartOffset = if (latestReplicaMsgId != null && msgIdToEpoch(latestReplicaMsgId) == replicaLog.epoch)
+                    msgIdToOffset(latestReplicaMsgId)
+                else -1L
+
+                var pendingBlockIdx: Long? = null
+                var lastReplayedTxId: Long? = null
+
+                if (replayTarget >= 0 && replayTarget > replayStartOffset) {
+                    LOG.debug("replaying replica log from offset ${replayStartOffset + 1} to $replayTarget")
+
+                    val replaySubscriber = object : Log.RecordProcessor<ReplicaMessage> {
+                        override fun processRecords(records: List<Log.Record<ReplicaMessage>>) {
+                            for (record in records) {
+                                when (val msg = record.message) {
+                                    is ReplicaMessage.ResolvedTx -> {
+                                        val latestTxId = liveIndex.latestCompletedTx?.txId
+                                        if (latestTxId == null || latestTxId < msg.txId) {
+                                            liveIndex.importTx(msg)
+                                        }
+                                        lastReplayedTxId = msg.txId
+                                    }
+
+                                    is ReplicaMessage.TriesAdded -> {
+                                        if (msg.storageVersion == Storage.VERSION && msg.storageEpoch == bufferPool.epoch) {
+                                            msg.tries.groupBy { it.tableName }.forEach { (tableName, tries) ->
+                                                trieCatalog.addTries(
+                                                    TableRef.parse(dbState.name, tableName),
+                                                    tries, record.logTimestamp
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    is ReplicaMessage.BlockBoundary -> {
+                                        pendingBlockIdx = msg.blockIndex
+                                    }
+
+                                    is ReplicaMessage.BlockUploaded -> {
+                                        if (msg.blockIndex == pendingBlockIdx) {
+                                            val blockFile = bufferPool.allBlockFiles
+                                                .find { BlockCatalog.blockFilePath(msg.blockIndex) == it.key }
+                                            val block = blockFile?.let {
+                                                xtdb.block.proto.Block.parseFrom(bufferPool.getByteArray(it.key))
+                                            }
+
+                                            if (block != null) {
+                                                blockCatalog.refresh(block)
+                                                dbState.tableCatalog.refresh(msg.blockIndex)
+                                                trieCatalog.refresh(msg.blockIndex)
+                                                liveIndex.nextBlock()
+                                                compactor.signalBlock()
+                                            }
+                                            pendingBlockIdx = null
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    replicaLog.openConsumer().use { consumer ->
+                        val subscription = consumer.tailAll(replayStartOffset, replaySubscriber, untilOffset = replayTarget)
+                        subscription.close()
+                    }
+
+                    LOG.debug("replica log replay complete")
+                }
+
+                // Dangling boundary: a previous leader wrote BlockBoundary but crashed before BlockUploaded.
+                // The block file has been persisted to the object store (that happens before BlockUploaded),
+                // so we complete the transition and write BlockUploaded.
+                if (pendingBlockIdx != null) {
+                    val blockIdx = pendingBlockIdx!!
+                    LOG.debug("detected dangling block boundary for b${blockIdx.asLexHex}, completing block transition")
+
+                    val blockFile = bufferPool.allBlockFiles
+                        .find { BlockCatalog.blockFilePath(blockIdx) == it.key }
+
+                    if (blockFile != null) {
+                        val block = xtdb.block.proto.Block.parseFrom(bufferPool.getByteArray(blockFile.key))
+                        blockCatalog.refresh(block)
+                        dbState.tableCatalog.refresh(blockIdx)
+                        trieCatalog.refresh(blockIdx)
+                        liveIndex.nextBlock()
+                        compactor.signalBlock()
+
+                        processor.appendToReplica(ReplicaMessage.BlockUploaded(blockIdx, block.latestProcessedMsgId, bufferPool.epoch))
+                    }
+                }
+
+                // Determine source resume offset from the last replayed tx,
+                // falling back to blockCatalog.latestProcessedMsgId.
+                val sourceResumeOffset = when {
+                    lastReplayedTxId != null -> {
+                        if (msgIdToEpoch(lastReplayedTxId!!) == sourceLog.epoch)
+                            msgIdToOffset(lastReplayedTxId!!)
+                        else -1L
+                    }
+                    blockCatalog.latestProcessedMsgId != null -> {
+                        val msgId = blockCatalog.latestProcessedMsgId!!
+                        if (msgIdToEpoch(msgId) == sourceLog.epoch) msgIdToOffset(msgId) else -1L
+                    }
+                    else -> -1L
+                }
+
+                return StartResult(processor, sourceResumeOffset)
+            } catch (e: Throwable) {
+                processor.close()
+                throw e
+            }
+        }
+    }
 
     init {
         require((dbCatalog != null) == (dbState.name == "xtdb")) {

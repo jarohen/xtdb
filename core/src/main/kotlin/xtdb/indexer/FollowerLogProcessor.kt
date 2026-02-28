@@ -56,7 +56,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
     private val watchers: Watchers,
     private val maxBufferedRecords: Int = 1024,
     private val dbCatalog: Database.Catalog? = null
-) : Log.Subscriber<ReplicaMessage>, AutoCloseable {
+) : Log.RecordProcessor<ReplicaMessage>, AutoCloseable {
 
     init {
         require((dbCatalog != null) == (dbState.name == "xtdb")) {

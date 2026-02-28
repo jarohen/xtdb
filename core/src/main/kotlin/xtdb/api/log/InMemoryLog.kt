@@ -118,7 +118,7 @@ class InMemoryLog<M> @JvmOverloads constructor(
     override fun readLastMessage(): M? = null
 
     override fun openConsumer(): Consumer<M> = object : Consumer<M> {
-        override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>): Subscription {
+        override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>, untilOffset: LogOffset): Subscription {
             var latestCompletedOffset = afterOffset
 
             val ch = committedCh
@@ -130,18 +130,22 @@ class InMemoryLog<M> @JvmOverloads constructor(
                     logOffset > latestCompletedOffset
                 }
                 .onEach { latestCompletedOffset = it.logOffset }
+                .transformWhile {
+                    emit(it)
+                    it.logOffset < untilOffset
+                }
                 .buffer(100)
                 .produceIn(subscriberScope)
 
             val job = subscriberScope.launch {
                 try {
                     while (isActive) {
-                        val records = select {
-                            ch.onReceiveCatching { if (it.isClosed) emptyList() else listOf(it.getOrThrow()) }
+                        val records: List<Record<M>> = select {
+                            ch.onReceiveCatching { if (it.isClosed) null else listOf(it.getOrThrow()) }
 
                             @OptIn(ExperimentalCoroutinesApi::class)
                             onTimeout(1.minutes) { emptyList() }
-                        }
+                        } ?: break
                         if (records.isNotEmpty()) runInterruptible { processor.processRecords(records) }
                     }
                 } finally {
@@ -149,7 +153,13 @@ class InMemoryLog<M> @JvmOverloads constructor(
                 }
             }
 
-            return Subscription { runBlocking { withTimeout(5.seconds) { job.cancelAndJoin() } } }
+            return Subscription {
+                runBlocking {
+                    withTimeout(5.seconds) {
+                        if (untilOffset < Long.MAX_VALUE) job.join() else job.cancelAndJoin()
+                    }
+                }
+            }
         }
 
         override fun close() {}
@@ -159,8 +169,8 @@ class InMemoryLog<M> @JvmOverloads constructor(
         listener.onPartitionsAssigned(listOf(0))
         val inner = openConsumer()
         return object : Consumer<M> {
-            override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>) =
-                inner.tailAll(afterOffset, processor)
+            override fun tailAll(afterOffset: LogOffset, processor: RecordProcessor<M>, untilOffset: LogOffset) =
+                inner.tailAll(afterOffset, processor, untilOffset)
             override fun close() {
                 inner.close()
                 listener.onPartitionsRevoked(listOf(0))
