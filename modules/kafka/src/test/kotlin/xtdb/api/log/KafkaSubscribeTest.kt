@@ -9,7 +9,6 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.testcontainers.kafka.ConfluentKafkaContainer
-import xtdb.api.log.Log.Companion.subscribe
 import xtdb.api.log.Log.*
 import java.time.Duration
 import java.util.*
@@ -62,8 +61,10 @@ class KafkaSubscribeTest {
                     .groupId(groupId)
                     .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
-                        log.subscribe(subscriber, listener).use {
-                            while (assignedPartitions.get() == null) delay(50)
+                        log.openGroupConsumer(listener).use { consumer ->
+                            consumer.tailAll(-1, subscriber).use {
+                                while (assignedPartitions.get() == null) delay(50)
+                            }
                         }
                     }
             }
@@ -97,14 +98,16 @@ class KafkaSubscribeTest {
                     .groupId(groupId)
                     .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
-                        log.subscribe(subscriber, listener).use {
-                            while (!assigned.get()) delay(50)
+                        log.openGroupConsumer(listener).use { consumer ->
+                            consumer.tailAll(-1, subscriber).use {
+                                while (!assigned.get()) delay(50)
 
-                            log.appendMessage(txMessage(0)).await()
-                            log.appendMessage(txMessage(1)).await()
-                            log.appendMessage(txMessage(2)).await()
+                                log.appendMessage(txMessage(0)).await()
+                                log.appendMessage(txMessage(1)).await()
+                                log.appendMessage(txMessage(2)).await()
 
-                            while (synchronized(receivedRecords) { receivedRecords.size } < 3) delay(50)
+                                while (synchronized(receivedRecords) { receivedRecords.size } < 3) delay(50)
+                            }
                         }
                     }
             }
@@ -142,8 +145,10 @@ class KafkaSubscribeTest {
                     .groupId(groupId)
                     .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
-                        log.subscribe(subscriber, listener).use {
-                            while (!assigned.get()) delay(50)
+                        log.openGroupConsumer(listener).use { consumer ->
+                            consumer.tailAll(-1, subscriber).use {
+                                while (!assigned.get()) delay(50)
+                            }
                         }
                     }
             }

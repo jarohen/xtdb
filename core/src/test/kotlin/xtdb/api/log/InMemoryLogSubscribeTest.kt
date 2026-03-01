@@ -4,7 +4,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
-import xtdb.api.log.Log.Companion.subscribe
 import xtdb.api.log.Log.*
 import java.util.*
 import java.util.concurrent.atomic.AtomicReference
@@ -30,9 +29,11 @@ class InMemoryLogSubscribeTest {
         }
 
         InMemoryLog.Factory().openSourceLog(emptyMap()).use { log ->
-            log.subscribe(subscriber, listener).use {
-                // Assignment should be immediate (synchronous)
-                assertEquals(listOf(0), assignedPartitions.get()?.toList())
+            log.openGroupConsumer(listener).use { consumer ->
+                consumer.tailAll(-1, subscriber).use {
+                    // Assignment should be immediate (synchronous)
+                    assertEquals(listOf(0), assignedPartitions.get()?.toList())
+                }
             }
         }
     }
@@ -53,12 +54,14 @@ class InMemoryLogSubscribeTest {
         }
 
         InMemoryLog.Factory().openSourceLog(emptyMap()).use { log ->
-            log.subscribe(subscriber, listener).use {
-                log.appendMessage(txMessage(0)).get()
-                log.appendMessage(txMessage(1)).get()
-                log.appendMessage(txMessage(2)).get()
+            log.openGroupConsumer(listener).use { consumer ->
+                consumer.tailAll(-1, subscriber).use {
+                    log.appendMessage(txMessage(0)).get()
+                    log.appendMessage(txMessage(1)).get()
+                    log.appendMessage(txMessage(2)).get()
 
-                while (synchronized(receivedRecords) { receivedRecords.size } < 3) delay(50)
+                    while (synchronized(receivedRecords) { receivedRecords.size } < 3) delay(50)
+                }
             }
         }
 
@@ -84,7 +87,9 @@ class InMemoryLogSubscribeTest {
         }
 
         InMemoryLog.Factory().openSourceLog(emptyMap()).use { log ->
-            log.subscribe(subscriber, listener).close()
+            log.openGroupConsumer(listener).use { consumer ->
+                consumer.tailAll(-1, subscriber).close()
+            }
         }
 
         assertEquals(listOf(0), revokedPartitions.get()?.toList())

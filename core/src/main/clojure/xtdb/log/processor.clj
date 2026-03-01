@@ -84,10 +84,12 @@
         (util/close subscription)
         (util/close follower-proc)))))
 
-(defn- open-leader-system [{:keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
-                                   indexer-for-db compactor-for-db tx-source-for-db watchers db-catalog
-                                   ^IndexerConfig indexer-conf block-flush-duration]
-                            {:keys [meter-registry]} :base}]
+(defn- open-leader-system-with-consumer
+  [{:keys [allocator ^DatabaseStorage db-storage ^DatabaseState db-state
+           indexer-for-db compactor-for-db tx-source-for-db watchers db-catalog
+           ^IndexerConfig indexer-conf block-flush-duration]
+    {:keys [meter-registry]} :base}
+   consumer]
   (let [source-log (.getSourceLog db-storage)
         replica-log (.getReplicaLog db-storage)
         buffer-pool (.getBufferPool db-storage)
@@ -103,11 +105,16 @@
                                   (or block-flush-duration (java.time.Duration/ofMinutes 5)))
         leader-proc (.getProcessor start-result)
         source-resume-offset (.getSourceResumeOffset start-result)
-        subscription (Log/tailAll source-log source-resume-offset leader-proc)]
+        tail-consumer (or consumer (.openConsumer source-log))
+        subscription (.tailAll tail-consumer source-resume-offset leader-proc)]
     (reify LogProcessor$System
       (close [_]
         (util/close subscription)
+        (when-not consumer (util/close tail-consumer))
         (util/close leader-proc)))))
+
+(defn- open-leader-system [opts]
+  (open-leader-system-with-consumer opts nil))
 
 (defmethod ig/expand-key :xtdb.log/processor [k opts]
   {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)
@@ -115,15 +122,22 @@
             :db-state (ig/ref :xtdb.db-catalog/state)
             :watchers (ig/ref :xtdb.db-catalog/watchers)
             :compactor-for-db (ig/ref :xtdb.compactor/for-db)
+            :tx-source-for-db (ig/ref :xtdb.tx-source/for-db)
             :indexer-for-db (ig/ref :xtdb.indexer/for-db)}
            opts)})
 
-(defmethod ig/init-key :xtdb.log/processor [_ {:keys [^IndexerConfig indexer-conf] :as opts}]
+(defmethod ig/init-key :xtdb.log/processor [_ {:keys [^IndexerConfig indexer-conf ^DatabaseStorage db-storage] :as opts}]
   (when (.getEnabled indexer-conf)
-    (let [factory (reify LogProcessor$SystemFactory
+    (let [source-log (.getSourceLog db-storage)
+          !consumer (atom nil)
+          factory (reify LogProcessor$SystemFactory
                     (openFollower [_] (open-follower-system opts))
-                    (openLeader [_] (open-leader-system opts)))]
-      (LogProcessor. factory))))
+                    (openLeader [_] (open-leader-system-with-consumer opts @!consumer)))
+          proc (LogProcessor. factory)
+          grp-consumer (.openGroupConsumer source-log proc)]
+      (reset! !consumer grp-consumer)
+      {:processor proc, :consumer grp-consumer})))
 
-(defmethod ig/halt-key! :xtdb.log/processor [_ processor]
+(defmethod ig/halt-key! :xtdb.log/processor [_ {:keys [consumer processor]}]
+  (util/close consumer)
   (util/close processor))

@@ -111,15 +111,6 @@ interface Log<M> : AutoCloseable {
             return AutoCloseable { subscription.close(); consumer.close() }
         }
 
-        @JvmStatic
-        fun <M> Log<M>.subscribe(
-            processor: RecordProcessor<M>,
-            listener: SubscriptionListener,
-        ): AutoCloseable {
-            val consumer = openGroupConsumer(listener)
-            val subscription = consumer.tailAll(-1, processor)
-            return AutoCloseable { subscription.close(); consumer.close() }
-        }
     }
 
     interface Registration {

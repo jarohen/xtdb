@@ -1,6 +1,8 @@
 package xtdb.indexer
 
-class LogProcessor(private val factory: SystemFactory) : AutoCloseable {
+import xtdb.api.log.Log.SubscriptionListener
+
+class LogProcessor(private val factory: SystemFactory) : AutoCloseable, SubscriptionListener {
 
     interface System : AutoCloseable
 
@@ -9,7 +11,17 @@ class LogProcessor(private val factory: SystemFactory) : AutoCloseable {
         fun openLeader(): System
     }
 
-    private val system: System = factory.openFollower()
+    @Volatile private var system: System = factory.openFollower()
+
+    override fun onPartitionsAssigned(partitions: Collection<Int>) {
+        system.close()
+        system = factory.openLeader()
+    }
+
+    override fun onPartitionsRevoked(partitions: Collection<Int>) {
+        system.close()
+        system = factory.openFollower()
+    }
 
     override fun close() = system.close()
 }
