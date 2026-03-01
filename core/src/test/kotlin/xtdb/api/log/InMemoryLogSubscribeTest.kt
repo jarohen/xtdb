@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import xtdb.api.log.Log.Companion.subscribe
 import xtdb.api.log.Log.*
 import java.util.*
 import java.util.concurrent.atomic.AtomicReference
@@ -17,17 +18,19 @@ class InMemoryLogSubscribeTest {
     fun `assignment callback fires immediately`() = runTest(timeout = 10.seconds) {
         val assignedPartitions = AtomicReference<Collection<Int>>(null)
 
-        val subscriber = object : GroupSubscriber<SourceMessage> {
-            override fun processRecords(records: List<Record<SourceMessage>>) {}
-            override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
+        val subscriber = object : RecordProcessor<SourceMessage> {
+            override fun processRecords(records: List<Record<SourceMessage>>) = Unit
+        }
+
+        val listener = object : SubscriptionListener {
+            override fun onPartitionsAssigned(partitions: Collection<Int>) {
                 assignedPartitions.set(partitions)
-                return emptyMap()
             }
-            override fun onPartitionsRevoked(partitions: Collection<Int>) {}
+            override fun onPartitionsRevoked(partitions: Collection<Int>) = Unit
         }
 
         InMemoryLog.Factory().openSourceLog(emptyMap()).use { log ->
-            log.subscribe(subscriber).use {
+            log.subscribe(subscriber, listener).use {
                 // Assignment should be immediate (synchronous)
                 assertEquals(listOf(0), assignedPartitions.get()?.toList())
             }
@@ -35,34 +38,33 @@ class InMemoryLogSubscribeTest {
     }
 
     @Test
-    fun `returned offset determines start position`() = runTest(timeout = 10.seconds) {
+    fun `subscribe receives new messages`() = runTest(timeout = 10.seconds) {
         val receivedRecords = Collections.synchronizedList(mutableListOf<Record<SourceMessage>>())
 
-        val subscriber = object : GroupSubscriber<SourceMessage> {
+        val subscriber = object : RecordProcessor<SourceMessage> {
             override fun processRecords(records: List<Record<SourceMessage>>) {
                 receivedRecords.addAll(records)
             }
-            override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
-                return mapOf(0 to 2L)
-            }
-            override fun onPartitionsRevoked(partitions: Collection<Int>) {}
+        }
+
+        val listener = object : SubscriptionListener {
+            override fun onPartitionsAssigned(partitions: Collection<Int>) = Unit
+            override fun onPartitionsRevoked(partitions: Collection<Int>) = Unit
         }
 
         InMemoryLog.Factory().openSourceLog(emptyMap()).use { log ->
-            // Append some messages first
-            log.appendMessage(txMessage(0)).get()
-            log.appendMessage(txMessage(1)).get()
-            log.appendMessage(txMessage(2)).get()
+            log.subscribe(subscriber, listener).use {
+                log.appendMessage(txMessage(0)).get()
+                log.appendMessage(txMessage(1)).get()
+                log.appendMessage(txMessage(2)).get()
 
-            log.subscribe(subscriber).use {
-                while (synchronized(receivedRecords) { receivedRecords.size } < 1) delay(50)
+                while (synchronized(receivedRecords) { receivedRecords.size } < 3) delay(50)
             }
         }
 
         synchronized(receivedRecords) {
-            assertTrue(receivedRecords.isNotEmpty())
-            val firstRecord = receivedRecords.first()
-            assertEquals(2L, firstRecord.logOffset)
+            assertEquals(3, receivedRecords.size)
+            assertEquals(0L, receivedRecords.first().logOffset)
         }
     }
 
@@ -70,18 +72,19 @@ class InMemoryLogSubscribeTest {
     fun `revocation callback fires on close`() {
         val revokedPartitions = AtomicReference<Collection<Int>>(null)
 
-        val subscriber = object : GroupSubscriber<SourceMessage> {
-            override fun processRecords(records: List<Record<SourceMessage>>) {}
-            override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
-                return emptyMap()
-            }
+        val subscriber = object : RecordProcessor<SourceMessage> {
+            override fun processRecords(records: List<Record<SourceMessage>>) = Unit
+        }
+
+        val listener = object : SubscriptionListener {
+            override fun onPartitionsAssigned(partitions: Collection<Int>) = Unit
             override fun onPartitionsRevoked(partitions: Collection<Int>) {
                 revokedPartitions.set(partitions)
             }
         }
 
         InMemoryLog.Factory().openSourceLog(emptyMap()).use { log ->
-            log.subscribe(subscriber).close()
+            log.subscribe(subscriber, listener).close()
         }
 
         assertEquals(listOf(0), revokedPartitions.get()?.toList())
