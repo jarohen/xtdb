@@ -75,6 +75,7 @@ class TxIndexer internal constructor(
 
     fun startTx(txKey: TransactionKey): OpenTx = openTx(txKey, null)
 
+
     suspend fun indexTx(
         externalSourceToken: ExternalSourceToken?,
         txId: Long = (liveIndex.latestCompletedTx?.txId ?: -1) + 1,
