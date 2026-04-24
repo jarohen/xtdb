@@ -11,7 +11,6 @@ import xtdb.api.log.Watchers
 import xtdb.database.DatabaseState
 import xtdb.database.DatabaseStorage
 import xtdb.database.ExternalSourceToken
-import xtdb.indexer.Indexer.Companion.addTxRow
 import xtdb.time.InstantUtil.asMicros
 import xtdb.time.InstantUtil.fromMicros
 import java.time.Instant
@@ -98,7 +97,7 @@ class TxIndexer internal constructor(
 
             when (result) {
                 is TxResult.Committed -> openTx.use {
-                    it.addTxRow(dbName, txKey, null, result.userMetadata)
+                    it.addTxRow(dbName, null, result.userMetadata)
                     committer.commit(it, result)
                 }
 
@@ -106,7 +105,7 @@ class TxIndexer internal constructor(
                     txErrorCounter?.increment()
                     openTx.close()
                     openTx(txKey, externalSourceToken).use { abortTx ->
-                        abortTx.addTxRow(dbName, txKey, result.error, result.userMetadata)
+                        abortTx.addTxRow(dbName, result.error, result.userMetadata)
                         committer.commit(abortTx, result)
                     }
                 }

@@ -75,67 +75,6 @@ class LogProcessorSimTest : SimulationTestBase() {
 
     private val docsTable = TableRef("test-db", "public", "docs")
 
-    private fun simIndexer(al: BufferAllocator, dbName: String, dbStorage: DatabaseStorage, dbState: DatabaseState) =
-        object : Indexer.ForDatabase {
-            private fun commitTx(openTx: OpenTx, txKey: TransactionKey, committed: Boolean): ReplicaMessage.ResolvedTx {
-                with(Indexer) { openTx.addTxRow(dbName, txKey, if (committed) null else Incorrect("aborted")) }
-                val tableData = openTx.serializeTableData()
-                dbState.liveIndex.commitTx(openTx)
-                openTx.close()
-                return ReplicaMessage.ResolvedTx(
-                    txId = txKey.txId,
-                    systemTime = txKey.systemTime,
-                    committed = committed,
-                    error = null,
-                    tableData = tableData
-                )
-            }
-
-            override fun indexTx(
-                msgId: MessageId, msgTimestamp: Instant, txOps: VectorReader?,
-                systemTime: Instant?, defaultTz: ZoneId?, user: String?, userMetadata: Any?
-            ): ReplicaMessage.ResolvedTx {
-                val txKey = TransactionKey(msgId, systemTime ?: msgTimestamp)
-                val committed = rand.nextFloat() > 0.1f
-                val openTx = OpenTx(al, nodeBase, dbStorage, dbState, txKey, externalSourceToken = null)
-
-                if (committed) {
-                    val table = openTx.table(docsTable)
-                    val rowCount = rand.nextInt(1, 6)
-                    repeat(rowCount) {
-                        val id = java.util.UUID(rand.nextLong(), rand.nextLong())
-                        table.logPut(
-                            ByteBuffer.wrap(id.asIid),
-                            txKey.systemTime.asMicros,
-                            Long.MAX_VALUE
-                        ) {
-                            table.docWriter.vectorFor("_id", VectorType.UUID.arrowType, false).writeObject(id)
-                            table.docWriter.vectorFor("tx_id", VectorType.I64.arrowType, false).writeLong(msgId)
-                            table.docWriter.endStruct()
-                        }
-                    }
-                }
-
-                return commitTx(openTx, txKey, committed)
-            }
-
-            override fun addTxRow(txKey: TransactionKey, error: Throwable?): ReplicaMessage.ResolvedTx {
-                val openTx = OpenTx(al, nodeBase, dbStorage, dbState, txKey, externalSourceToken = null)
-                return commitTx(openTx, txKey, committed = error == null)
-            }
-
-            override fun close() {}
-        }
-
-    private fun simIndexerWrapper(dbName: String, dbStorage: DatabaseStorage) = object : Indexer {
-        override fun openForDatabase(
-            allocator: BufferAllocator, state: DatabaseState,
-            liveIndex: LiveIndex, crashLogger: CrashLogger, txIndexer: TxIndexer,
-        ) = simIndexer(allocator, dbName, dbStorage, state)
-
-        override fun close() {}
-    }
-
     private inner class SimNode(
         dbName: String, val bp: MemoryStorage, indexerConfig: IndexerConfig,
     ) : LogProcessor.ProcessorFactory, AutoCloseable {
@@ -151,7 +90,6 @@ class LogProcessorSimTest : SimulationTestBase() {
         val dbStorage = DatabaseStorage(srcLog, replicaLog, bp, null)
         val blockUploader = BlockUploader(dbStorage, dbState, mockk(relaxed = true), null)
         val crashLogger = CrashLogger(allocator, bp, "sim-node")
-        val indexer = simIndexerWrapper(dbName, dbStorage)
 
         override fun openLeaderSystem(
             replicaProducer: Log.AtomicProducer<ReplicaMessage>,
@@ -160,7 +98,7 @@ class LogProcessorSimTest : SimulationTestBase() {
         ): LogProcessor.LeaderSystem {
             val proc = LeaderLogProcessor(
                 allocator, nodeBase, dbStorage, replicaProducer,
-                dbState, indexer, crashLogger, watchers,
+                dbState, crashLogger, watchers,
                 emptySet(), null, blockUploader,
                 afterSourceMsgId, afterReplicaMsgId
             )
@@ -198,7 +136,6 @@ class LogProcessorSimTest : SimulationTestBase() {
             LogProcessor(this, dbStorage, dbState, watchers, blockUploader, scope)
 
         override fun close() {
-            indexer.close()
             dbState.close()
         }
     }

@@ -148,7 +148,6 @@ class Database(
             base: NodeBase,
             dbName: DatabaseName,
             dbConfig: Config,
-            indexer: Indexer,
             compactor: Compactor,
             gc: GarbageCollector,
             dbCatalog: Catalog? = null,
@@ -222,7 +221,7 @@ class Database(
                         } else {
                             val leaderProc = LeaderLogProcessor(
                                 allocator, base, storage, replicaProducer, state,
-                                indexer, crashLogger, watchers,
+                                crashLogger, watchers,
                                 indexerConfig.skipTxs.toSet(),
                                 dbCatalog, blockUploader,
                                 afterSourceMsgId, afterReplicaMsgId,

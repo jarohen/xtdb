@@ -9,6 +9,7 @@ import xtdb.api.TransactionKey
 import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
 import xtdb.arrow.VectorReader
+import xtdb.arrow.VectorType
 import xtdb.arrow.VectorWriter
 import xtdb.database.DatabaseName
 import xtdb.database.DatabaseState
@@ -30,12 +31,17 @@ import xtdb.time.InstantUtil.fromMicros
 import xtdb.time.microsAsInstant
 import xtdb.trie.MemoryHashTrie
 import xtdb.trie.Trie
+import xtdb.types.ClojureForm
 import xtdb.util.asIid
 import xtdb.util.closeAll
+import xtdb.util.logger
+import xtdb.util.warn
 import java.nio.ByteBuffer
 import java.time.Instant
 import kotlin.Long.Companion.MAX_VALUE as MAX_LONG
 import kotlin.Long.Companion.MIN_VALUE as MIN_LONG
+
+private val LOG = OpenTx::class.logger
 
 class OpenTx(
     private val allocator: BufferAllocator,
@@ -257,13 +263,59 @@ class OpenTx(
         docs,
     )
 
+    /**
+     * Write this tx's outcome into the `xt/txs` system table. The live indexer calls this
+     * post-writer so every tx (committed or aborted) leaves a row.
+     */
+    @JvmOverloads
+    fun addTxRow(
+        dbName: DatabaseName,
+        error: Throwable? = null,
+        userMetadata: Map<*, *>? = null,
+    ) {
+        val txId = txKey.txId
+        val systemTimeMicros = txKey.systemTime.asMicros
+
+        val liveTable = table(TableRef(dbName, "xt", "txs"))
+        val docWriter = liveTable.docWriter
+
+        liveTable.logPut(ByteBuffer.wrap(txId.asIid), systemTimeMicros, Long.MAX_VALUE) {
+            docWriter.vectorFor("_id", VectorType.I64.arrowType, false)
+                .writeLong(txId)
+
+            docWriter.vectorFor("system_time", VectorType.INSTANT.arrowType, false)
+                .writeLong(systemTimeMicros)
+
+            docWriter.vectorFor("committed", VectorType.BOOL.arrowType, false)
+                .writeBoolean(error == null)
+
+            docWriter.vectorFor("user_metadata", VectorType.structOf().arrowType, true)
+                .writeObject(userMetadata)
+
+            val errorWriter = docWriter.vectorFor("error", VectorType.TRANSIT.arrowType, true)
+            if (error == null) {
+                errorWriter.writeNull()
+            } else {
+                try {
+                    errorWriter.writeObject(error)
+                } catch (e: Exception) {
+                    error.addSuppressed(e)
+                    LOG.warn(error, "Error serializing error, tx $txId")
+                    errorWriter.writeObject(ClojureForm("error serializing error - see server logs"))
+                }
+            }
+
+            docWriter.endStruct()
+        }
+    }
+
     override fun close() = tableTxs.values.closeAll()
 
     companion object {
         // Must stay in sync with xtdb.log/forbidden-schemas and xtdb.tx.TxWriter's FORBIDDEN_SCHEMAS.
         private val FORBIDDEN_SCHEMAS = setOf("xt", "information_schema", "pg_catalog")
 
-        private fun checkNotForbidden(tableRef: TableRef) {
+        internal fun checkNotForbidden(tableRef: TableRef) {
             if (tableRef.schemaName in FORBIDDEN_SCHEMAS) {
                 throw Incorrect(
                     "Cannot write to table: ${tableRef.schemaAndTable}",

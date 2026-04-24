@@ -1,8 +1,9 @@
 package xtdb.indexer
 
+import io.micrometer.core.instrument.Timer
+import io.micrometer.tracing.Tracer
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.NodeBase
-import xtdb.database.ExternalSourceToken
 import xtdb.api.TransactionKey
 import xtdb.api.TransactionResult
 import xtdb.api.log.*
@@ -15,6 +16,8 @@ import xtdb.database.Database
 import xtdb.database.DatabaseState
 import xtdb.database.DatabaseStorage
 import xtdb.error.Anomaly
+import xtdb.error.Fault
+import xtdb.error.Incorrect
 import xtdb.error.Interrupted
 import xtdb.indexer.TxIndexer.TxResult
 import xtdb.table.TableRef
@@ -35,7 +38,6 @@ class LeaderLogProcessor(
     dbStorage: DatabaseStorage,
     private val replicaProducer: Log.AtomicProducer<ReplicaMessage>,
     private val dbState: DatabaseState,
-    indexer: Indexer,
     crashLogger: CrashLogger,
     private val watchers: Watchers,
     private val skipTxs: Set<MessageId>,
@@ -64,14 +66,15 @@ class LeaderLogProcessor(
 
     private val tracer = nodeBase.tracer?.takeIf { nodeBase.config.tracer.transactionTracing }
 
+    private val txOpTimer: Timer? = nodeBase.meterRegistry?.let { reg ->
+        Timer.builder("tx.op.timer")
+            .description("indicates the timing and number of transactions")
+            .register(reg)
+    }
+
     private val txIndexer = TxIndexer(this.allocator, nodeBase, dbStorage, dbState, watchers, committer = this, tracer = tracer)
 
-    private val indexer: Indexer.ForDatabase =
-        indexer.openForDatabase(this.allocator, dbState, liveIndex, crashLogger, txIndexer)
-
-    override suspend fun commit(openTx: OpenTx, result: TxResult) {
-        throw UnsupportedOperationException("LeaderLogProcessor.commit — internal-indexer migration not yet complete")
-    }
+    private val skippedException = Fault("Transaction was skipped", "xtdb/skipped-tx")
 
     override var pendingBlock: PendingBlock? = null
         private set
@@ -95,9 +98,107 @@ class LeaderLogProcessor(
         replicaProducer.withTx { tx -> tx.appendMessage(message) }.await()
             .also { latestReplicaMsgId = it.msgId }
 
-    private fun resolveTx(
-        msgId: MessageId, record: Log.Record<SourceMessage>, msg: SourceMessage
-    ): ReplicaMessage.ResolvedTx {
+    override suspend fun commit(openTx: OpenTx, result: TxResult) = commit(openTx, result, dbOp = null)
+
+    private suspend fun commit(openTx: OpenTx, result: TxResult, dbOp: DbOp?) {
+        val txKey = openTx.txKey
+        val tableData = openTx.serializeTableData()
+        liveIndex.commitTx(openTx)
+
+        val resolvedTx = ReplicaMessage.ResolvedTx(
+            txKey.txId, txKey.systemTime,
+            committed = result is TxResult.Committed,
+            error = (result as? TxResult.Aborted)?.error,
+            tableData, dbOp = dbOp,
+            externalSourceToken = openTx.externalSourceToken,
+        )
+
+        appendToReplica(resolvedTx)
+        latestSourceMsgId = txKey.txId
+
+        val txResult = when (result) {
+            is TxResult.Committed -> TransactionResult.Committed(txKey)
+            is TxResult.Aborted -> TransactionResult.Aborted(txKey, result.error)
+        }
+        watchers.notifyTx(txResult, txKey.txId, resolvedTx.externalSourceToken)
+
+        if (liveIndex.isFull())
+            finishBlock(txKey.txId, resolvedTx.externalSourceToken)
+    }
+
+    private suspend fun finishBlock(latestProcessedMsgId: MessageId, externalSourceToken: xtdb.database.ExternalSourceToken?) {
+        val boundaryMsg =
+            BlockBoundary((blockCatalog.currentBlockIndex ?: -1) + 1, latestProcessedMsgId, externalSourceToken)
+        val boundaryMsgId = appendToReplica(boundaryMsg).msgId
+        LOG.debug("[$dbName] block boundary b${boundaryMsg.blockIndex.asLexHex}: source=$latestProcessedMsgId, replica=$boundaryMsgId")
+        pendingBlock = PendingBlock(boundaryMsgId, boundaryMsg)
+
+        latestReplicaMsgId = blockUploader.uploadBlock(replicaProducer, boundaryMsgId, boundaryMsg)
+        pendingBlock = null
+    }
+
+    private suspend fun runSkippedTx(msgId: MessageId, systemTime: java.time.Instant) {
+        txIndexer.indexTx(
+            externalSourceToken = null, txId = msgId, systemTime = systemTime,
+        ) { TxResult.Aborted(skippedException) }
+    }
+
+    /**
+     * Runs the given [txOps] through a fresh OpenTx driven by [txIndexer]. Caller errors
+     * surface as [TxResult.Aborted]; everything else becomes [TxResult.Committed].
+     *
+     * [specifiedSystemTime] is the caller-specified system-time (may be null — falling back to
+     * [msgTimestamp]). Only a caller-specified time that's before `latestCompletedTx.systemTime`
+     * triggers the `invalid-system-time` abort; the fallback never does.
+     */
+    private suspend fun ingestTxOps(
+        msgId: MessageId, msgTimestamp: java.time.Instant,
+        specifiedSystemTime: java.time.Instant?, defaultTz: ZoneId?,
+        externalSourceToken: xtdb.database.ExternalSourceToken?,
+        userMetadata: Map<*, *>?,
+        txOps: xtdb.arrow.VectorReader,
+    ) {
+        val lct = liveIndex.latestCompletedTx
+        val invalidSystemTime = specifiedSystemTime != null && lct != null
+                && specifiedSystemTime.isBefore(lct.systemTime)
+
+        txIndexer.indexTx(
+            externalSourceToken = externalSourceToken,
+            txId = msgId,
+            systemTime = if (invalidSystemTime) msgTimestamp else (specifiedSystemTime ?: msgTimestamp),
+        ) { openTx ->
+            if (invalidSystemTime) {
+                LOG.warn("[$dbName] specified system-time '$specifiedSystemTime' older than current tx '$lct'")
+                return@indexTx TxResult.Aborted(
+                    Incorrect(
+                        "specified system-time older than current tx",
+                        "xtdb/invalid-system-time",
+                        mapOf(
+                            "tx-key" to TransactionKey(msgId, specifiedSystemTime!!),
+                            "latest-completed-tx" to lct,
+                        ),
+                    ),
+                    userMetadata,
+                )
+            }
+
+            val indexer = TxOpIndexer(allocator, openTx, txOps, openTx.txKey.systemTime, defaultTz, dbName, tracer)
+
+            try {
+                repeat(txOps.valueCount) { idx ->
+                    val timer = txOpTimer
+                    if (timer != null) timer.recordCallable { indexer.indexOp(idx) }
+                    else indexer.indexOp(idx)
+                }
+                TxResult.Committed(userMetadata)
+            } catch (e: Anomaly.Caller) {
+                LOG.debug(e) { "[$dbName] aborted tx $msgId" }
+                TxResult.Aborted(e, userMetadata)
+            }
+        }
+    }
+
+    private suspend fun resolveTx(msgId: MessageId, record: Log.Record<SourceMessage>, msg: SourceMessage) {
         if (skipTxs.isNotEmpty() && skipTxs.contains(msgId)) {
             LOG.warn("[$dbName] Skipping transaction id $msgId - within XTDB_SKIP_TXS")
 
@@ -108,22 +209,26 @@ class LeaderLogProcessor(
             }
             bufferPool.putObject("skipped-txs/${msgId.asLexDec}".asPath, ByteBuffer.wrap(payload))
 
-            return indexer.indexTx(msgId, record.logTimestamp, null, null, null, null, null)
+            runSkippedTx(msgId, record.logTimestamp)
+            return
         }
 
-        return when (msg) {
+        when (msg) {
             is SourceMessage.Tx -> {
                 msg.txOps.asChannel.use { ch ->
                     Relation.StreamLoader(allocator, ch).use { loader ->
                         Relation(allocator, loader.schema).use { rel ->
                             loader.loadNextPage(rel)
+                            val userMetadata = msg.userMetadata?.let { deserializeUserMetadata(allocator, it) } as? Map<*, *>
 
-                            val userMetadata = msg.userMetadata?.let { deserializeUserMetadata(allocator, it) }
-
-                            indexer.indexTx(
-                                msgId, record.logTimestamp,
-                                rel["tx-ops"],
-                                msg.systemTime, msg.defaultTz, msg.user, userMetadata
+                            ingestTxOps(
+                                msgId = msgId,
+                                msgTimestamp = record.logTimestamp,
+                                specifiedSystemTime = msg.systemTime,
+                                defaultTz = msg.defaultTz,
+                                externalSourceToken = msg.externalSourceToken,
+                                userMetadata = userMetadata,
+                                txOps = rel["tx-ops"],
                             )
                         }
                     }
@@ -136,20 +241,18 @@ class LeaderLogProcessor(
                         Relation(allocator, loader.schema).use { rel ->
                             loader.loadNextPage(rel)
 
-                            val systemTime =
-                                (rel["system-time"].getObject(0) as ZonedDateTime?)?.toInstant()
+                            val systemTime = (rel["system-time"].getObject(0) as ZonedDateTime?)?.toInstant()
+                            val defaultTz = (rel["default-tz"].getObject(0) as String?).let { ZoneId.of(it) }
+                            val userMetadata = rel.vectorForOrNull("user-metadata")?.getObject(0) as? Map<*, *>
 
-                            val defaultTz =
-                                (rel["default-tz"].getObject(0) as String?).let { ZoneId.of(it) }
-
-                            val user = rel["user"].getObject(0) as String?
-
-                            val userMetadata = rel.vectorForOrNull("user-metadata")?.getObject(0)
-
-                            indexer.indexTx(
-                                msgId, record.logTimestamp,
-                                rel["tx-ops"].listElements,
-                                systemTime, defaultTz, user, userMetadata
+                            ingestTxOps(
+                                msgId = msgId,
+                                msgTimestamp = record.logTimestamp,
+                                specifiedSystemTime = systemTime,
+                                defaultTz = defaultTz,
+                                externalSourceToken = null,
+                                userMetadata = userMetadata,
+                                txOps = rel["tx-ops"].listElements,
                             )
                         }
                     }
@@ -160,36 +263,13 @@ class LeaderLogProcessor(
         }
     }
 
-    private fun notifyTx(resolvedTx: ReplicaMessage.ResolvedTx) {
-        val txKey = TransactionKey(resolvedTx.txId, resolvedTx.systemTime)
-
-        val result =
-            if (resolvedTx.committed) TransactionResult.Committed(txKey)
-            else TransactionResult.Aborted(txKey, resolvedTx.error)
-
-        watchers.notifyTx(result, resolvedTx.txId, resolvedTx.externalSourceToken)
-    }
-
-    private suspend fun finishBlock(latestProcessedMsgId: MessageId, externalSourceToken: ExternalSourceToken?) {
-        val boundaryMsg =
-            BlockBoundary((blockCatalog.currentBlockIndex ?: -1) + 1, latestProcessedMsgId, externalSourceToken)
-        val boundaryMsgId = appendToReplica(boundaryMsg).msgId
-        LOG.debug("[$dbName] block boundary b${boundaryMsg.blockIndex.asLexHex}: source=$latestProcessedMsgId, replica=$boundaryMsgId")
-        pendingBlock = PendingBlock(boundaryMsgId, boundaryMsg)
-
-        latestReplicaMsgId = blockUploader.uploadBlock(replicaProducer, boundaryMsgId, boundaryMsg)
-        pendingBlock = null
-    }
-
-    private suspend fun handleResolvedTx(resolvedTx: ReplicaMessage.ResolvedTx) {
-        val txId = resolvedTx.txId
-
-        appendToReplica(resolvedTx)
-        latestSourceMsgId = txId
-        notifyTx(resolvedTx)
-
-        if (liveIndex.isFull())
-            finishBlock(txId, resolvedTx.externalSourceToken)
+    private suspend fun handleDbOp(msgId: MessageId, logTimestamp: java.time.Instant, error: Throwable?, dbOp: DbOp?) {
+        val txKey = TransactionKey(msgId, logTimestamp)
+        val result = if (error == null) TxResult.Committed() else TxResult.Aborted(error)
+        txIndexer.startTx(txKey).use { openTx ->
+            openTx.addTxRow(dbName, error, null)
+            commit(openTx, result, dbOp = dbOp)
+        }
     }
 
     override suspend fun processRecords(records: List<Log.Record<SourceMessage>>) {
@@ -201,13 +281,7 @@ class LeaderLogProcessor(
 
             try {
                 when (val msg = record.message) {
-                    is SourceMessage.Tx -> {
-                        val resolved = resolveTx(msgId, record, msg)
-                        handleResolvedTx(msg.externalSourceToken?.let { resolved.copy(externalSourceToken = it) }
-                            ?: resolved)
-                    }
-
-                    is SourceMessage.LegacyTx -> handleResolvedTx(resolveTx(msgId, record, msg))
+                    is SourceMessage.Tx, is SourceMessage.LegacyTx -> resolveTx(msgId, record, msg)
 
                     is SourceMessage.FlushBlock -> {
                         val expectedBlockIdx = msg.expectedBlockIdx
@@ -219,7 +293,6 @@ class LeaderLogProcessor(
                     }
 
                     is SourceMessage.AttachDatabase -> {
-                        val txKey = TransactionKey(msgId, record.logTimestamp)
                         val error = if (dbCatalog != null) {
                             try {
                                 dbCatalog.attach(msg.dbName, msg.config)
@@ -230,20 +303,13 @@ class LeaderLogProcessor(
                             }
                         } else null
 
-                        val resolvedTx = indexer.addTxRow(txKey, error)
-                            .let { if (error == null) it.copy(dbOp = DbOp.Attach(msg.dbName, msg.config)) else it }
-
-                        appendToReplica(resolvedTx)
-
-                        val result =
-                            if (error == null) TransactionResult.Committed(txKey)
-                            else TransactionResult.Aborted(txKey, error)
-                        latestSourceMsgId = msgId
-                        watchers.notifyTx(result, msgId, null)
+                        handleDbOp(
+                            msgId, record.logTimestamp, error,
+                            dbOp = if (error == null) DbOp.Attach(msg.dbName, msg.config) else null,
+                        )
                     }
 
                     is SourceMessage.DetachDatabase -> {
-                        val txKey = TransactionKey(msgId, record.logTimestamp)
                         val error = if (dbCatalog != null) {
                             try {
                                 dbCatalog.detach(msg.dbName)
@@ -254,15 +320,10 @@ class LeaderLogProcessor(
                             }
                         } else null
 
-                        val resolvedTx = indexer.addTxRow(txKey, error)
-                            .let { if (error == null) it.copy(dbOp = DbOp.Detach(msg.dbName)) else it }
-
-                        appendToReplica(resolvedTx)
-
-                        val result = if (error == null) TransactionResult.Committed(txKey)
-                        else TransactionResult.Aborted(txKey, error)
-                        latestSourceMsgId = msgId
-                        watchers.notifyTx(result, msgId, null)
+                        handleDbOp(
+                            msgId, record.logTimestamp, error,
+                            dbOp = if (error == null) DbOp.Detach(msg.dbName) else null,
+                        )
                     }
 
                     is SourceMessage.TriesAdded -> {
@@ -271,15 +332,15 @@ class LeaderLogProcessor(
                                 trieCatalog.addTries(
                                     TableRef.parse(dbState.name, tableName),
                                     tries,
-                                    record.logTimestamp
+                                    record.logTimestamp,
                                 )
                             }
                         }
 
                         appendToReplica(
                             ReplicaMessage.TriesAdded(
-                                msg.storageVersion, msg.storageEpoch, msg.tries, sourceMsgId = msgId
-                            )
+                                msg.storageVersion, msg.storageEpoch, msg.tries, sourceMsgId = msgId,
+                            ),
                         )
 
                         latestSourceMsgId = msgId
@@ -299,7 +360,7 @@ class LeaderLogProcessor(
             } catch (e: Throwable) {
                 LOG.error(
                     e,
-                    "[$dbName] leader: failed to process log record with msgId $msgId (${record.message::class.simpleName})"
+                    "[$dbName] leader: failed to process log record with msgId $msgId (${record.message::class.simpleName})",
                 )
                 watchers.notifyError(e)
                 throw e
@@ -308,7 +369,6 @@ class LeaderLogProcessor(
     }
 
     override fun close() {
-        indexer.close()
         allocator.close()
     }
 }

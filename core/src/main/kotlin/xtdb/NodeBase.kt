@@ -15,7 +15,6 @@ import xtdb.api.log.LogClusterAlias
 import xtdb.cache.DiskCache
 import xtdb.cache.MemoryCache
 import xtdb.compactor.Compactor
-import xtdb.indexer.Indexer
 import xtdb.query.IQuerySource
 import xtdb.util.closeAll
 import xtdb.util.maxDirectMemory
@@ -30,7 +29,6 @@ class NodeBase(
     val remotes: Map<RemoteAlias, Remote>,
     val compactor: Compactor,
     val querySource: IQuerySource,
-    val indexerFactory: Indexer.Factory,
 ) : AutoCloseable {
 
     override fun close() {
@@ -51,10 +49,6 @@ class NodeBase(
         private val scanEmitterFactory by lazy { requiringResolve("xtdb.operator.scan/->scan-emitter") }
         private val querySourceFactory by lazy {
             requiringResolve("xtdb.query/->factory").invoke() as IQuerySource.Factory
-        }
-
-        private val idxFactory by lazy {
-            requiringResolve("xtdb.indexer/->factory").invoke() as Indexer.Factory
         }
 
         @JvmStatic
@@ -100,7 +94,6 @@ class NodeBase(
                     remotes = remotes,
                     compactor = compactor,
                     querySource = querySource,
-                    indexerFactory = idxFactory,
                 )
             }
     }
