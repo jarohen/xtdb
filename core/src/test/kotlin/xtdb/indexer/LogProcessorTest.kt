@@ -70,7 +70,7 @@ class LogProcessorTest {
                 val blockUploader = BlockUploader(dbStorage, dbState, compactor, null)
                 val leaderProc = LeaderLogProcessor(
                     allocator, nodeBase, dbStorage, replicaProducer,
-                    dbState, mockk(relaxed = true), mockk(relaxed = true), watchers,
+                    dbState, mockk(relaxed = true), watchers,
                     emptySet(), null, blockUploader, afterSourceMsgId, afterReplicaMsgId
                 )
                 return object : LogProcessor.LeaderSystem {

@@ -1,6 +1,5 @@
 package xtdb.indexer
 
-import io.micrometer.core.instrument.Timer
 import io.micrometer.tracing.Tracer
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.NodeBase
@@ -65,12 +64,6 @@ class LeaderLogProcessor(
     private val allocator = allocator.newChildAllocator("leader-log-processor", 0, Long.MAX_VALUE)
 
     private val tracer = nodeBase.tracer?.takeIf { nodeBase.config.tracer.transactionTracing }
-
-    private val txOpTimer: Timer? = nodeBase.meterRegistry?.let { reg ->
-        Timer.builder("tx.op.timer")
-            .description("indicates the timing and number of transactions")
-            .register(reg)
-    }
 
     private val txIndexer = TxIndexer(this.allocator, nodeBase, dbStorage, dbState, watchers, committer = this, tracer = tracer)
 
@@ -185,11 +178,7 @@ class LeaderLogProcessor(
             val indexer = TxOpIndexer(allocator, openTx, txOps, openTx.txKey.systemTime, defaultTz, dbName, tracer)
 
             try {
-                repeat(txOps.valueCount) { idx ->
-                    val timer = txOpTimer
-                    if (timer != null) timer.recordCallable { indexer.indexOp(idx) }
-                    else indexer.indexOp(idx)
-                }
+                repeat(txOps.valueCount) { idx -> indexer.indexOp(idx) }
                 TxResult.Committed(userMetadata)
             } catch (e: Anomaly.Caller) {
                 LOG.debug(e) { "[$dbName] aborted tx $msgId" }

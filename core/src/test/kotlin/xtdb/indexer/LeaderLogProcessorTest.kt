@@ -55,7 +55,6 @@ class LeaderLogProcessorTest {
         replicaLog: InMemoryLog<ReplicaMessage> = InMemoryLog(InstantSource.system(), 0),
         bufferPool: BufferPool = mockk(relaxed = true) { every { epoch } returns 0 },
         liveIndex: LiveIndex = mockk(relaxed = true),
-        indexer: Indexer = mockk(relaxed = true),
         blockCatalog: BlockCatalog = BlockCatalog("test", null),
         trieCatalog: TrieCatalog = mockk(relaxed = true),
         compactor: Compactor.ForDatabase = mockk(relaxed = true),
@@ -69,7 +68,7 @@ class LeaderLogProcessorTest {
 
         return LeaderLogProcessor(
             allocator, nodeBase, dbStorage, replicaProducer, dbState,
-            indexer, mockk(relaxed = true), watchers,
+            mockk(relaxed = true), watchers,
             emptySet(), null, blockUploader, afterSourceMsgId = -1, afterReplicaMsgId = -1
         )
     }
@@ -122,7 +121,7 @@ class LeaderLogProcessorTest {
 
         val lp = LeaderLogProcessor(
             allocator, nodeBase, dbStorage, replicaProducer,
-            dbState, mockk(relaxed = true), mockk(relaxed = true), Watchers(-1),
+            dbState, mockk(relaxed = true), Watchers(-1),
             emptySet(), null, blockUploader, afterSourceMsgId = -1, afterReplicaMsgId = -1
         )
 
@@ -186,7 +185,7 @@ class LeaderLogProcessorTest {
 
         val lp = LeaderLogProcessor(
             allocator, nodeBase, dbStorage, replicaProducer,
-            dbState, mockk(relaxed = true), mockk(relaxed = true), Watchers(-1),
+            dbState, mockk(relaxed = true), Watchers(-1),
             emptySet(), null, blockUploader, afterSourceMsgId = -1, afterReplicaMsgId = -1
         )
 
