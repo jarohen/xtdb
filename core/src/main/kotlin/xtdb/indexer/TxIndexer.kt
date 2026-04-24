@@ -1,6 +1,7 @@
 package xtdb.indexer
 
 import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.Timer
 import io.micrometer.tracing.Tracer
 import kotlinx.coroutines.CancellationException
 import org.apache.arrow.memory.BufferAllocator
@@ -43,6 +44,14 @@ class TxIndexer internal constructor(
     private val txErrorCounter: Counter? =
         nodeBase.meterRegistry?.let { Counter.builder("tx.error").register(it) }
 
+    private val txOpTimer: Timer? =
+        nodeBase.meterRegistry?.let {
+            Timer.builder("tx.op.timer")
+                .description("indicates the timing and number of transactions")
+                .publishPercentiles(0.75, 0.85, 0.95, 0.98, 0.99, 0.999)
+                .register(it)
+        }
+
     sealed interface TxResult {
         val userMetadata: Map<*, *>?
 
@@ -76,11 +85,14 @@ class TxIndexer internal constructor(
 
         try {
             val openTx = openTx(txKey, externalSourceToken)
+            val sample = Timer.start()
             val result = try {
                 writer(openTx)
             } catch (e: Throwable) {
                 openTx.close()
                 throw e
+            } finally {
+                txOpTimer?.let(sample::stop)
             }
 
             when (result) {
