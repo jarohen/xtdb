@@ -40,6 +40,7 @@ class LiveIndex private constructor(
 ) : Snapshot.Source, AutoCloseable {
 
     private val tables = HashMap<TableRef, LiveTable>()
+    private val pendingTables = HashMap<TableRef, LiveTable>()
 
     @Volatile
     private var sharedSnap: Snapshot? = null
@@ -72,7 +73,8 @@ class LiveIndex private constructor(
     }
 
     fun table(table: TableRef): LiveTable? = this@LiveIndex.tables[table]
-    val tableRefs: Iterable<TableRef> get() = this@LiveIndex.tables.keys
+    fun pendingTable(table: TableRef): LiveTable? = this@LiveIndex.pendingTables[table]
+    val tableRefs: Iterable<TableRef> get() = this@LiveIndex.tables.keys + this@LiveIndex.pendingTables.keys
 
     fun commitTx(openTx: OpenTx) {
         val stamp = snapLock.writeLock()
@@ -142,7 +144,20 @@ class LiveIndex private constructor(
     fun blockMetadata(): Map<TableRef, LiveTable.BlockMetadata> =
         this@LiveIndex.tables.mapNotNull { (table, lt) -> lt.blockMetadata()?.let { table to it } }.toMap()
 
-    fun finishBlock(bp: BufferPool, blockIdx: BlockIndex) = this@LiveIndex.tables.finishBlock(bp, blockIdx)
+    fun finishBlock(bp: BufferPool, blockIdx: BlockIndex): Map<TableRef, LiveTable.FinishedBlock> {
+        val stamp = snapLock.writeLock()
+        try {
+            check(pendingTables.isEmpty()) { "pendingTables not empty - previous block-finish didn't reach nextBlock" }
+            pendingTables.putAll(tables)
+            tables.clear()
+            refreshSnap()
+        } finally {
+            snapLock.unlock(stamp)
+        }
+
+        // Sealed pending tables aren't mutated, so we can write their tries outside the snap lock.
+        return pendingTables.finishBlock(bp, blockIdx)
+    }
 
     private val skipTxsLogged = AtomicBoolean(false)
 
@@ -151,8 +166,8 @@ class LiveIndex private constructor(
 
         val stamp = snapLock.writeLock()
         try {
-            this@LiveIndex.tables.values.closeAll()
-            this@LiveIndex.tables.clear()
+            this@LiveIndex.pendingTables.values.closeAll()
+            this@LiveIndex.pendingTables.clear()
 
             refreshSnap()
         } finally {
@@ -170,6 +185,7 @@ class LiveIndex private constructor(
     override fun close() {
         sharedSnap?.close()
         this@LiveIndex.tables.values.closeAll()
+        this@LiveIndex.pendingTables.values.closeAll()
         if (!snapRefCounter.tryClose(Duration.ofMinutes(1)))
             LOG.warn("Failed to shut down live-index after 60s due to outstanding watermarks.")
         else

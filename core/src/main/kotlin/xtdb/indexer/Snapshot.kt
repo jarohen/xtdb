@@ -85,6 +85,7 @@ class Snapshot(
 
                 for (tableRef in openTxTables.keys + liveIndex.tableRefs) {
                     liveIndex.table(tableRef)?.let { addSnap(tableRef, TableSnapshot.open(al, it)) }
+                    liveIndex.pendingTable(tableRef)?.let { addSnap(tableRef, TableSnapshot.open(al, it)) }
                     openTxTables[tableRef]?.let { tx -> TableSnapshot.openTx(al, tx)?.let { addSnap(tableRef, it) } }
                 }
 
