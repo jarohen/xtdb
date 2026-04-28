@@ -92,14 +92,19 @@ class Snapshot(
                     byTable.getOrPut(tableRef) { mutableListOf() }.add(ts)
                 }
 
+                fun addLiveSnap(liveTable: LiveTable) {
+                    // Skip live-tables already covered by a published L0 — they'd duplicate the
+                    // L0's data. The watermark is monotonic, so once L0_N exists we drop the
+                    // live-table-N entry from this snapshot for good (its rows are now in L0_N).
+                    // Applies equally to the current and pending slots: the pending-slot dedup
+                    // window opens at `addTries(L0_N)` and closes at `nextBlock`.
+                    if (liveTable.blockIdx > trieCatSnap.l0MaxBlockIdx(liveTable.table))
+                        addSnap(liveTable.table, TableSnapshot.open(al, liveTable))
+                }
+
                 for (tableRef in openTxTables.keys + liveIndex.tableRefs) {
-                    liveIndex.table(tableRef)?.let { liveTable ->
-                        // Skip live-tables already covered by a published L0 — they'd duplicate the
-                        // L0's data. The watermark is monotonic, so once L0_N exists we drop the
-                        // live-table-N entry from this snapshot for good (its rows are now in L0_N).
-                        if (liveTable.blockIdx > trieCatSnap.l0MaxBlockIdx(tableRef))
-                            addSnap(tableRef, TableSnapshot.open(al, liveTable))
-                    }
+                    liveIndex.table(tableRef)?.let { addLiveSnap(it) }
+                    liveIndex.pendingTable(tableRef)?.let { addLiveSnap(it) }
                     openTxTables[tableRef]?.let { tx -> TableSnapshot.openTx(al, tx)?.let { addSnap(tableRef, it) } }
                 }
 
