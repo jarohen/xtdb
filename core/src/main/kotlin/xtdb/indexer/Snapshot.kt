@@ -7,6 +7,7 @@ import xtdb.arrow.VectorType
 import xtdb.catalog.TableCatalog
 import xtdb.table.TableRef
 import xtdb.trie.ColumnName
+import xtdb.trie.TrieCatalog
 import xtdb.util.closeAll
 import xtdb.util.closeAllOnCatch
 import java.util.HashMap
@@ -17,10 +18,11 @@ import kotlin.collections.iterator
 
 class Snapshot(
     val txBasis: TransactionKey?,
+    val trieCatSnap: TrieCatalog.Snap,
     // Each table can have multiple TableSnapshots once dual-slot LiveTable lands;
     // for now the list is always size 0 or 1, but readers must iterate.
     private val tableSnaps: Map<TableRef, List<TableSnapshot>>,
-    val tableInfo: Map<TableRef, Set<ColumnName>>
+    val tableInfo: Map<TableRef, Set<ColumnName>>,
 ) : AutoCloseable {
     interface Source {
         fun openSnapshot(): Snapshot
@@ -34,6 +36,9 @@ class Snapshot(
         return mergeTypes(snaps.map { it.columnType(column) })
     }
     val allColumnTypes get() = tableSnaps.mapValues { (_, snaps) -> snaps.mergeTypes() }
+
+    /** The frozen per-table trie-cat state for [table], for downstream `current-tries` planning. */
+    fun trieTableState(table: TableRef): Any? = trieCatSnap.tableState(table)
 
     private val refCount = AtomicInteger(1)
 
@@ -72,8 +77,12 @@ class Snapshot(
         }
 
         @JvmStatic
-        fun open(al: BufferAllocator, tableCat: TableCatalog, liveIndex: LiveIndex, openTx: OpenTx?): Snapshot =
+        fun open(
+            al: BufferAllocator, tableCat: TableCatalog,
+            trieCatalog: TrieCatalog, liveIndex: LiveIndex, openTx: OpenTx?,
+        ): Snapshot =
             mutableListOf<TableSnapshot>().closeAllOnCatch { allSnaps ->
+                val trieCatSnap = trieCatalog.snapshot()
                 val byTable = HashMap<TableRef, MutableList<TableSnapshot>>()
                 val openTxTables: Map<TableRef, OpenTx.Table> =
                     openTx?.tables?.associate { it.key to it.value }.orEmpty()
@@ -84,13 +93,19 @@ class Snapshot(
                 }
 
                 for (tableRef in openTxTables.keys + liveIndex.tableRefs) {
-                    liveIndex.table(tableRef)?.let { addSnap(tableRef, TableSnapshot.open(al, it)) }
+                    liveIndex.table(tableRef)?.let { liveTable ->
+                        // Skip live-tables already covered by a published L0 — they'd duplicate the
+                        // L0's data. The watermark is monotonic, so once L0_N exists we drop the
+                        // live-table-N entry from this snapshot for good (its rows are now in L0_N).
+                        if (liveTable.blockIdx > trieCatSnap.l0MaxBlockIdx(tableRef))
+                            addSnap(tableRef, TableSnapshot.open(al, liveTable))
+                    }
                     openTxTables[tableRef]?.let { tx -> TableSnapshot.openTx(al, tx)?.let { addSnap(tableRef, it) } }
                 }
 
                 val tableInfo = buildTableInfo(byTable.mapValues { (_, snaps) -> snaps.mergeTypes() }, tableCat)
 
-                Snapshot(openTx?.txKey ?: liveIndex.latestCompletedTx, byTable, tableInfo)
+                Snapshot(openTx?.txKey ?: liveIndex.latestCompletedTx, trieCatSnap, byTable, tableInfo)
             }
     }
 }

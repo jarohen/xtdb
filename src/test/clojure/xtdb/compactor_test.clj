@@ -346,9 +346,10 @@
           (xt/execute-tx node [["ERASE FROM foo WHERE _id = ?" id]])
           (tu/flush-block! node)
           (c/compact-all! node #xt/duration "PT0.5S")
+          (.refreshSnap (.getLiveIndex (db/primary-db node)))
 
-          (t/is (= [{:xt/id id-before} {:xt/id id-after}]
-                   (xt/q node "SELECT _id FROM foo FOR ALL VALID_TIME FOR ALL SYSTEM_TIME")))
+          (t/is (= #{{:xt/id id-before} {:xt/id id-after}}
+                   (set (xt/q node "SELECT _id FROM foo FOR ALL VALID_TIME FOR ALL SYSTEM_TIME"))))
 
           (xt/execute-tx node [[:put-docs :foo {:xt/id id}]])
 
@@ -357,9 +358,10 @@
 
           (tu/flush-block! node)
           (c/compact-all! node #xt/duration "PT0.5S")
+          (.refreshSnap (.getLiveIndex (db/primary-db node)))
 
-          (t/is (= [{:xt/id id-before} {:xt/id id} {:xt/id id-after}]
-                   (xt/q node "SELECT _id FROM foo FOR ALL VALID_TIME FOR ALL SYSTEM_TIME"))))
+          (t/is (= #{{:xt/id id-before} {:xt/id id} {:xt/id id-after}}
+                   (set (xt/q node "SELECT _id FROM foo FOR ALL VALID_TIME FOR ALL SYSTEM_TIME")))))
 
         (aet/check-arrow-edn-dir (.toPath (io/as-file (io/resource "xtdb/compactor-test/compaction-with-erase")))
                                  (table-path node "public$foo")

@@ -17,6 +17,7 @@ import xtdb.util.RowCounter
 class LiveTable @JvmOverloads constructor(
     private val al: BufferAllocator,
     val table: TableRef,
+    val blockIdx: Long,
     private val rowCounter: RowCounter,
     liveTrieFactory: LiveTrieFactory = LiveTrieFactory { MemoryHashTrie.emptyTrie(it) }
 ) : AutoCloseable {

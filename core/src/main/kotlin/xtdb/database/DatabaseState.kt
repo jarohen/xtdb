@@ -49,7 +49,7 @@ data class DatabaseState(
 
             val trieCatalog = trieCatalogFactory.open(bufferPool, blockCatalog)
 
-            val liveIndex = open { LiveIndex.open(allocator, blockCatalog, tableCatalog, dbName, indexerConfig) }
+            val liveIndex = open { LiveIndex.open(allocator, blockCatalog, tableCatalog, trieCatalog, dbName, indexerConfig) }
 
             DatabaseState(dbName, blockCatalog, tableCatalog, trieCatalog, liveIndex)
         }

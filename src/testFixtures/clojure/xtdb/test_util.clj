@@ -336,7 +336,7 @@
      (.build builder))))
 
 (defn open-live-table ^xtdb.indexer.LiveTable [table]
-  (LiveTable. *allocator* table (RowCounter.)))
+  (LiveTable. *allocator* table 0 (RowCounter.)))
 
 (defn serialize-tx-ops ^bytes [^BufferAllocator allocator tx-ops
                                {:keys [^Instant system-time, default-tz user-metadata], {:keys [user]} :authn, :as opts}]

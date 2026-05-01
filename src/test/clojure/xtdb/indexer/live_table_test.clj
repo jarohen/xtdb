@@ -38,7 +38,7 @@
         (util/with-open [node (tu/->local-node {:node-dir path, :compactor-threads 0})
                          bp (.getBufferPool (db/primary-db node))
                          allocator (RootAllocator.)
-                         live-table (LiveTable. allocator #xt/table foo (RowCounter.) (partial trie/->live-trie 2 4))]
+                         live-table (LiveTable. allocator #xt/table foo 0 (RowCounter.) (partial trie/->live-trie 2 4))]
 
           (with-open [open-tx-table (OpenTx$Table. #xt/table foo allocator 0)]
             (let [doc-wtr (.getDocWriter open-tx-table)]
@@ -71,7 +71,7 @@
         (util/with-open [node (tu/->local-node {:node-dir path, :compactor-threads 0})
                          bp (.getBufferPool (db/primary-db node))
                          allocator (RootAllocator.)
-                         live-table (LiveTable. allocator #xt/table foo (RowCounter.))]
+                         live-table (LiveTable. allocator #xt/table foo 0 (RowCounter.))]
           (with-open [open-tx-table (OpenTx$Table. #xt/table foo allocator 0)]
             (let [doc-wtr (.getDocWriter open-tx-table)]
 
@@ -116,7 +116,7 @@
     (util/with-open [node (xtn/start-node (merge tu/*node-opts* {:compactor {:threads 0}}))
                      bp (.getBufferPool (db/primary-db node))
                      allocator (RootAllocator.)
-                     live-table (LiveTable. allocator #xt/table foo rc)]
+                     live-table (LiveTable. allocator #xt/table foo 0 rc)]
       (let [open-tx-table (OpenTx$Table. #xt/table foo allocator 0)
             doc-wtr (.getDocWriter open-tx-table)]
 
@@ -149,9 +149,10 @@
             bp (.getBufferPool db)
             block-cat (.getBlockCatalog db)
             table-catalog (.getTableCatalog db)
+            trie-catalog (.getTrieCatalog db)
             live-index-allocator (util/->child-allocator allocator "live-index")]
         (util/with-open [live-index (LiveIndex/open live-index-allocator
-                                                                        block-cat table-catalog
+                                                                        block-cat table-catalog trie-catalog
                                                                         "xtdb")]
           (with-open [open-tx (tu/->open-tx allocator tu/*node* (serde/->TxKey 0 (.toInstant #inst "2000")))]
             (let [open-tx-table (.table open-tx table)

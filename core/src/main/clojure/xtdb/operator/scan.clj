@@ -221,7 +221,6 @@
             state (.getQueryState db)
             metadata-mgr (.getMetadataManager storage)
             buffer-pool (.getBufferPool storage)
-            trie-catalog (.getTrieCatalog state)
             table-catalog (.getTableCatalog state)
             col-names (->> columns
                            (into #{} (map (fn [[col-type arg]]
@@ -314,7 +313,7 @@
                                                 :projects-temporal-cols? (boolean (some #{"_valid_from" "_valid_to" "_system_from" "_system_to"} col-names))
                                                 :clamp-valid-time? (boolean (:clamp-valid-time? scan-opts))}]
 
-                               (doseq [{:keys [^String trie-key]} (-> (cat/trie-state trie-catalog table)
+                               (doseq [{:keys [^String trie-key]} (-> (.trieTableState snapshot table)
                                                                       (cat/current-tries)
                                                                       (cat/filter-tries filter-opts))]
                                  (.add !segments

@@ -505,6 +505,15 @@
                    (update partition :tries
                            (partial mapv trie/->table-block-trie-details)))))))
 
+  (snapshot [_]
+    ;; Shallow copy of the CHM; per-table values are already immutable Clojure persistent maps.
+    (let [snapped (into {} !table-cats)]
+      (reify xtdb.trie.TrieCatalog$Snap
+        (getTables [_] (set (keys snapped)))
+        (tableState [_ table] (get snapped table))
+        (l0MaxBlockIdx [_ table]
+          (long (or (get-in snapped [table :tries [0 nil []] :max-block-idx]) -1))))))
+
   PTrieCatalog
   (trie-state [_ table] (.get !table-cats table))
 

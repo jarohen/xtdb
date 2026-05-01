@@ -10,8 +10,10 @@
             [xtdb.object-store :as os]
             [xtdb.serde :as serde]
             [xtdb.test-util :as tu]
+            [xtdb.trie :as trie]
             [xtdb.util :as util])
   (:import [java.nio ByteBuffer]
+           [java.time Instant]
            [java.util HashMap Random UUID]
            [java.util.concurrent.locks StampedLock]
            [org.apache.arrow.memory BufferAllocator RootAllocator]
@@ -19,6 +21,7 @@
            (xtdb.arrow Relation)
            (xtdb.api IndexerConfig)
            (xtdb.indexer LiveIndex)
+           (xtdb.indexer LiveTable$FinishedBlock)
            (xtdb.trie ArrowHashTrie ArrowHashTrie$Leaf Bucketer MemoryHashTrie$Leaf)
            (xtdb.util RefCounter RowCounter)))
 
@@ -297,17 +300,68 @@
           (t/is (= 3 (.getRowCount (.getRelation table-snap)))
                 "All puts should be recorded (temporal history)"))))))
 
+(t/deftest snapshot-filters-live-table-once-l0-published
+  ;; #5525 — between BlockUploader's `addTries(L0_N)` and `nextBlock`, the live-table for block N
+  ;; still holds the same rows the L0 trie now does. A snapshot opened in this window must not
+  ;; double-count: filter the live-table out, leaving the L0 as the sole source of N's rows.
+  (util/with-open [allocator (RootAllocator.)]
+    (let [db (db/primary-db tu/*node*)
+          bp (.getBufferPool db)
+          block-cat (.getBlockCatalog db)
+          table-catalog (.getTableCatalog db)
+          trie-catalog (.getTrieCatalog db)
+          live-index-allocator (util/->child-allocator allocator "live-index")]
+
+      (util/with-open [live-index (LiveIndex/open live-index-allocator
+                                                  block-cat table-catalog trie-catalog
+                                                  "xtdb")]
+        (let [table #xt/table dedup-table
+              iid (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))]
+
+          (with-open [live-tx (tu/->open-tx allocator tu/*node* #xt/tx-key {:tx-id 0, :system-time #xt/instant "2020-01-01T00:00:00Z"})]
+            (let [table-tx (.table live-tx table)
+                  doc-wtr (.getDocWriter table-tx)]
+              (.logPut table-tx iid 0 0 #(.endStruct doc-wtr))
+              (.commitTx live-index live-tx)))
+
+          ;; Use the openTx variant of openSnapshot to force a fresh capture each time —
+          ;; the cached sharedSnap was last refreshed on `commitTx`, which is before our manual
+          ;; `addTries` below, so it wouldn't see the L0.
+          (with-open [observer-tx (tu/->open-tx allocator tu/*node* #xt/tx-key {:tx-id 1, :system-time #xt/instant "2020-01-01T00:00:01Z"})]
+
+            (with-open [snap (.openSnapshot live-index observer-tx)]
+              (t/is (= 1 (count (.table snap table)))
+                    "live-table is the only source for block 0 before finishBlock")
+              (t/is (= -1 (.l0MaxBlockIdx (.getTrieCatSnap snap) table))
+                    "no L0 published yet"))
+
+            ;; Drive the BlockUploader flow up to (but not including) nextBlock.
+            (let [finished-blocks (.finishBlock live-index bp 0)]
+              (doseq [[t ^LiveTable$FinishedBlock fb] finished-blocks]
+                (.addTries trie-catalog t
+                           [(trie/->trie-details t {:trie-key (.getTrieKey fb)
+                                                    :data-file-size (.getDataFileSize fb)
+                                                    :trie-metadata (.getTrieMetadata fb)})]
+                           (Instant/now))))
+
+            (with-open [snap (.openSnapshot live-index observer-tx)]
+              (t/is (empty? (.table snap table))
+                    "live-table must be filtered — its rows now live in L0_0")
+              (t/is (= 0 (.l0MaxBlockIdx (.getTrieCatSnap snap) table))
+                    "L0_0 must be visible in the snap's trie-cat"))))))))
+
 (t/deftest next-block-removes-tables
   (util/with-open [allocator (RootAllocator.)]
     (let [db (db/primary-db tu/*node*)
           bp (.getBufferPool db)
           block-cat (.getBlockCatalog db)
           table-catalog (.getTableCatalog db)
+          trie-catalog (.getTrieCatalog db)
           tables (HashMap.)
           live-index-allocator (util/->child-allocator allocator "live-index")]
 
       (util/with-open [live-index (LiveIndex/open live-index-allocator
-                                                                      block-cat table-catalog
+                                                                      block-cat table-catalog trie-catalog
                                                                       "xtdb")]
         (let [table #xt/table test-table
               iid (ByteBuffer/wrap (util/uuid->bytes (UUID/randomUUID)))]

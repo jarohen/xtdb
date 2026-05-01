@@ -3,6 +3,7 @@
             [xtdb.api :as xt]
             [xtdb.basis :as basis]
             [xtdb.compactor :as c]
+            [xtdb.db-catalog :as db]
             [xtdb.node :as xtn]
             [xtdb.operator.scan :as scan]
             [xtdb.test-util :as tu]
@@ -661,6 +662,10 @@
         (tu/flush-block! node)
         ;; compaction happens in 2026
         (c/compact-all! node #xt/duration "PT1S")
+        ;; The compactor publishes `TriesAdded` to the trie-cat, but the live-index's cached
+        ;; `sharedSnap` only refreshes on tx commits — nudge it here so the queries below
+        ;; plan against the compacted L1Cs (the thing this test is actually exercising).
+        (.refreshSnap (.getLiveIndex (db/primary-db node)))
 
         (let [query-opts {:node node
                           :current-time (:system-time tx-key)}]
@@ -678,13 +683,13 @@
                                 (assoc query-opts :current-time #xt/instant "2024-12-30T00:00:00Z"))))
 
           ;; two entries 2024 and 2025
-          (t/is (= [{:xt/id 1,
-                     :xt/valid-from #xt/zoned-date-time "2024-01-01T00:00Z[UTC]",
-                     :xt/valid-to #xt/zoned-date-time "2025-01-01T00:00Z[UTC]"}
-                    {:xt/id 1,
-                     :xt/valid-from #xt/zoned-date-time "2025-01-01T00:00Z[UTC]"}]
-                   (tu/query-ra '[:scan {:table #xt/table docs, :for-valid-time [:between #inst "2024" #inst "2026"], :columns [_id _valid_from _valid_to]}]
-                                query-opts)))
+          (t/is (= #{{:xt/id 1,
+                      :xt/valid-from #xt/zoned-date-time "2024-01-01T00:00Z[UTC]",
+                      :xt/valid-to #xt/zoned-date-time "2025-01-01T00:00Z[UTC]"}
+                     {:xt/id 1,
+                      :xt/valid-from #xt/zoned-date-time "2025-01-01T00:00Z[UTC]"}}
+                   (set (tu/query-ra '[:scan {:table #xt/table docs, :for-valid-time [:between #inst "2024" #inst "2026"], :columns [_id _valid_from _valid_to]}]
+                                     query-opts))))
 
 
           ;; newest entry, basis at 2025

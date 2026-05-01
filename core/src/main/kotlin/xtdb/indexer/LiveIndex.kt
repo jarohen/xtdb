@@ -14,6 +14,7 @@ import xtdb.table.TableRef
 import xtdb.trie.BlockIndex
 import xtdb.trie.ColumnName
 import xtdb.trie.MemoryHashTrie
+import xtdb.trie.TrieCatalog
 import xtdb.util.RowCounter
 import xtdb.util.RefCounter
 import xtdb.util.closeAll
@@ -34,12 +35,22 @@ private val LOG = LiveIndex::class.logger
 class LiveIndex private constructor(
     private val allocator: BufferAllocator,
     private val tableCatalog: TableCatalog,
+    val trieCatalog: TrieCatalog,
     private val dbName: String,
     @Volatile var latestCompletedTx: TransactionKey?,
+    initialBlockIdx: Long,
     indexerConfig: IndexerConfig,
 ) : Snapshot.Source, AutoCloseable {
 
     private val tables = HashMap<TableRef, LiveTable>()
+
+    /**
+     * The block index that data committed *now* belongs to — handed to each [LiveTable] on creation.
+     * Bumped under [snapLock]'s write lock in [nextBlock] so subsequent commit/import paths see the new value.
+     */
+    @Volatile
+    var blockIdx: Long = initialBlockIdx
+        private set
 
     @Volatile
     private var sharedSnap: Snapshot? = null
@@ -63,12 +74,33 @@ class LiveIndex private constructor(
             .build()
     }
 
-    private fun refreshSnap() {
+    private fun refreshSnap0() {
         val oldSnap = sharedSnap
 
-        sharedSnap = Snapshot.open(allocator, tableCatalog, this, openTx = null)
+        sharedSnap = Snapshot.open(allocator, tableCatalog, trieCatalog, this, openTx = null)
 
         oldSnap?.close()
+    }
+
+    /**
+     * Rebuilds the cached shared snapshot — for callers that mutated a catalog the snapshot
+     * captures (specifically the [TrieCatalog]) outside the live-index's own commit/import/block
+     * paths. Compactor's `TriesAdded` and trie-GC's `TriesDeleted` are the canonical examples:
+     * they land on the trie-cat asynchronously, so the cached `sharedSnap`'s `trieCatSnap` would
+     * otherwise stay frozen at the last commit/`nextBlock`. Without this hook, queries against
+     * the shared snap would plan against the pre-mutation catalog state — still correct, but
+     * stale, and the recency-aware merge planner depends on seeing compacted tries to lay out
+     * segments efficiently.
+     *
+     * Takes the snap write-lock itself; callers MUST NOT already hold it.
+     */
+    fun refreshSnap() {
+        val stamp = snapLock.writeLock()
+        try {
+            refreshSnap0()
+        } finally {
+            snapLock.unlock(stamp)
+        }
     }
 
     fun table(table: TableRef): LiveTable? = this@LiveIndex.tables[table]
@@ -80,14 +112,14 @@ class LiveIndex private constructor(
             for ((tableRef, tableTx) in openTx.tables) {
                 if (tableTx.txRelation.rowCount > 0) {
                     val liveTable =
-                        tables.getOrPut(tableRef) { LiveTable(allocator, tableRef, rowCounter, liveTrieFactory) }
+                        tables.getOrPut(tableRef) { LiveTable(allocator, tableRef, blockIdx, rowCounter, liveTrieFactory) }
                     liveTable.importData(tableTx.txRelation)
                 }
             }
 
             latestCompletedTx = openTx.txKey
 
-            refreshSnap()
+            refreshSnap0()
         } finally {
             snapLock.unlock(stamp)
         }
@@ -105,6 +137,7 @@ class LiveIndex private constructor(
                         LiveTable(
                             allocator,
                             tableRef,
+                            blockIdx,
                             rowCounter,
                             liveTrieFactory
                         )
@@ -120,7 +153,7 @@ class LiveIndex private constructor(
 
             latestCompletedTx = txKey
 
-            refreshSnap()
+            refreshSnap0()
         } finally {
             snapLock.unlock(stamp)
         }
@@ -135,7 +168,19 @@ class LiveIndex private constructor(
         }
     }
 
-    fun openSnapshot(openTx: OpenTx) = Snapshot.open(allocator, tableCatalog, this, openTx)
+    fun openSnapshot(openTx: OpenTx): Snapshot {
+        // Hold the snap read-lock for the whole capture: it blocks `nextBlock` (write-lock) so live
+        // tables can't be cleared mid-iteration, and it brackets the trie-cat snapshot so we can't
+        // end up with a stale (no-L0_N) trie-cat alongside a live-tables view that's already been
+        // reset past N. `addTries` doesn't take the snap lock — it's allowed to land on either side
+        // of our trie-cat capture without breaking correctness.
+        val stamp = snapLock.readLock()
+        try {
+            return Snapshot.open(allocator, tableCatalog, trieCatalog, this, openTx)
+        } finally {
+            snapLock.unlock(stamp)
+        }
+    }
 
     fun isFull() = rowCounter.blockRowCount >= rowsPerBlock
 
@@ -154,7 +199,9 @@ class LiveIndex private constructor(
             this@LiveIndex.tables.values.closeAll()
             this@LiveIndex.tables.clear()
 
-            refreshSnap()
+            blockIdx += 1L
+
+            refreshSnap0()
         } finally {
             snapLock.unlock(stamp)
         }
@@ -182,12 +229,13 @@ class LiveIndex private constructor(
         @JvmName("open")
         fun open(
             allocator: BufferAllocator, blockCatalog: BlockCatalog, tableCatalog: TableCatalog,
-            dbName: String, indexerConfig: IndexerConfig = IndexerConfig(),
+            trieCatalog: TrieCatalog, dbName: String, indexerConfig: IndexerConfig = IndexerConfig(),
         ) = safelyOpening {
             LiveIndex(
                 open { allocator.newChildAllocator("live-index", 0, Long.MAX_VALUE) },
-                tableCatalog, dbName,
+                tableCatalog, trieCatalog, dbName,
                 blockCatalog.latestCompletedTx,
+                (blockCatalog.currentBlockIndex ?: -1L) + 1L,
                 indexerConfig,
             ).also { it.refreshSnap() }
         }
