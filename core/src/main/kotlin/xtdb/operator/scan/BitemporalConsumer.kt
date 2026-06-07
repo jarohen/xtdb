@@ -68,8 +68,11 @@ class BitemporalConsumer private constructor(
             val selArray = contentSel.toArray()
 
             val putReader =
+                // an erase-only leaf writes `put` as an empty struct (see #4577) — treat that as
+                // "no puts here" rather than merging its absent columns in. Checked via the struct's
+                // children rather than `_id`: not every table mandates an `_id` (e.g. `xt/role_membership`).
                 rel["op"].vectorForOrNull("put")
-                    ?.takeIf { putVec -> putVec.vectorForOrNull("_id") != null }
+                    ?.takeIf { putVec -> !putVec.keyNames.isNullOrEmpty() }
                     ?.select(selArray)
 
             return RelationReader.from(
