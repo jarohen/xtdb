@@ -61,6 +61,10 @@ val DEFAULT_RULES = listOf(MethodRule(TRUST))
 interface Authenticator : AutoCloseable {
     fun methodFor(user: String?, remoteAddress: String?): Method?
 
+    // Superuser-only operations (e.g. GRANT/REVOKE role) gate on this.
+    // Defaults to no one; authenticators with a notion of a privileged user override it.
+    fun isSuperuser(userId: String): Boolean = false
+
     fun verifyPassword(user: String, password: String): AuthResult =
         throw Unsupported(errorCode="verifyPassword")
 
@@ -185,6 +189,8 @@ class SingleRootUserAuthenticator(private val password: String?) : Authenticator
 
     override fun methodFor(user: String?, remoteAddress: String?): Authenticator.Method =
         if (password == null) TRUST else PASSWORD
+
+    override fun isSuperuser(userId: String) = userId == ROOT_USER
 
     override fun verifyPassword(user: String, password: String): AuthResult {
         val configured = this.password

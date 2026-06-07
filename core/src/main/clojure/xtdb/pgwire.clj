@@ -1495,7 +1495,7 @@
       (when error
         (throw error)))))
 
-(defn- alter-role-membership [{:keys [conn-state default-db] :as conn} {:keys [statement-type role user]}]
+(defn- alter-role-membership [{:keys [conn-state default-db ^Authenticator authn] :as conn} {:keys [statement-type role user]}]
   ;; Role membership is managed only on the primary, in its own transaction — same shape as attach/detach.
   (when-not (= default-db "xtdb")
     (throw (err/incorrect ::role-membership-on-secondary
@@ -1508,9 +1508,15 @@
                           {:role role, :user user})))
 
   (with-auth-check conn
-    ;; TODO(#5683) superuser gate: only a superuser may manage role membership.
-    ;; TODO(#5683) write path (flagged for review): GRANT -> put / REVOKE -> system-time soft-close
-    ;; into the bitemporal `xt`-schema authz table, in its own tx, then refresh the authz catalog.
+    (let [current-user (get-in @conn-state [:session :parameters "user"])]
+      (when-not (and current-user (.isSuperuser authn current-user))
+        (throw (err/incorrect ::not-authorized
+                              "Only a superuser may GRANT/REVOKE role membership."
+                              {:user current-user}))))
+
+    ;; TODO(#5683) write path: GRANT -> put / REVOKE -> system-time soft-close into the bitemporal
+    ;; `xt`-schema authz table (row written below the FORBIDDEN_SCHEMAS guard, the xt/txs pattern),
+    ;; in its own tx, then refresh the authz catalog.
     (throw (err/unsupported ::role-membership-not-yet-implemented
                             "GRANT/REVOKE role is parsed and routed, but the write path is not yet implemented."
                             {:statement-type statement-type, :role role, :user user}))))
