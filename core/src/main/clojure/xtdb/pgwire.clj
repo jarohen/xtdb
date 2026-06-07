@@ -942,7 +942,17 @@
 
                                         (visitDetachDatabaseStatement [_ ctx]
                                           {:statement-type :detach-db
-                                           :db-name (str (sql/identifier-sym (.dbName ctx)))})))))))
+                                           :db-name (str (sql/identifier-sym (.dbName ctx)))})
+
+                                        (visitGrantRoleStatement [_ ctx]
+                                          {:statement-type :grant-role
+                                           :role (str (sql/identifier-sym (.roleName ctx)))
+                                           :user (str (sql/identifier-sym (.userName ctx)))})
+
+                                        (visitRevokeRoleStatement [_ ctx]
+                                          {:statement-type :revoke-role
+                                           :role (str (sql/identifier-sym (.roleName ctx)))
+                                           :user (str (sql/identifier-sym (.userName ctx)))})))))))
 
               (catch Exception e
                 (log/debug e "Error parsing SQL")
@@ -1485,6 +1495,26 @@
       (when error
         (throw error)))))
 
+(defn- alter-role-membership [{:keys [conn-state default-db] :as conn} {:keys [statement-type role user]}]
+  ;; Role membership is managed only on the primary, in its own transaction — same shape as attach/detach.
+  (when-not (= default-db "xtdb")
+    (throw (err/incorrect ::role-membership-on-secondary
+                          "Can only manage role membership when connected to the primary 'xtdb' database."
+                          {:db default-db})))
+
+  (when (false? (get-in @conn-state [:transaction :implicit?]))
+    (throw (err/incorrect ::role-membership-in-tx
+                          "Cannot GRANT/REVOKE a role in a transaction."
+                          {:role role, :user user})))
+
+  (with-auth-check conn
+    ;; TODO(#5683) superuser gate: only a superuser may manage role membership.
+    ;; TODO(#5683) write path (flagged for review): GRANT -> put / REVOKE -> system-time soft-close
+    ;; into the bitemporal `xt`-schema authz table, in its own tx, then refresh the authz catalog.
+    (throw (err/unsupported ::role-membership-not-yet-implemented
+                            "GRANT/REVOKE role is parsed and routed, but the write path is not yet implemented."
+                            {:statement-type statement-type, :role role, :user user}))))
+
 (defn execute-portal [{:keys [conn-state query-timer] :as conn} {:keys [statement-type canned-response parameter value session-characteristics tx-characteristics] :as portal}]
   (verify-permissibility conn portal)
 
@@ -1557,6 +1587,14 @@
     :detach-db (do
                  (detach-db conn portal)
                  (pgio/cmd-write-msg conn pgio/msg-command-complete {:command "DETACH DATABASE"}))
+
+    :grant-role (do
+                  (alter-role-membership conn portal)
+                  (pgio/cmd-write-msg conn pgio/msg-command-complete {:command "GRANT ROLE"}))
+
+    :revoke-role (do
+                   (alter-role-membership conn portal)
+                   (pgio/cmd-write-msg conn pgio/msg-command-complete {:command "REVOKE ROLE"}))
 
     (throw (UnsupportedOperationException. (pr-str {:portal portal})))))
 
