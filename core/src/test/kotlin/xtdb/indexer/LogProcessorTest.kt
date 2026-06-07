@@ -85,7 +85,7 @@ class LogProcessorTest {
                 TransitionLogProcessor(
                     allocator, bufferPool, dbState, dbState.liveIndex,
                     BlockUploader(dbStorage, dbState, mockk(relaxed = true), null, null),
-                    replicaProducer, watchers, dbCatalog = null,
+                    replicaProducer, watchers, dbCatalog = null, authzCatalog = null,
                     afterReplicaMsgId = afterReplicaMsgId,
                     hasExternalSource = false,
                 )
@@ -97,7 +97,7 @@ class LogProcessorTest {
             ): LogProcessor.FollowerProcessor =
                 FollowerLogProcessor(
                     termScope, allocator, dbStorage.replicaLog, bufferPool, dbState,
-                    mockk(relaxed = true), watchers, null, pendingBlock,
+                    mockk(relaxed = true), watchers, null, null, pendingBlock,
                     afterReplicaMsgId,
                     hasExternalSource = false,
                 )

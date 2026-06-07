@@ -220,6 +220,16 @@
           msg-id (xt-log/send-detach-db! primary-db db-name)]
       (await-msg-result this primary-db msg-id)))
 
+  (grant-role [this user role]
+    (let [primary-db (.getPrimary db-cat)
+          msg-id (xt-log/send-grant-role! primary-db user role)]
+      (await-msg-result this primary-db msg-id)))
+
+  (revoke-role [this user role]
+    (let [primary-db (.getPrimary db-cat)
+          msg-id (xt-log/send-revoke-role! primary-db user role)]
+      (await-msg-result this primary-db msg-id)))
+
   xtp/PStatus
   (latest-completed-txs [_]
     (->> (.getDatabaseNames db-cat)

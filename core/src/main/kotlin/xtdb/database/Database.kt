@@ -175,6 +175,14 @@ class Database(
         sourceLog.appendMessage(SourceMessage.DetachDatabase(dbName))
     }
 
+    fun sendGrantRoleMessage(user: String, role: String): Log.MessageMetadata = runBlocking {
+        sourceLog.appendMessage(SourceMessage.GrantRole(user, role))
+    }
+
+    fun sendRevokeRoleMessage(user: String, role: String): Log.MessageMetadata = runBlocking {
+        sourceLog.appendMessage(SourceMessage.RevokeRole(user, role))
+    }
+
     /**
      * Run one cycle of every garbage collector on the leader (block + trie), waiting for both.
      * No-op on non-leader nodes — GC only runs on the leader for a database.
@@ -257,6 +265,12 @@ class Database(
             // the indexer — see /ops/backup-and-restore/out-of-sync-log.
             validateOffsets(dbName, storage.sourceLog, blockCatalog.latestProcessedMsgId)
 
+            // Role membership lives in the primary's `xt/role_membership` table; rebuild the
+            // node-level authz catalog from it before the log processors start, so log replay
+            // (which maintains the catalog incrementally) strictly follows the scan.
+            val authzCatalog = base.authzCatalog.takeIf { dbName == "xtdb" }
+            authzCatalog?.rebuildFrom(base.querySource, storage, state)
+
             val watchers = Watchers(
                 latestTxId = txId,
                 latestSourceMsgId = sourceMsgId,
@@ -298,7 +312,7 @@ class Database(
                         afterReplicaMsgId: MessageId,
                     ) = FollowerLogProcessor(
                         termScope, allocator, storage.replicaLog, storage.bufferPool, state, compactorForDb,
-                        watchers, dbCatalog, pendingBlock, afterReplicaMsgId,
+                        watchers, dbCatalog, authzCatalog, pendingBlock, afterReplicaMsgId,
                         hasExternalSource = hasExternalSource,
                         meterRegistry = base.meterRegistry,
                     )
@@ -328,7 +342,7 @@ class Database(
                     ) = TransitionLogProcessor(
                         allocator, storage.bufferPool, state, state.liveIndex,
                         blockUploader, replicaProducer,
-                        watchers, dbCatalog,
+                        watchers, dbCatalog, authzCatalog,
                         afterReplicaMsgId,
                         hasExternalSource = hasExternalSource,
                     )

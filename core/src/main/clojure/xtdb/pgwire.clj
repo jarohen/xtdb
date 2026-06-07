@@ -1495,7 +1495,7 @@
       (when error
         (throw error)))))
 
-(defn- alter-role-membership [{:keys [conn-state default-db ^Authenticator authn] :as conn} {:keys [statement-type role user]}]
+(defn- alter-role-membership [{:keys [node conn-state default-db ^Authenticator authn] :as conn} {:keys [statement-type role user]}]
   ;; Role membership is managed only on the primary, in its own transaction — same shape as attach/detach.
   (when-not (= default-db "xtdb")
     (throw (err/incorrect ::role-membership-on-secondary
@@ -1514,12 +1514,16 @@
                               "Only a superuser may GRANT/REVOKE role membership."
                               {:user current-user}))))
 
-    ;; TODO(#5683) write path: GRANT -> put / REVOKE -> system-time soft-close into the bitemporal
-    ;; `xt`-schema authz table (row written below the FORBIDDEN_SCHEMAS guard, the xt/txs pattern),
-    ;; in its own tx, then refresh the authz catalog.
-    (throw (err/unsupported ::role-membership-not-yet-implemented
-                            "GRANT/REVOKE role is parsed and routed, but the write path is not yet implemented."
-                            {:statement-type statement-type, :role role, :user user}))))
+    (let [{:keys [tx-id error] :as tx} (case statement-type
+                                         :grant-role (xtp/grant-role node user role)
+                                         :revoke-role (xtp/revoke-role node user role))]
+      (swap! conn-state (fn [cs]
+                          (-> cs
+                              (update :await-token basis/merge-tx-tokens (basis/->tx-basis-str {"xtdb" [tx-id]}))
+                              (assoc :latest-submitted-tx tx))))
+
+      (when error
+        (throw error)))))
 
 (defn execute-portal [{:keys [conn-state query-timer] :as conn} {:keys [statement-type canned-response parameter value session-characteristics tx-characteristics] :as portal}]
   (verify-permissibility conn portal)

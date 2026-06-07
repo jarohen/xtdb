@@ -9,6 +9,7 @@ import xtdb.api.log.MessageId
 import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.Watchers
 import xtdb.api.storage.Storage
+import xtdb.authz.AuthzCatalog
 import xtdb.error.Anomaly
 import xtdb.error.Interrupted
 import xtdb.database.Database
@@ -29,6 +30,7 @@ class TransitionLogProcessor(
     private val replicaProducer: Log.AtomicProducer<ReplicaMessage>,
     private val watchers: Watchers,
     private val dbCatalog: Database.Catalog?,
+    private val authzCatalog: AuthzCatalog?,
     afterReplicaMsgId: MessageId,
     private val hasExternalSource: Boolean,
 ) : LogProcessor.TransitionProcessor {
@@ -74,6 +76,8 @@ class TransitionLogProcessor(
                                 LOG.debug(e) { "[$dbName] transition: detach database '${dbOp.dbName}' failed" }
                             }
                         }
+                        is DbOp.GrantRole -> authzCatalog?.grant(dbOp.user, dbOp.role)
+                        is DbOp.RevokeRole -> authzCatalog?.revoke(dbOp.user, dbOp.role)
                         null -> {}
                     }
                 }

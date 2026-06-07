@@ -17,6 +17,7 @@
            (xtdb ICursor)
            xtdb.api.Authenticator$Factory
            xtdb.api.query.IKeyFn
+           xtdb.authz.AuthzCatalog
            (xtdb.arrow Relation RelationReader VectorType VectorReader)
            xtdb.pgwire.PgType
            (xtdb.indexer Snapshot TableSnapshot)
@@ -94,7 +95,10 @@
                                rngcollation :i32, rngsubopc :i32, rngcanonical :utf8, rngsubdiff :utf8}
           pg_catalog/pg_am {oid :i32, amname :utf8, amhandler :utf8, amtype :utf8}
 
-          pg_catalog/pg_user {username :utf8, usesuper :bool, passwd [:? :utf8]}}
+          pg_catalog/pg_user {username :utf8, usesuper :bool, passwd [:? :utf8]}
+
+          pg_catalog/pg_roles {oid :i32, rolname :utf8, rolsuper :bool, rolcanlogin :bool}
+          pg_catalog/pg_auth_members {roleid :i32, member :i32, grantor [:? :i32], admin_option :bool}}
         (update-vals map->vec-types)))
 
   (def ^:private xt-derived-tables
@@ -340,6 +344,25 @@
   (for [username (.knownUsers authn)]
     {:username username, :usesuper true, :passwd nil}))
 
+(defn pg-roles [^Authenticator$Factory authn ^AuthzCatalog authz-catalog]
+  ;; Users (which can log in) and granted roles (which can't) share the pg_roles namespace, as they
+  ;; do in Postgres. Users with a membership might not be configured users (e.g. an OIDC subject),
+  ;; but still get a row so that pg_auth_members joins resolve. `rolsuper` for configured users
+  ;; mirrors the pg_user stub above.
+  (let [known-users (set (.knownUsers authn))]
+    (concat (for [username (sort (into known-users (keys (.getAllMemberships authz-catalog))))]
+              {:oid (name->oid username), :rolname username,
+               :rolsuper (contains? known-users username), :rolcanlogin true})
+            (for [role (sort (.getAllRoles authz-catalog))]
+              {:oid (name->oid role), :rolname role, :rolsuper false, :rolcanlogin false}))))
+
+(defn pg-auth-members [^AuthzCatalog authz-catalog]
+  ;; The within-XT role membership, resolved at the node watermark (never the query basis) —
+  ;; for as-of-system-time membership history, query `xt.role_membership` directly.
+  (for [[user roles] (into {} (.getAllMemberships authz-catalog))
+        role roles]
+    {:roleid (name->oid role), :member (name->oid user), :grantor nil, :admin-option false}))
+
 (defn trie-stats [^TrieCatalog trie-catalog]
   (for [^TableRef table (.getTables trie-catalog)
         :let [trie-state (trie-cat/trie-state trie-catalog table)]
@@ -433,7 +456,7 @@
              table col-names col-preds
              schema params]))
 
-(defn ->info-schema [_allocator metrics-registry ^Authenticator$Factory authn]
+(defn ->info-schema [_allocator metrics-registry ^Authenticator$Factory authn ^AuthzCatalog authz-catalog]
   (reify InfoSchema
     (->cursor [_ allocator db db-cat snap derived-table-schema
                table col-names col-preds
@@ -477,6 +500,8 @@
                                      pg_catalog/pg_range (pg-range)
                                      pg_catalog/pg_am (pg-am)
                                      pg_catalog/pg_user (pg-user authn)
+                                     pg_catalog/pg_roles (pg-roles authn authz-catalog)
+                                     pg_catalog/pg_auth_members (pg-auth-members authz-catalog)
                                      xt/trie_stats (trie-stats trie-catalog)
                                      xt/live_tables (live-tables snap)
                                      xt/live_columns (live-columns snap)

@@ -41,6 +41,7 @@ given {
     table_catalog: TableCatalog
     block_uploader: BlockUploader      -- shared by leader, transition processor
     compactor: Compactor.ForDatabase   -- peer of log_processor at db-system level
+    authz_catalog: AuthzCatalog        -- node-level; role membership, updated on leader and follower convergence
 }
 
 ---- External Entities
@@ -136,8 +137,10 @@ variant ExternalSourceLeader : LogProcessor {
     --
     -- It still consumes the source log for flush/tries/block-uploaded coordination
     -- (forwarding TriesAdded, acting on FlushBlock), but client TxMessage /
-    -- AttachDatabase / DetachDatabase MUST NOT appear on its source log —
-    -- the primary rejects these at submit time.
+    -- AttachDatabase / DetachDatabase / GrantRole / RevokeRole MUST NOT appear
+    -- on its source log — the primary rejects these at submit time (role
+    -- membership is managed only on the primary; pgwire rejects it on other
+    -- databases).
     --
     -- See: indexer/ExternalSourceProcessor.kt
     external_source: ExternalSource
@@ -161,6 +164,14 @@ variant Transition : LogProcessor {
     -- On BlockBoundary: directly calls blockUploader.uploadBlock() (unlike the
     -- follower, which enters pending mode and waits for BlockUploaded).
     -- See: indexer/TransitionLogProcessor.kt
+}
+
+entity AuthzCatalog {
+    -- Node-level catalog of role membership (which roles each user holds).
+    -- On the leader, GrantRole/RevokeRole update it directly. Followers converge
+    -- by applying the GrantRole/RevokeRole DbOp from each ResolvedTx; the backing
+    -- xt/role_membership rows converge via the normal table_data import.
+    -- See: authz/AuthzCatalog.kt
 }
 
 entity BlockCatalog {
@@ -291,7 +302,7 @@ value TableMetadata {
 value DbOp {
     -- A database-level side-effect carried within a ResolvedTx.
     -- See: api/log/DbOp.kt
-    kind: Attach | Detach
+    kind: Attach | Detach | GrantRole | RevokeRole
 }
 
 variant Attach : DbOp {
@@ -301,6 +312,16 @@ variant Attach : DbOp {
 
 variant Detach : DbOp {
     db_name: String
+}
+
+variant GrantRole : DbOp {
+    user: String
+    role: String
+}
+
+variant RevokeRole : DbOp {
+    user: String
+    role: String
 }
 
 ---- Source Log Messages
@@ -314,6 +335,7 @@ entity SourceMessage {
     log_timestamp: Instant
     kind: TxMessage | FlushBlockMessage | TriesAddedMessage
          | BlockUploadedMessage | AttachDbMessage | DetachDbMessage
+         | GrantRoleMessage | RevokeRoleMessage
 }
 
 variant TxMessage : SourceMessage {
@@ -362,6 +384,20 @@ variant DetachDbMessage : SourceMessage {
     db_name: String
 }
 
+variant GrantRoleMessage : SourceMessage {
+    -- GRANT <role> TO <user>. Role membership is managed only on the primary.
+    -- See: log/proto/log.proto (GrantRole), api/log/SourceMessage.kt
+    user: String
+    role: String
+}
+
+variant RevokeRoleMessage : SourceMessage {
+    -- REVOKE <role> FROM <user>. Role membership is managed only on the primary.
+    -- See: log/proto/log.proto (RevokeRole), api/log/SourceMessage.kt
+    user: String
+    role: String
+}
+
 ---- Replica Log Messages
 
 -- Messages on the replica log. Written exclusively by the leader.
@@ -386,7 +422,7 @@ variant ResolvedTxMessage : ReplicaMessage {
     system_time: Instant                      -- resolved system time for the transaction
     committed: Boolean
     error: Throwable?                         -- abort reason (null if committed)
-    db_op: DbOp?                              -- Attach or Detach side-effect, if any
+    db_op: DbOp?                              -- Attach / Detach / GrantRole / RevokeRole side-effect, if any
     table_data: Map<String, Bytes>            -- resolved row data per table, serialized; imported by replica processor
     external_source_token: ExternalSourceToken?  -- present for external-source DBs
 }
@@ -692,6 +728,55 @@ rule LeaderProcessesDetachDb {
         log_processor.latest_source_msg_id = msg.msg_id
 }
 
+rule LeaderProcessesGrantRole {
+    -- GRANT <role> TO <user>. The leader writes a row into the primary's
+    -- xt/role_membership bitemporal table (below the forbidden-schemas guard,
+    -- following the xt/txs pattern) and commits it as a one-message transaction.
+    -- The row's _iid is derived deterministically from (user, role). The leader
+    -- also updates the node-level AuthzCatalog; followers converge by applying
+    -- the DbOp from the ResolvedTx (the row data converges via table_data import).
+    when: msg: GrantRoleMessage consumed from database.source_log
+    requires: log_processor.mode = Leader
+
+    requires: msg.msg_id > log_processor.latest_source_msg_id
+
+    ensures:
+        let resolved = ResolveGrantRole(msg)
+        ResolvedTxMessage.created(
+            tx_id: msg.msg_id,
+            committed: resolved.committed,
+            db_op: resolved.db_op,
+            external_source_token: null
+        ) appended to database.replica_log
+
+        watchers.notifyTx(resolved.result, msg.msg_id, null)
+        log_processor.latest_source_msg_id = msg.msg_id
+}
+
+rule LeaderProcessesRevokeRole {
+    -- REVOKE <role> FROM <user>. The leader writes a logDelete for the same
+    -- deterministic _iid derived from (user, role) — a system-time soft-close
+    -- of the xt/role_membership row — and commits it as a one-message transaction.
+    -- The leader also updates the node-level AuthzCatalog; followers converge by
+    -- applying the DbOp from the ResolvedTx (the row data converges via table_data import).
+    when: msg: RevokeRoleMessage consumed from database.source_log
+    requires: log_processor.mode = Leader
+
+    requires: msg.msg_id > log_processor.latest_source_msg_id
+
+    ensures:
+        let resolved = ResolveRevokeRole(msg)
+        ResolvedTxMessage.created(
+            tx_id: msg.msg_id,
+            committed: resolved.committed,
+            db_op: resolved.db_op,
+            external_source_token: null
+        ) appended to database.replica_log
+
+        watchers.notifyTx(resolved.result, msg.msg_id, null)
+        log_processor.latest_source_msg_id = msg.msg_id
+}
+
 rule LeaderProcessesFlushBlock {
     when: msg: FlushBlockMessage consumed from database.source_log
     requires: log_processor.mode = Leader
@@ -827,8 +912,9 @@ rule LeaderFlushTimeout {
 -- Instead, the external source is handed a TxIndexer callback on partition
 -- assignment and feeds transactions in directly. Flush/tries/block-uploaded
 -- coordination still uses the source log, so the processor also reads it —
--- but TxMessage / AttachDatabase / DetachDatabase MUST NOT appear there
--- (rejected at submit time by the primary or by this database's submit path).
+-- but TxMessage / AttachDatabase / DetachDatabase / GrantRole / RevokeRole
+-- MUST NOT appear there (rejected at submit time by the primary or by this
+-- database's submit path; role membership is managed only on the primary).
 --
 -- See: indexer/ExternalSourceProcessor.kt
 
@@ -1004,6 +1090,10 @@ rule HandleReplicaMessage {
                     database.catalog.attach(msg.db_op.db_name, msg.db_op.config)
                 if msg.db_op.kind = Detach:
                     database.catalog.detach(msg.db_op.db_name)
+                if msg.db_op.kind = GrantRole:
+                    authz_catalog.grantRole(msg.db_op.user, msg.db_op.role)
+                if msg.db_op.kind = RevokeRole:
+                    authz_catalog.revokeRole(msg.db_op.user, msg.db_op.role)
             log_processor.latest_source_msg_id = msg.tx_id
             watchers.notifyTx(result, msg.tx_id, msg.external_source_token)
 
@@ -1089,6 +1179,10 @@ rule TransitionHandlesResolvedTx {
                 database.catalog.attach(msg.db_op.db_name, msg.db_op.config)
             if msg.db_op.kind = Detach:
                 database.catalog.detach(msg.db_op.db_name)
+            if msg.db_op.kind = GrantRole:
+                authz_catalog.grantRole(msg.db_op.user, msg.db_op.role)
+            if msg.db_op.kind = RevokeRole:
+                authz_catalog.revokeRole(msg.db_op.user, msg.db_op.role)
         log_processor.latest_source_msg_id = msg.tx_id
         watchers.notifyTx(result, msg.tx_id, msg.external_source_token)
 }
@@ -1235,3 +1329,5 @@ surface QueryAccess {
 deferred IndexTransaction           -- transaction resolution (put/delete/erase logic)
 deferred ResolveAttach              -- attach database resolution
 deferred ResolveDetach              -- detach database resolution
+deferred ResolveGrantRole           -- grant role: write xt/role_membership row (deterministic _iid from user+role)
+deferred ResolveRevokeRole          -- revoke role: logDelete the xt/role_membership row by the same _iid

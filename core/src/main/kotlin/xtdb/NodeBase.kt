@@ -10,6 +10,7 @@ import xtdb.Tracer.openTracer
 import xtdb.api.Remote
 import xtdb.api.RemoteAlias
 import xtdb.api.Xtdb
+import xtdb.authz.AuthzCatalog
 import xtdb.cache.DiskCache
 import xtdb.error.Incorrect
 import xtdb.cache.MemoryCache
@@ -27,6 +28,7 @@ class NodeBase(
     val remotes: Map<RemoteAlias, Remote>,
     val compactor: Compactor,
     val querySource: IQuerySource,
+    val authzCatalog: AuthzCatalog,
 ) : AutoCloseable {
 
     override fun close() {
@@ -85,7 +87,8 @@ class NodeBase(
 
                 val compactor = open { compactorFactory.create(meterReg, config.compactor.threads) }
 
-                val infoSchema = infoSchemaFactory.invoke(al, meterReg, config.authn)
+                val authzCatalog = AuthzCatalog()
+                val infoSchema = infoSchemaFactory.invoke(al, meterReg, config.authn, authzCatalog)
                 val scanEmitter = scanEmitterFactory.invoke(infoSchema)
                 val querySource = open { querySourceFactory.create(al, meterReg, scanEmitter) }
 
@@ -100,6 +103,7 @@ class NodeBase(
                     remotes = remotes,
                     compactor = compactor,
                     querySource = querySource,
+                    authzCatalog = authzCatalog,
                 )
             }
     }

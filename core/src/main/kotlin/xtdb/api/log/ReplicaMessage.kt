@@ -9,7 +9,9 @@ import xtdb.log.proto.attachDatabase
 import xtdb.log.proto.blockBoundary
 import xtdb.log.proto.blockUploaded
 import xtdb.log.proto.detachDatabase
+import xtdb.log.proto.grantRole
 import xtdb.log.proto.noOp
+import xtdb.log.proto.revokeRole
 import xtdb.log.proto.replicaLogMessage
 import xtdb.log.proto.resolvedTx
 import xtdb.log.proto.triesAdded
@@ -46,6 +48,10 @@ sealed interface ReplicaMessage {
                                     it.attachDatabase.let { a -> DbOp.Attach(a.dbName, Database.Config.fromProto(a.config)) }
                                 xtdb.log.proto.ResolvedTx.DbOpCase.DETACH_DATABASE ->
                                     DbOp.Detach(it.detachDatabase.dbName)
+                                xtdb.log.proto.ResolvedTx.DbOpCase.GRANT_ROLE ->
+                                    it.grantRole.let { g -> DbOp.GrantRole(g.user, g.role) }
+                                xtdb.log.proto.ResolvedTx.DbOpCase.REVOKE_ROLE ->
+                                    it.revokeRole.let { r -> DbOp.RevokeRole(r.user, r.role) }
                                 else -> null
                             }
                             ResolvedTx(
@@ -137,6 +143,16 @@ sealed interface ReplicaMessage {
 
                     is DbOp.Detach -> detachDatabase = detachDatabase {
                         this.dbName = op.dbName
+                    }
+
+                    is DbOp.GrantRole -> grantRole = grantRole {
+                        this.user = op.user
+                        this.role = op.role
+                    }
+
+                    is DbOp.RevokeRole -> revokeRole = revokeRole {
+                        this.user = op.user
+                        this.role = op.role
                     }
 
                     null -> {}

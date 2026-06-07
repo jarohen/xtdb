@@ -6,7 +6,9 @@
   (^long submit-tx [node tx-ops tx-opts])
   (^xtdb.api.Xtdb$ExecutedTx execute-tx [node tx-ops tx-opts])
   (^xtdb.api.Xtdb$ExecutedTx attach-db [node db-name db-config])
-  (^xtdb.api.Xtdb$ExecutedTx detach-db [node db-name]))
+  (^xtdb.api.Xtdb$ExecutedTx detach-db [node db-name])
+  (^xtdb.api.Xtdb$ExecutedTx grant-role [node user role])
+  (^xtdb.api.Xtdb$ExecutedTx revoke-role [node user role]))
 
 (defprotocol PLocalNode
   (^xtdb.query.PreparedQuery prepare-sql [node query query-opts])

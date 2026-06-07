@@ -32,6 +32,8 @@ message ResolvedTx {
     oneof db_op {
         AttachDatabase attach_database = 6;
         DetachDatabase detach_database = 7;
+        GrantRole grant_role = 10;
+        RevokeRole revoke_role = 11;
     }
 
     bytes external_source_token = 8;

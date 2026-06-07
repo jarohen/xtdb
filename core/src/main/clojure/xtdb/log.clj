@@ -195,3 +195,9 @@
 
 (defn send-detach-db! ^long [^Database primary-db, db-name]
   (.getMsgId (.sendDetachDbMessage primary-db db-name)))
+
+(defn send-grant-role! ^long [^Database primary-db, user, role]
+  (.getMsgId (.sendGrantRoleMessage primary-db user role)))
+
+(defn send-revoke-role! ^long [^Database primary-db, user, role]
+  (.getMsgId (.sendRevokeRoleMessage primary-db user role)))

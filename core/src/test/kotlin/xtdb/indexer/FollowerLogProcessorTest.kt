@@ -77,7 +77,7 @@ class FollowerLogProcessorTest {
     ) =
         FollowerLogProcessor(
             backgroundScope, allocator, replicaLog, bufferPool, dbState,
-            compactor, watchers, null, null, afterReplicaMsgId = -1L,
+            compactor, watchers, null, null, null, afterReplicaMsgId = -1L,
             hasExternalSource = hasExternalSource,
             meterRegistry = meterRegistry,
             maxBufferedRecords = maxBufferedRecords,

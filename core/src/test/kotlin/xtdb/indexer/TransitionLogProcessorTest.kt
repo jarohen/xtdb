@@ -55,7 +55,7 @@ class TransitionLogProcessorTest {
         TransitionLogProcessor(
             allocator, bufferPool, dbState, liveIndex,
             blockUploader, replicaProducer,
-            watchers, null, afterReplicaMsgId = -1L,
+            watchers, null, null, afterReplicaMsgId = -1L,
             hasExternalSource = hasExternalSource,
         )
 

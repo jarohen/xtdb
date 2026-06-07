@@ -13,6 +13,7 @@ import xtdb.api.TransactionKey
 import xtdb.api.TransactionResult
 import xtdb.api.log.*
 import xtdb.api.storage.Storage
+import xtdb.authz.AuthzCatalog
 import xtdb.block.proto.Block.parseFrom
 import xtdb.catalog.BlockCatalog.Companion.blockFilePath
 import xtdb.compactor.Compactor
@@ -40,6 +41,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
     private val compactor: Compactor.ForDatabase,
     private val watchers: Watchers,
     private val dbCatalog: Database.Catalog?,
+    private val authzCatalog: AuthzCatalog?,
     pendingBlock: PendingBlock?,
     afterReplicaMsgId: MessageId,
     private val hasExternalSource: Boolean,
@@ -158,6 +160,8 @@ class FollowerLogProcessor @JvmOverloads constructor(
                                 LOG.debug(e) { "[$dbName] follower: detach database '${dbOp.dbName}' failed" }
                             }
                         }
+                        is DbOp.GrantRole -> authzCatalog?.grant(dbOp.user, dbOp.role)
+                        is DbOp.RevokeRole -> authzCatalog?.revoke(dbOp.user, dbOp.role)
                         null -> {}
                     }
                 }

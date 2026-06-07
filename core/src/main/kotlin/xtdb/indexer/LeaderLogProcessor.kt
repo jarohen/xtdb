@@ -18,7 +18,9 @@ import xtdb.api.log.ReplicaMessage.TriesAdded
 import xtdb.api.storage.Storage
 import xtdb.arrow.Relation
 import xtdb.arrow.VectorReader
+import xtdb.arrow.VectorType
 import xtdb.arrow.asChannel
+import xtdb.authz.AuthzCatalog
 import xtdb.database.*
 import xtdb.error.Anomaly
 import xtdb.error.Fault
@@ -206,6 +208,38 @@ class LeaderLogProcessor(
                 watchers.notifyTx(result, msgId, null)
             }
 
+            is SourceMessage.GrantRole -> {
+                val txKey = TransactionKey(msgId, smoothSystemTime(record.logTimestamp))
+
+                val resolvedTx = openTx(txKey, null).use { openTx ->
+                    writeMembershipRow(openTx, msg.user, msg.role, revoke = false)
+                    openTx.commitTx().copy(srcMsgId = msgId, dbOp = DbOp.GrantRole(msg.user, msg.role))
+                }
+
+                nodeBase.authzCatalog.grant(msg.user, msg.role)
+
+                appendToReplica(resolvedTx)
+                liveIndex.importTx(resolvedTx)
+
+                watchers.notifyTx(Committed(txKey), msgId, null)
+            }
+
+            is SourceMessage.RevokeRole -> {
+                val txKey = TransactionKey(msgId, smoothSystemTime(record.logTimestamp))
+
+                val resolvedTx = openTx(txKey, null).use { openTx ->
+                    writeMembershipRow(openTx, msg.user, msg.role, revoke = true)
+                    openTx.commitTx().copy(srcMsgId = msgId, dbOp = DbOp.RevokeRole(msg.user, msg.role))
+                }
+
+                nodeBase.authzCatalog.revoke(msg.user, msg.role)
+
+                appendToReplica(resolvedTx)
+                liveIndex.importTx(resolvedTx)
+
+                watchers.notifyTx(Committed(txKey), msgId, null)
+            }
+
             is SourceMessage.TriesAdded -> {
                 if (msg.storageVersion == Storage.VERSION && msg.storageEpoch == bufferPool.epoch) {
                     msg.tries.groupBy { it.tableName }.forEach { (tableName, tries) ->
@@ -366,6 +400,26 @@ class LeaderLogProcessor(
 
     private fun openTx(txKey: TransactionKey, externalSourceToken: ExternalSourceToken?) =
         OpenTx(allocator, nodeBase, dbStorage, dbState, txKey, externalSourceToken, tracer)
+
+    // GRANT puts the membership row wide-open to the right of valid time; REVOKE deletes the same
+    // `_iid` from now — a system-time soft-close, so as-of-system-time queries before the revoke
+    // still see the membership in force (#5683). Written below the FORBIDDEN_SCHEMAS guard, the
+    // `xt/txs` pattern, leaving the guard fully in force for user DML.
+    private fun writeMembershipRow(openTx: OpenTx, user: String, role: String, revoke: Boolean) {
+        val table = openTx.table(TableRef(dbName, "xt", "role_membership"))
+        val iid = ByteBuffer.wrap(AuthzCatalog.membershipIid(user, role))
+
+        if (revoke) {
+            table.logDelete(iid, openTx.systemFrom, Long.MAX_VALUE)
+        } else {
+            val docWriter = table.docWriter
+            table.logPut(iid, openTx.systemFrom, Long.MAX_VALUE) {
+                docWriter.vectorFor("user", VectorType.UTF8.arrowType, false).writeObject(user)
+                docWriter.vectorFor("role", VectorType.UTF8.arrowType, false).writeObject(role)
+                docWriter.endStruct()
+            }
+        }
+    }
 
     private suspend fun commit(openTx: OpenTx, error: Throwable?, userMetadata: Map<*, *>?) {
         submit(ExtSourceTask.ResolvedTx(openTx.commitTx(error, userMetadata)))

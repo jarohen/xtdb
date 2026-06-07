@@ -10,6 +10,8 @@ import xtdb.log.proto.attachDatabase
 import xtdb.log.proto.blockUploaded
 import xtdb.log.proto.detachDatabase
 import xtdb.log.proto.flushBlock
+import xtdb.log.proto.grantRole
+import xtdb.log.proto.revokeRole
 import xtdb.log.proto.sourceLogMessage
 import xtdb.log.proto.triesAdded
 import xtdb.log.proto.tx
@@ -81,6 +83,14 @@ sealed interface SourceMessage {
                             }
 
                             SourceLogMessage.MessageCase.DETACH_DATABASE -> DetachDatabase(msg.detachDatabase.dbName)
+
+                            SourceLogMessage.MessageCase.GRANT_ROLE -> msg.grantRole.let {
+                                GrantRole(it.user, it.role)
+                            }
+
+                            SourceLogMessage.MessageCase.REVOKE_ROLE -> msg.revokeRole.let {
+                                RevokeRole(it.user, it.role)
+                            }
 
                             SourceLogMessage.MessageCase.BLOCK_UPLOADED -> msg.blockUploaded.let {
                                 BlockUploaded(
@@ -176,6 +186,24 @@ sealed interface SourceMessage {
         override fun toLogMessage() = sourceLogMessage {
             detachDatabase = detachDatabase {
                 this.dbName = this@DetachDatabase.dbName
+            }
+        }
+    }
+
+    data class GrantRole(val user: String, val role: String) : ProtobufMessage() {
+        override fun toLogMessage() = sourceLogMessage {
+            grantRole = grantRole {
+                this.user = this@GrantRole.user
+                this.role = this@GrantRole.role
+            }
+        }
+    }
+
+    data class RevokeRole(val user: String, val role: String) : ProtobufMessage() {
+        override fun toLogMessage() = sourceLogMessage {
+            revokeRole = revokeRole {
+                this.user = this@RevokeRole.user
+                this.role = this@RevokeRole.role
             }
         }
     }

@@ -195,7 +195,7 @@ class LogProcessorSimTest : SimulationTestBase() {
             TransitionLogProcessor(
                 allocator, bp, dbState, liveIndex,
                 blockUploader,
-                replicaProducer, watchers, null,
+                replicaProducer, watchers, null, null,
                 afterReplicaMsgId,
                 hasExternalSource = true,
             )
@@ -208,7 +208,7 @@ class LogProcessorSimTest : SimulationTestBase() {
             FollowerLogProcessor(
                 termScope, allocator, replicaLog, bp, dbState,
                 mockk<Compactor.ForDatabase>(relaxed = true),
-                watchers, null, pendingBlock,
+                watchers, null, null, pendingBlock,
                 afterReplicaMsgId,
                 hasExternalSource = true,
             )
