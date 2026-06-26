@@ -380,6 +380,21 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
             override fun close() { mode?.close() }
         }
 
+        val txOpen get() = tx != null
+        val txReadOnly get() = tx?.mode is AccessMode.ReadOnly
+
+        // Open an explicit transaction (pgwire BEGIN). [readOnly] fixes the mode up front (BEGIN READ ONLY /
+        // READ WRITE); left null, the first statement resolves it. ADBC/Flight use setAutoCommit instead.
+        fun beginTx(readOnly: Boolean? = null) {
+            if (tx != null) throw Incorrect("transaction already started", "xtdb/tx-already-open")
+            val mode: AccessMode? = when (readOnly) {
+                true -> AccessMode.ReadOnly
+                false -> AccessMode.ReadWrite(DmlBuffer(allocator))
+                else -> null
+            }
+            tx = Transaction(mode)
+        }
+
         private fun commitTx() {
             val tx = tx ?: return
             this.tx = null
@@ -387,8 +402,10 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
             if (!ops.isNullOrEmpty()) ops.useAll { executeTx(it) }
         }
 
-        internal fun executeDml(op: TxOp) {
-            if (autoCommit) {
+        fun executeDml(op: TxOp) {
+            // auto-execute only when there's no open tx: an explicit beginTx (pgwire keeps autoCommit on) buffers
+            // into its tx; ADBC's autoCommit mode never has one open, so it auto-executes as before.
+            if (autoCommit && tx == null) {
                 listOf(op).useAll { ops -> executeTx(ops) }
                 return
             }
@@ -418,6 +435,10 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
             tx?.close()
             tx = null
         }
+
+        // pgwire's rollback: discards the open tx regardless of autoCommit (pgwire keeps autoCommit on and drives
+        // begin/commit/rollback explicitly), unlike the ADBC [rollback] which rejects rollback in autocommit.
+        fun rollbackTx() = discardTx()
 
         override fun rollback() {
             if (autoCommit) throw Incorrect("Cannot rollback when autoCommit is enabled", "xtdb.adbc/rollback-in-autocommit")

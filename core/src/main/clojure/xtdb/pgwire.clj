@@ -573,9 +573,14 @@
                                            (update :snapshot-time #(some-> % (apply-args args)))
                                            (update :user-metadata #(some-> % (apply-args args)))
                                            (->> (into {} (filter (comp some? val))))))
-                                 (assoc :await-token await-token))))))))))
+                                 (assoc :await-token await-token)))))))))
+  ;; mirror the lifecycle onto the connection: it owns the transaction (pgwire's :transaction map still carries
+  ;; the data for now). the swap above already rejected a re-begin onto an open tx.
+  (let [{:keys [^Xtdb$Connection node-conn] {:keys [access-mode]} :transaction} @conn-state]
+    (.beginTx node-conn (case access-mode :read-only true :read-write false nil))))
 
 (defn close-transaction [{:keys [conn-state] :as conn}]
+  (.rollbackTx ^Xtdb$Connection (:node-conn @conn-state))
   (swap! conn-state dissoc :transaction)
   (close-all-portals conn))
 
