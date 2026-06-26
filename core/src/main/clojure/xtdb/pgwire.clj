@@ -53,7 +53,7 @@
            (xtdb.query PreparedQuery QueryOpts SqlParser
                        ParsedStatement ParsedStatement$Visitor ParsedStatement$TxOptions
                        ParsedStatement$Query ParsedStatement$Dml ParsedStatement$ShowVariable
-                       ParsedStatement$CopyIn ParsedStatement$Execute)
+                       ParsedStatement$CopyIn ParsedStatement$Execute ParsedStatement$Begin)
            (xtdb.tx PutDocs PutRel Sql TxOpts)))
 
 ;; references
@@ -556,8 +556,8 @@
 
              (-> st
                  (update :transaction
-                         (fn [{:keys [access-mode]}]
-                           (if access-mode
+                         (fn [transaction]
+                           (if transaction
                              (throw (pgio/err-protocol-violation "transaction already started"))
 
                              (-> {:current-time (.instant clock)
@@ -1455,7 +1455,9 @@
     (doseq [{:keys [^ParsedStatement parsed] :as stmt} (parse-sql query)]
       (when-not (or (boolean (:transaction @conn-state))
                     (instance? ParsedStatement$ShowVariable parsed)
-                    (instance? ParsedStatement$CopyIn parsed))
+                    (instance? ParsedStatement$CopyIn parsed)
+                    ;; an explicit BEGIN starts its own tx — don't wrap it in an implicit one first
+                    (instance? ParsedStatement$Begin parsed))
         (cmd-begin conn {:implicit? true} {}))
 
       (try
