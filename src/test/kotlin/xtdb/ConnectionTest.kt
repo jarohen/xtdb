@@ -3,7 +3,12 @@ package xtdb
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import xtdb.error.Incorrect
+import xtdb.tx.TxOp
 import xtdb.api.TransactionKey
 import xtdb.api.TransactionResult
 import xtdb.api.Xtdb
@@ -100,5 +105,38 @@ class ConnectionTest {
         conn.awaitToken = mapOf("mydb" to listOf(42L)).encodeTxBasisToken()
 
         assertEquals(mapOf("mydb" to listOf(42L)), tokenOf(conn.awaitToken))
+    }
+
+    @Test
+    fun `beginTx opens a transaction and rollbackTx closes it`() {
+        val conn = connection("mydb")
+        assertFalse(conn.txOpen)
+
+        conn.beginTx()
+        assertTrue(conn.txOpen)
+
+        conn.rollbackTx()
+        assertFalse(conn.txOpen)
+    }
+
+    @Test
+    fun `beginTx fixes the access mode up front, else leaves it undecided`() {
+        connection("mydb").also { it.beginTx(readOnly = true) }.let { assertTrue(it.txReadOnly) }
+        connection("mydb").also { it.beginTx(readOnly = false) }.let { assertFalse(it.txReadOnly) }
+        connection("mydb").also { it.beginTx() }.let { assertFalse(it.txReadOnly) }
+    }
+
+    @Test
+    fun `a second beginTx is rejected`() {
+        val conn = connection("mydb")
+        conn.beginTx()
+        assertThrows(Incorrect::class.java) { conn.beginTx() }
+    }
+
+    @Test
+    fun `DML in a read-only transaction is rejected`() {
+        val conn = connection("mydb")
+        conn.beginTx(readOnly = true)
+        assertThrows(Incorrect::class.java) { conn.executeDml(TxOp.Sql("INSERT INTO foo RECORDS {_id: 1}", null)) }
     }
 }
