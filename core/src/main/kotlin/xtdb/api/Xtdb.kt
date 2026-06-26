@@ -382,6 +382,10 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
 
         val txOpen get() = tx != null
         val txReadOnly get() = tx?.mode is AccessMode.ReadOnly
+        val txFailed get() = tx?.failed != null
+
+        // mark the open tx aborted (pgwire's "current transaction is aborted" state); no-op if none is open
+        fun failTx(cause: Throwable) { tx?.let { it.failed = cause } }
 
         // Open an explicit transaction (pgwire BEGIN). [readOnly] fixes the mode up front (BEGIN READ ONLY /
         // READ WRITE); left null, the first statement resolves it. ADBC/Flight use setAutoCommit instead.
