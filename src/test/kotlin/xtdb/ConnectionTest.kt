@@ -139,4 +139,24 @@ class ConnectionTest {
         conn.beginTx(readOnly = true)
         assertThrows(Incorrect::class.java) { conn.executeDml(TxOp.Sql("INSERT INTO foo RECORDS {_id: 1}", null)) }
     }
+
+    @Test
+    fun `failTx marks the open transaction aborted, cleared when it closes`() {
+        val conn = connection("mydb")
+        conn.beginTx()
+        assertFalse(conn.txFailed)
+
+        conn.failTx(RuntimeException("boom"))
+        assertTrue(conn.txFailed)
+
+        conn.rollbackTx()
+        assertFalse(conn.txFailed)
+    }
+
+    @Test
+    fun `failTx with no open transaction is a no-op`() {
+        val conn = connection("mydb")
+        conn.failTx(RuntimeException("boom"))
+        assertFalse(conn.txFailed)
+    }
 }
