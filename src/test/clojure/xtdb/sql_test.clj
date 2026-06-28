@@ -8,9 +8,9 @@
             [xtdb.next.jdbc :as xt-jdbc]
             [xtdb.serde :as serde]
             [xtdb.sql :as sql]
+            [xtdb.sql.static-ops-util :as sou]
             [xtdb.test-util :as tu]
             [xtdb.time :as time]
-            [xtdb.client-tx-ops :as tx-ops]
             [xtdb.types]
             [xtdb.util :as util]
             [xtdb.compactor :as c])
@@ -2351,50 +2351,48 @@ SELECT PERIOD(DATE '2022-12-31', TIMESTAMP '2023-01-02') CONTAINS (DATE '2023-01
 (t/deftest test-sql->static-ops-3484
   (let [opts {:table-info {#xt/table foo #{"bar"}}}]
     (t/testing "non-inserts"
-      (t/is (nil? (sql/sql->static-ops "UPDATE foo SET bar = baz" nil opts)))
-      (t/is (nil? (sql/sql->static-ops "DELETE FROM foo WHERE bar = 1" nil opts)))
-      (t/is (nil? (sql/sql->static-ops "ERASE FROM foo WHERE bar = 1" nil opts))))
+      (t/is (nil? (sou/static-ops "UPDATE foo SET bar = baz" nil opts)))
+      (t/is (nil? (sou/static-ops "DELETE FROM foo WHERE bar = 1" nil opts)))
+      (t/is (nil? (sou/static-ops "ERASE FROM foo WHERE bar = 1" nil opts))))
 
-    (t/is (nil? (sql/sql->static-ops "INSERT INTO baz (bar) SELECT bar FROM foo" nil))
+    (t/is (nil? (sou/static-ops "INSERT INTO baz (bar) SELECT bar FROM foo" nil))
           "excludes insert-from-subquery"))
 
-  (t/is (= [(tx-ops/map->PutDocs {:table-name 'public/foo, :docs [{"_id" 1, "v" 2}]})]
-           (sql/sql->static-ops "INSERT INTO foo (_id, v) VALUES (1, 2)" nil)))
+  (t/is (= [{:put 'public/foo, :docs [{"_id" 1, "v" 2}], :valid-from nil, :valid-to nil}]
+           (sou/static-ops "INSERT INTO foo (_id, v) VALUES (1, 2)" nil)))
 
-  (t/is (nil? (sql/sql->static-ops "INSERT INTO foo (_id, v) VALUES (1, 2 + 3)" nil))
+  (t/is (nil? (sou/static-ops "INSERT INTO foo (_id, v) VALUES (1, 2 + 3)" nil))
         "excludes expressions")
 
-  (t/is (= [(tx-ops/map->PutDocs {:table-name 'public/foo, :docs [{"_id" 1} {"_id" 2}]
-                                  :valid-from #xt/date "2020-08-01"})
-            (tx-ops/map->PutDocs {:table-name 'public/foo, :docs [{"_id" 3}]
-                                  :valid-from #xt/date "2021-01-01"})]
-
-           (sql/sql->static-ops "INSERT INTO foo (_id, _valid_from) VALUES (1, DATE '2020-08-01'), (2, DATE '2020-08-01'), (3, DATE '2021-01-01')" nil))
+  (t/is (= [{:put 'public/foo, :docs [{"_id" 1} {"_id" 2}]
+             :valid-from (sou/->inst "2020-08-01"), :valid-to nil}
+            {:put 'public/foo, :docs [{"_id" 3}]
+             :valid-from (sou/->inst "2021-01-01"), :valid-to nil}]
+           (sou/static-ops "INSERT INTO foo (_id, _valid_from) VALUES (1, DATE '2020-08-01'), (2, DATE '2020-08-01'), (3, DATE '2021-01-01')" nil))
         "groups by valid-from")
 
   (t/testing "with args"
-    (t/is (= [(tx-ops/map->PutDocs {:table-name 'public/foo, :docs [{"_id" 1} {"_id" 3}]
-                                    :valid-from #xt/date "2020-01-01"})
-              (tx-ops/map->PutDocs {:table-name 'public/foo, :docs [{"_id" 2} {"_id" 4}]
-                                    :valid-from #xt/date "2020-01-02"})]
-
-             (sql/sql->static-ops "INSERT INTO foo (_id, _valid_from) VALUES (?, DATE '2020-01-01'), (?, DATE '2020-01-02')"
-                                  [[1 2] [3 4]]))))
+    (t/is (= [{:put 'public/foo, :docs [{"_id" 1} {"_id" 3}]
+               :valid-from (sou/->inst "2020-01-01"), :valid-to nil}
+              {:put 'public/foo, :docs [{"_id" 2} {"_id" 4}]
+               :valid-from (sou/->inst "2020-01-02"), :valid-to nil}]
+             (sou/static-ops "INSERT INTO foo (_id, _valid_from) VALUES (?, DATE '2020-01-01'), (?, DATE '2020-01-02')"
+                             [[1 2] [3 4]]))))
 
   (t/testing "insert records"
-    (t/is (= [(tx-ops/map->PutDocs {:table-name 'public/bar, :docs [{"_id" 0, "value" "hola"} {"_id" 1, "value" "mundo"}],
-                                    :valid-from nil, :valid-to nil})]
-             (sql/sql->static-ops "INSERT INTO bar RECORDS $1"
-                                  [[{"_id" 0, "value" "hola"}]
-                                   [{"_id" 1, "value" "mundo"}]])))))
+    (t/is (= [{:put 'public/bar, :docs [{"_id" 0, "value" "hola"} {"_id" 1, "value" "mundo"}]
+               :valid-from nil, :valid-to nil}]
+             (sou/static-ops "INSERT INTO bar RECORDS $1"
+                             [[{"_id" 0, "value" "hola"}]
+                              [{"_id" 1, "value" "mundo"}]])))))
 
 (t/deftest test-sql->static-ops-decimals-4483
-  (t/is (= [(tx-ops/map->PutDocs {:table-name 'public/foo,
-                                  :docs [{"xt/id" 1, "dec" 1.01M} {"xt/id" 2, "dec" 1.012M}],
-                                  :valid-from nil, :valid-to nil})]
-           (sql/sql->static-ops "INSERT INTO foo RECORDS ?"
-                                [[{:xt/id 1, :dec 1.01M}]
-                                 [{:xt/id 2, :dec 1.012M}]]))))
+  (t/is (= [{:put 'public/foo
+             :docs [{"_id" 1, "dec" 1.01M} {"_id" 2, "dec" 1.012M}]
+             :valid-from nil, :valid-to nil}]
+           (sou/static-ops "INSERT INTO foo RECORDS ?"
+                           [[{:_id 1, :dec 1.01M}]
+                            [{:_id 2, :dec 1.012M}]]))))
 
 (t/deftest show-canned-responses
   (t/is (= [{:transaction-isolation "read committed"}]

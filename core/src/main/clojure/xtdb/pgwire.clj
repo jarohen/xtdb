@@ -598,13 +598,19 @@
                                                            (some-> system-time (time/->instant {:default-tz default-tz}))
                                                            (get parameters "user")
                                                            user-metadata)]
-                                      (util/with-open [tx-ops (->> dml-buf
-                                                                   (mapcat (fn [op]
-                                                                             (or (when (instance? Sql op)
-                                                                                   (let [^Sql op op]
-                                                                                     (seq (sql/sql->static-ops (.getSql op) (.getArgRows op)))))
-                                                                                 [op])))
-                                                                   (util/safe-mapv #(tx-ops/open-tx-op % allocator {:default-tz default-tz})))]
+                                      ;; sql->static-ops now yields eager core TxOps directly; a non-expandable Sql
+                                      ;; (or a COPY PutDocs/PutRel) still needs opening. reduce closes already-opened
+                                      ;; ops if a later one throws (e.g. a missing-id validation), like safe-mapv did.
+                                      (util/with-open [tx-ops (reduce (fn [acc op]
+                                                                        (try
+                                                                          (into acc (or (when (instance? Sql op)
+                                                                                          (let [^Sql op op]
+                                                                                            (sql/sql->static-ops (.getSql op) (.getArgRows op) allocator {:default-tz default-tz})))
+                                                                                        [(tx-ops/open-tx-op op allocator {:default-tz default-tz})]))
+                                                                          (catch Throwable t
+                                                                            (run! util/close (rseq acc))
+                                                                            (throw t))))
+                                                                      [] dml-buf)]
                                         (if async?
                                           (let [^Xtdb$SubmittedTx tx-id (with-auth-check conn
                                                                           (.submitTx node-conn tx-ops tx-opts))

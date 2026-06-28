@@ -11,7 +11,8 @@
             [xtdb.logical-plan :as lp]
             [xtdb.table :as table]
             [xtdb.time :as time]
-            [xtdb.client-tx-ops :as tx-ops]
+            [xtdb.client-tx-ops :as client-tx-ops]
+            [xtdb.tx-ops :as tx-ops]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.xtql :as xtql]
@@ -3498,7 +3499,7 @@
                              #(get % "_valid_to")))
 
              (into [] (map (fn [[[vf vt] rows]]
-                             (tx-ops/->PutDocs table (mapv #(dissoc % "_valid_from" "_valid_to") rows)
+                             (client-tx-ops/->PutDocs table (mapv #(dissoc % "_valid_from" "_valid_to") rows)
                                                vf vt))))))))
 
   (visitInsertFromSubquery [_ _])
@@ -3543,7 +3544,7 @@
              (group-by (fn [[_ vf vt]] [vf vt]))
 
              (into [] (map (fn [[[vf vt] row-triples]]
-                             (tx-ops/->PatchDocs table (mapv first row-triples)
+                             (client-tx-ops/->PatchDocs table (mapv first row-triples)
                                                  vf vt))))))))
 
   (visitPatchRecords [_ ctx]
@@ -3565,24 +3566,30 @@
   (visitCreateTableStatement [_ _]))
 
 (defn sql->static-ops
-  ([sql arg-rows] (sql->static-ops sql arg-rows {}))
+  "Statically expands INSERT/PATCH RECORDS into the eager core `TxOp`s the indexer (and ADBC) consume, opened
+  against [allocator]; nil when the statement isn't statically expandable (UPDATE/DELETE/etc, or a planning
+  error), in which case the caller submits the raw SQL op instead."
+  ([sql arg-rows allocator] (sql->static-ops sql arg-rows allocator {}))
 
-  ([sql arg-rows {:keys [scope] :as opts}]
-   (try
-     ;; this could probably be arg-types, save us converting to field
-     (let [arg-fields (for [arg-idx (range (count (first arg-rows)))]
-                        (-> (for [arg-row arg-rows]
-                              (types/value->vec-type (nth arg-row arg-idx)))
-                            (->> (apply types/merge-types))
-                            types/vec-type->field))
-           
-           {:keys [!errors !warnings] :as env} (-> (->env opts)
-                                                   (assoc :arg-fields arg-fields))
-           tx-ops (-> (antlr/parse-statement sql)
-                      (.accept (->SqlToStaticOpsVisitor env scope arg-rows)))]
-       (when (and (empty? @!errors) (empty? @!warnings))
-         tx-ops))
+  ([sql arg-rows allocator {:keys [scope] :as opts}]
+   (when-let [deferred-ops (try
+                             ;; this could probably be arg-types, save us converting to field
+                             (let [arg-fields (for [arg-idx (range (count (first arg-rows)))]
+                                                (-> (for [arg-row arg-rows]
+                                                      (types/value->vec-type (nth arg-row arg-idx)))
+                                                    (->> (apply types/merge-types))
+                                                    types/vec-type->field))
 
-     ;; eventually we could deal with these on pre-submit
-     (catch IllegalArgumentException _)
-     (catch RuntimeException _))))
+                                   {:keys [!errors !warnings] :as env} (-> (->env opts)
+                                                                           (assoc :arg-fields arg-fields))
+                                   tx-ops (-> (antlr/parse-statement sql)
+                                              (.accept (->SqlToStaticOpsVisitor env scope arg-rows)))]
+                               (when (and (empty? @!errors) (empty? @!warnings))
+                                 (seq tx-ops)))
+
+                             ;; planning errors → not statically expandable; the caller submits the raw SQL op
+                             (catch IllegalArgumentException _)
+                             (catch RuntimeException _))]
+     ;; eager-ise to the core TxOps outside the catch above, so the op validators (e.g. missing `_id`) propagate
+     ;; rather than being swallowed as "not expandable".
+     (util/safe-mapv #(tx-ops/open-tx-op % allocator opts) deferred-ops))))
