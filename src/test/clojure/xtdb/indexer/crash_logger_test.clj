@@ -7,7 +7,7 @@
             [xtdb.test-util :as tu]
             [xtdb.time :as time]
             [xtdb.trie :as trie]
-            [xtdb.tx-ops :as tx-ops]
+            [xtdb.client-tx-ops :as tx-ops]
             [xtdb.util :as util])
   (:import (java.time Instant InstantSource ZoneId)
            (java.util UUID)

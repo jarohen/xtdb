@@ -2,7 +2,7 @@
   (:require [clojure.test :as t]
             [xtdb.sql :as sql]
             [xtdb.time :as time]
-            [xtdb.tx-ops :as tx-ops]))
+            [xtdb.client-tx-ops :as tx-ops]))
 
 (t/deftest test-sql->static-ops-patch-null-valid-time-4448
   (t/is (= [(tx-ops/map->PatchDocs {:table-name 'public/foo, :docs [{"_id" 1}]

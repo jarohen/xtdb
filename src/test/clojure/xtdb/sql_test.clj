@@ -10,7 +10,7 @@
             [xtdb.sql :as sql]
             [xtdb.test-util :as tu]
             [xtdb.time :as time]
-            [xtdb.tx-ops :as tx-ops]
+            [xtdb.client-tx-ops :as tx-ops]
             [xtdb.types]
             [xtdb.util :as util]
             [xtdb.compactor :as c])

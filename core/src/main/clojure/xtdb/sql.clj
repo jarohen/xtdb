@@ -11,7 +11,7 @@
             [xtdb.logical-plan :as lp]
             [xtdb.table :as table]
             [xtdb.time :as time]
-            [xtdb.tx-ops :as tx-ops]
+            [xtdb.client-tx-ops :as tx-ops]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.xtql :as xtql]

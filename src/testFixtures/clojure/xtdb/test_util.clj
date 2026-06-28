@@ -15,6 +15,7 @@
             [xtdb.query :as q]
             [xtdb.serde :as serde]
             [xtdb.time :as time]
+            [xtdb.tx-ops :as tx-ops]
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.writer :as vw])
@@ -340,7 +341,7 @@
 
 (defn serialize-tx-ops ^bytes [^BufferAllocator allocator tx-ops
                                {:keys [^Instant system-time, default-tz user-metadata], {:keys [user]} :authn, :as opts}]
-  (util/with-open [ops (util/safe-mapv #(xt-log/open-tx-op % allocator opts) tx-ops)]
+  (util/with-open [ops (util/safe-mapv #(tx-ops/open-tx-op % allocator opts) tx-ops)]
     (TxWriter/serializeTxOps ops allocator (TxOpts. default-tz (time/->instant system-time) user user-metadata))))
 
 (defn ->open-tx

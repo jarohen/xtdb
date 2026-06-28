@@ -599,7 +599,7 @@
                                                                                    (let [^Sql op op]
                                                                                      (seq (sql/sql->static-ops (.getSql op) (.getArgRows op)))))
                                                                                  [op])))
-                                                                   (util/safe-mapv #(xt-log/open-tx-op % allocator {:default-tz default-tz})))]
+                                                                   (util/safe-mapv #(tx-ops/open-tx-op % allocator {:default-tz default-tz})))]
                                         (if async?
                                           (let [^Xtdb$SubmittedTx tx-id (with-auth-check conn
                                                                           (.submitTx node-conn tx-ops tx-opts))

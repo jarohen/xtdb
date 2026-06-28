@@ -16,7 +16,7 @@
             [xtdb.protocols :as xtp]
             [xtdb.serde :as serde]
             [xtdb.time :as time]
-            [xtdb.tx-ops :as tx-ops])
+            [xtdb.client-tx-ops :as tx-ops])
   (:import (clojure.lang IReduceInit)
            (java.io Writer)
            (java.sql BatchUpdateException Connection)

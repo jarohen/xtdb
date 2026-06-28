@@ -7,7 +7,7 @@
             [xtdb.node :as xtn]
             [xtdb.test-util :as tu]
             [xtdb.time :as time]
-            [xtdb.tx-ops :as tx-ops]
+            [xtdb.client-tx-ops :as tx-ops]
             [xtdb.util :as util])
   (:import [java.time Duration Instant InstantSource]
            xtdb.api.Xtdb$Config

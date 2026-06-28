@@ -1,4 +1,4 @@
-(ns xtdb.tx-ops
+(ns xtdb.client-tx-ops
   (:require [clojure.string :as str]
             [xtdb.error :as err]
             [xtdb.time :as time])
