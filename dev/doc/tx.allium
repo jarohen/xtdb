@@ -467,7 +467,7 @@ rule QueryInReadWriteRejected {
     requires: not connection.tx.failed
 
     ensures:
-        StatementRejected(error_code: `xtdb/query-in-read-write-tx`)
+        StatementRejected(error_code: `xtdb/queries-in-read-write-tx`)
 }
 
 rule DmlInReadOnlyRejected {
