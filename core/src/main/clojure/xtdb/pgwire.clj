@@ -584,9 +584,9 @@
   (swap! conn-state dissoc :transaction)
   (close-all-portals conn))
 
-(defn cmd-commit [{:keys [conn-state ^BufferAllocator allocator, tx-error-counter, tx-latency-timer] :as conn}]
+(defn cmd-commit [{:keys [conn-state, tx-error-counter, tx-latency-timer] :as conn}]
   (let [{:keys [transaction session ^Xtdb$Connection node-conn]} @conn-state
-        {:keys [dml-buf system-time access-mode default-tz async? user-metadata]} transaction
+        {:keys [system-time access-mode default-tz async? user-metadata]} transaction
         {:keys [parameters]} session]
     (if (.getTxFailed node-conn)
       (throw (pgio/err-protocol-violation "transaction failed"))
@@ -598,19 +598,9 @@
                                                            (some-> system-time (time/->instant {:default-tz default-tz}))
                                                            (get parameters "user")
                                                            user-metadata)]
-                                      ;; sql->static-ops now yields eager core TxOps directly; a non-expandable Sql
-                                      ;; (or a COPY PutDocs/PutRel) still needs opening. reduce closes already-opened
-                                      ;; ops if a later one throws (e.g. a missing-id validation), like safe-mapv did.
-                                      (util/with-open [tx-ops (reduce (fn [acc op]
-                                                                        (try
-                                                                          (into acc (or (when (instance? Sql op)
-                                                                                          (let [^Sql op op]
-                                                                                            (sql/sql->static-ops (.getSql op) (.getArgRows op) allocator {:default-tz default-tz})))
-                                                                                        [(tx-ops/open-tx-op op allocator {:default-tz default-tz})]))
-                                                                          (catch Throwable t
-                                                                            (run! util/close (rseq acc))
-                                                                            (throw t))))
-                                                                      [] dml-buf)]
+                                      ;; cmd-exec-dml / COPY already pushed the eager, coalesced ops into the
+                                      ;; connection's DmlBuffer via executeDml; drain and submit them here.
+                                      (util/with-open [tx-ops (vec (.drainDml node-conn))]
                                         (if async?
                                           (let [^Xtdb$SubmittedTx tx-id (with-auth-check conn
                                                                           (.submitTx node-conn tx-ops tx-opts))
@@ -1151,7 +1141,7 @@
   (swap! conn-state update-in [:session :characteristics] (fnil into {}) session-characteristics)
   (pgio/cmd-write-msg conn pgio/msg-command-complete {:command "SET SESSION CHARACTERISTICS"}))
 
-(defn- cmd-exec-dml [{:keys [node conn-state tx-error-counter] :as conn} {:keys [^ParsedStatement$Dml parsed args param-oids]}]
+(defn- cmd-exec-dml [{:keys [node conn-state tx-error-counter ^BufferAllocator allocator] :as conn} {:keys [^ParsedStatement$Dml parsed args param-oids]}]
   (when (.getTxFailed ^Xtdb$Connection (:node-conn @conn-state))
     (throw (pgio/err-protocol-violation "current transaction is aborted, commands ignored until ROLLBACK is received")))
 
@@ -1188,15 +1178,22 @@
     (when-not (:transaction @conn-state)
       (cmd-begin conn {:implicit? true, :access-mode :read-write} {}))
 
-    (swap! conn-state update-in [:transaction :dml-buf]
-           (fnil (fn [dml-ops]
-                   (or (when-let [^Sql last-op (peek dml-ops)]
-                         (when (and (instance? Sql last-op)
-                                    (= (.getSql last-op) query))
-                           (conj (pop dml-ops)
-                                 (Sql. query (conj (or (.getArgRows last-op) []) args)))))
-                       (conj dml-ops (Sql. query [args]))))
-                 []))
+    ;; expand statically per statement (INSERT/PATCH … RECORDS → eager PutDocs/PatchDocs), else open the raw SQL
+    ;; op. Each goes to the connection's DmlBuffer via executeDml, which coalesces same-SQL ops column-major —
+    ;; so repeated parameterised UPDATE/INSERT/DELETE still batch into one op (RECORDS, which rarely repeat, no
+    ;; longer group across statements). executeDml takes ownership of each op; on a mid-batch throw we close the
+    ;; ops we haven't handed over yet.
+    (let [^Xtdb$Connection node-conn (:node-conn @conn-state)
+          opts {:default-tz (get-in @conn-state [:transaction :default-tz])}]
+      (loop [ops (or (sql/sql->static-ops query [args] allocator opts)
+                     [(tx-ops/open-tx-op (Sql. query [args]) allocator opts)])]
+        (when-let [[op & more] (seq ops)]
+          (try
+            (.executeDml node-conn op)
+            (catch Throwable t
+              (run! util/close more)
+              (throw t)))
+          (recur more))))
 
     ;; oid is always 0 (legacy pg); row count is 0 because we're async
     (pgio/cmd-write-msg conn pgio/msg-command-complete
@@ -1521,7 +1518,7 @@
                                             (throw (err/incorrect ::copy-not-in-progress "COPY IN not in progress, cannot write data")))]
     (.write write-ch (ByteBuffer/wrap data))))
 
-(defn- copy-transit-batch ^long [{:keys [conn-state] :as conn} {:keys [format, ^Path copy-file]}]
+(defn- copy-transit-batch ^long [{:keys [conn-state ^BufferAllocator allocator] :as conn} {:keys [format, ^Path copy-file]}]
   (let [started-tx? (when-not (:transaction @conn-state)
                       (cmd-begin conn {:implicit? true, :access-mode :read-write} {})
                       true)]
@@ -1533,12 +1530,11 @@
                                                              :transit-msgpack :msgpack)
                                                            {:handlers serde/transit-read-handler-map}))))]
 
-        (swap! conn-state
-               (fn [{:keys [copy], :as conn-state}]
-                 (-> conn-state
-                     (update-in [:transaction :dml-buf] (fnil conj [])
-                                (PutDocs. (:table-name copy) docs nil nil))
-                     (dissoc :copy))))
+        (let [^Xtdb$Connection node-conn (:node-conn @conn-state)
+              opts {:default-tz (get-in @conn-state [:transaction :default-tz])}]
+          (.executeDml node-conn (tx-ops/open-tx-op (PutDocs. (get-in @conn-state [:copy :table-name]) docs nil nil)
+                                                    allocator opts)))
+        (swap! conn-state dissoc :copy)
 
         (when started-tx?
           (cmd-commit conn))
@@ -1557,11 +1553,9 @@
                                              :arrow-file (Relation/loader allocator copy-file))
                      rel (Relation. allocator (.getSchema ldr))]
       (letfn [(add-batch! []
-                (swap! conn-state
-                       (fn [{:keys [copy], :as conn-state}]
-                         (-> conn-state
-                             (update-in [:transaction :dml-buf] (fnil conj [])
-                                        (PutRel. (:table-name copy) (.getAsArrowStream rel)))))))]
+                (let [^Xtdb$Connection node-conn (:node-conn @conn-state)]
+                  (.executeDml node-conn (tx-ops/open-tx-op (PutRel. (get-in @conn-state [:copy :table-name]) (.getAsArrowStream rel))
+                                                            allocator {:default-tz (get-in @conn-state [:transaction :default-tz])}))))]
 
         (if-let [{:keys [access-mode]} (:transaction @conn-state)]
           (do

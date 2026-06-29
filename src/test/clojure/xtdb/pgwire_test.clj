@@ -32,8 +32,7 @@
            (xtdb JsonSerde JsonLdSerde)
            (xtdb.api DataSource$ConnectionBuilder PasswordHash)
            xtdb.api.log.SourceMessage$FlushBlock
-           xtdb.pgwire.Server
-           xtdb.tx.Sql))
+           xtdb.pgwire.Server))
 
 (set! *warn-on-reflection* false) ; gagh! lazy. don't do this.
 (set! *unchecked-math* false)
@@ -1257,8 +1256,8 @@
   (testing "DML"
     (with-open [conn (jdbc-conn)]
       (q conn ["BEGIN READ WRITE"])
-      (q conn ["INSERT INTO foo (a) values (42)"])
-      (is (thrown-with-msg? PSQLException #"missing '_id'" (q conn ["COMMIT"]))))))
+      ;; static expansion runs per statement, so missing-id validation surfaces at the INSERT, not at COMMIT
+      (is (thrown-with-msg? PSQLException #"missing '_id'" (q conn ["INSERT INTO foo (a) values (42)"]))))))
 
 (when (psql-available?)
   (deftest psql-analyzer-error-test
@@ -1273,11 +1272,8 @@
        (send "BEGIN READ WRITE;\n")
        (read)
 
-       ;; no id
+       ;; no id — static expansion runs per statement, so the error surfaces at the INSERT, not at COMMIT
        (send "INSERT INTO foo (x) values (42);\n")
-       (read)
-
-       (send "COMMIT;\n")
        (let [error (read :stderr)]
          (is (not= :timeout error))
          (is (= "ERROR:  missing '_id'"
@@ -1789,22 +1785,7 @@
       (jdbc/execute! tx ["INSERT INTO foo RECORDS ?" {:xt/id 1, :a "one"}])
       (jdbc/execute! tx ["INSERT INTO foo RECORDS ?" {:xt/id 2, :a "two"}])
       (jdbc/execute! tx ["INSERT INTO foo RECORDS {_id: ?, a: ?}" 3, "three"])
-      (jdbc/execute! tx ["INSERT INTO foo RECORDS ?" {:xt/id 4, :a "four"}])
-
-      ;; HACK - leaning into internal state
-      (let [dml-buf (-> @(:server-state *server*)
-                        (get-in [:connections 1 :conn-state])
-                        deref
-                        (get-in [:transaction :dml-buf]))]
-        (t/is (= ["INSERT INTO foo RECORDS $1"
-                   "INSERT INTO foo RECORDS {_id: $1, a: $2}"
-                   "INSERT INTO foo RECORDS $1"]
-                  (mapv Sql/.getSql dml-buf)))
-        (t/is (= [[[{:_id 1, :a "one"}]
-                   [{:_id 2, :a "two"}]]
-                  [[3 "three"]]
-                  [[{:_id 4, :a "four"}]]]
-                  (mapv Sql/.getArgRows dml-buf)))))
+      (jdbc/execute! tx ["INSERT INTO foo RECORDS ?" {:xt/id 4, :a "four"}]))
 
     (t/is (= [{:xt/id 1, :a "one"}
               {:xt/id 2, :a "two"}

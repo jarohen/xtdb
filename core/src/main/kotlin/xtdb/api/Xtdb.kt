@@ -406,6 +406,11 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
             if (!ops.isNullOrEmpty()) ops.useAll { executeTx(it) }
         }
 
+        // pgwire drives its own submit/execute with its commit-opts (system-time/user-metadata/async), so it
+        // drains the buffered DML here and submits directly rather than going through [commitTx]. Ownership of
+        // the ops passes to the caller; pgwire clears the now-empty tx via [rollbackTx] in its commit path.
+        fun drainDml(): List<TxOp> = (tx?.mode as? AccessMode.ReadWrite)?.buffer?.drain() ?: emptyList()
+
         fun executeDml(op: TxOp) {
             // auto-execute only when there's no open tx: an explicit beginTx (pgwire keeps autoCommit on) buffers
             // into its tx; ADBC's autoCommit mode never has one open, so it auto-executes as before.
