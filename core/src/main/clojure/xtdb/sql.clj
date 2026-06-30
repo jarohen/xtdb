@@ -8,6 +8,7 @@
             [xtdb.api :as xt]
             [xtdb.error :as err]
             [xtdb.information-schema :as info-schema]
+            [xtdb.log :as xt-log]
             [xtdb.logical-plan :as lp]
             [xtdb.table :as table]
             [xtdb.time :as time]
@@ -25,6 +26,8 @@
            (org.antlr.v4.runtime ParserRuleContext)
            (org.apache.arrow.vector.types.pojo Field)
            (org.apache.commons.codec.binary Hex)
+           (xtdb.api.query IKeyFn$KeyFn)
+           (xtdb.arrow RelationReader VectorReader)
            xtdb.query.SqlPlanner
            (xtdb.antlr Sql$DirectlyExecutableStatementContext Sql$GroupByClauseContext Sql$HavingClauseContext Sql$JoinSpecificationContext Sql$JoinTypeContext Sql$ObjectNameAndValueContext Sql$OrderByClauseContext Sql$QualifiedRenameColumnContext Sql$QueryBodyTermContext Sql$QuerySpecificationContext Sql$QueryTailContext Sql$RenameColumnContext Sql$SearchedWhenClauseContext Sql$SelectClauseContext Sql$SetClauseContext Sql$SimpleWhenClauseContext Sql$SortSpecificationContext Sql$SortSpecificationListContext Sql$WhenOperandContext Sql$WhereClauseContext Sql$WithTimeZoneContext SqlLexer SqlVisitor)
            xtdb.table.TableRef
@@ -3418,11 +3421,17 @@
           (throw (err/incorrect :xtdb/missing-arg (str "missing arg: " expr) {}))))
     expr))
 
+(declare rel->static-ops)
+
 (defn ->sql-planner ^SqlPlanner []
   (reify SqlPlanner
     (evalLiteral [_ expr args]
       (-> (plan-expr expr (->env))
-          (apply-args args)))))
+          (apply-args args)))
+
+    (toStaticOps [_ sql args al default-tz]
+      (when-let [client-ops (seq (rel->static-ops sql args))]
+        (util/safe-mapv #(xt-log/open-tx-op % al {:default-tz default-tz}) client-ops)))))
 
 (defprotocol PlanQuery
   (-plan-query [query opts]))
@@ -3611,5 +3620,27 @@
          tx-ops))
 
      ;; eventually we could deal with these on pre-submit
+     (catch IllegalArgumentException _)
+     (catch RuntimeException _))))
+
+(defn rel->static-ops
+  "Column-major counterpart of `sql->static-ops`: reads args from a `RelationReader` (vectors named ?_0..?_n)
+   rather than row-major arg-rows, so the reader's vector fields are the arg-fields directly.
+
+   Args MUST be read with KEBAB_CASE_KEYWORD: SNAKE_CASE_STRING id-normalizes :xt/id->_id and would wrongly
+   accept docs the row-major path rejects (parity gate: pg2_test/test-transit-id-formats)."
+  ([sql args] (rel->static-ops sql args {}))
+
+  ([sql ^RelationReader args {:keys [scope] :as opts}]
+   (try
+     (let [arg-fields (when args (mapv #(.getField ^VectorReader %) (.getVectors args)))
+           {:keys [!errors !warnings] :as env} (-> (->env opts)
+                                                   (assoc :arg-fields (or arg-fields [])))
+           arg-rows (when args (.toTuples args IKeyFn$KeyFn/KEBAB_CASE_KEYWORD))
+           tx-ops (-> (antlr/parse-statement sql)
+                      (.accept (->SqlToStaticOpsVisitor env scope arg-rows)))]
+       (when (and (empty? @!errors) (empty? @!warnings))
+         tx-ops))
+
      (catch IllegalArgumentException _)
      (catch RuntimeException _))))

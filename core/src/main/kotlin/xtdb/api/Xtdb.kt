@@ -47,6 +47,8 @@ import xtdb.table.TableRef
 import xtdb.time.asInstant
 import xtdb.tx.TxOp
 import xtdb.tx.TxOpts
+import xtdb.util.closeAll
+import xtdb.util.closeAllOnCatch
 import xtdb.util.closeOnCatch
 import xtdb.util.requiringResolve
 import xtdb.util.useAll
@@ -593,13 +595,35 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
             val mode = tx.mode as? ReadWrite ?: return
             // defaultTz/user left null: doSubmit fills defaultTz via withFallbackTz, and there's no connection user yet.
             val opts = TxOpts(systemTime = mode.systemTime, userMetadata = mode.userMetadata)
-            mode.buffer.drain().useAll { ops -> if (mode.async) submitTx(ops, opts) else executeTx(ops, opts) }
+            expandStaticOps(mode.buffer.drain()).useAll { ops -> if (mode.async) submitTx(ops, opts) else executeTx(ops, opts) }
         }
+
+        // Eager-expand buffered SQL DML into core TxOps (INSERT/PATCH RECORDS → PutDocs/PatchDocs) the way pgwire
+        // does at commit, rather than submitting a raw Sql op for index-time expansion: it coerces literal ids
+        // (e.g. a UUID _id) and surfaces planner-style errors. A non-expandable statement keeps its raw Sql op,
+        // expanded at index time. Takes ownership of [ops] — closes a Sql op once its expansion supersedes it,
+        // and closes the unconsumed tail if expansion throws (a deliberate throw, e.g. missing _id).
+        private fun expandStaticOps(ops: List<TxOp>): List<TxOp> =
+            mutableListOf<TxOp>().closeAllOnCatch { out ->
+                ops.forEachIndexed { idx, op ->
+                    val expanded = try {
+                        (op as? TxOp.Sql)?.let { sqlPlanner.toStaticOps(it.sql, it.args, allocator, defaultTz) }
+                    } catch (t: Throwable) {
+                        ops.subList(idx, ops.size).closeAll()
+                        throw t
+                    }
+                    if (expanded != null) {
+                        op.close()
+                        out.addAll(expanded)
+                    } else out.add(op)
+                }
+                out
+            }
 
         internal fun executeDml(op: TxOp) {
             // auto-execute only when no explicit tx is open; an open tx (from beginTx) buffers even under autoCommit.
             if (autoCommit && tx == null) {
-                listOf(op).useAll { ops -> executeTx(ops) }
+                expandStaticOps(listOf(op)).useAll { ops -> executeTx(ops) }
                 return
             }
 
