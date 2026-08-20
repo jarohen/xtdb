@@ -84,7 +84,7 @@ class FollowerLogProcessorTest {
     ) =
         FollowerLogProcessor(
             allocator, PartitionLog(replicaLog, 0), bufferPool, partitionState, "test", compactor,
-            watchers, null, null, backgroundScope,
+            watchers, null, backgroundScope,
             hasExternalSource = hasExternalSource,
             meterRegistry = meterRegistry,
             maxBufferedRecords = maxBufferedRecords,

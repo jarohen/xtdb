@@ -43,7 +43,6 @@ class FollowerLogProcessor @JvmOverloads constructor(
     private val compactor: Compactor.ForDatabase,
     private val watchers: Watchers,
     private val dbCatalog: Database.Catalog?,
-    pendingBlock: PendingBlock?,
     scope: CoroutineScope,
     private val hasExternalSource: Boolean,
     private val meterRegistry: MeterRegistry? = null,
@@ -91,9 +90,6 @@ class FollowerLogProcessor @JvmOverloads constructor(
             sample.stop(this)
         }
     }
-
-    var pendingBlock: PendingBlock? = pendingBlock
-        private set
 
     private val blockCatalog = partitionState.blockCatalog
     private val tableCatalog = partitionState.tableCatalog
@@ -204,7 +200,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
             }
 
             is ReplicaMessage.BlockBoundary -> blockBoundaryTimer.timed {
-                pendingBlock = PendingBlock(record.msgId, msg, maxBufferedRecords)
+                partitionState.pendingBlock = PendingBlock(record.msgId, msg, maxBufferedRecords)
                 LOG.debug("[$dbName] block boundary b${msg.blockIndex.asLexHex}: source=${msg.latestProcessedMsgId}, replica=${record.msgId} — waiting for BlockUploaded...")
                 watchers.notifyApplied(replicaMsgId, msg.latestProcessedMsgId)
                 blockBufferStartSample = meterRegistry?.let { Timer.start(it) }
@@ -228,7 +224,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
         val msg = record.message
         LOG.trace { "[$dbName] follower: message ${record.msgId} (${msg::class.simpleName})" }
 
-        pendingBlock?.let { pendingBlock ->
+        partitionState.pendingBlock?.let { pendingBlock ->
             val pendingBlockIdx = pendingBlock.blockIdx
             if (msg is ReplicaMessage.BlockUploaded
                 && msg.blockIndex == pendingBlockIdx
@@ -249,7 +245,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
                     bufferedRecordsSummary?.record(bufferedRecords.size.toDouble())
                     blockBufferTimer?.let { blockBufferStartSample?.stop(it) }
                     blockBufferStartSample = null
-                    this.pendingBlock = null
+                    partitionState.pendingBlock = null
                     bufferedRecords
                 }
 

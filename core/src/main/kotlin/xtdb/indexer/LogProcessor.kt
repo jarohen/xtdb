@@ -100,11 +100,11 @@ class LogProcessor(
             termId = termId,
         )
 
-    private fun openFollower(pendingBlock: PendingBlock? = null): FollowerLogProcessor {
+    private fun openFollower(): FollowerLogProcessor {
         LOG.info {
             buildString {
                 append("[$dbName] starting follower: ")
-                append("pending block: ${pendingBlock != null}, ")
+                append("pending block: ${partitionState.pendingBlock != null}, ")
                 append("src: ${watchers.latestSourceMsgId}, ")
                 append("replica: ${watchers.latestReplicaMsgId}")
             }
@@ -112,7 +112,7 @@ class LogProcessor(
 
         return FollowerLogProcessor(
             allocator, partitionStorage.replicaLog, partitionStorage.bufferPool, partitionState, dbName, compactor, watchers,
-            dbCatalog, pendingBlock, scope,
+            dbCatalog, scope,
             hasExternalSource = hasExternalSource,
             meterRegistry = base.meterRegistry,
         )
@@ -173,13 +173,13 @@ class LogProcessor(
     // (the transport writes it only at its serialization point, after joining us), so no staleness guard
     // is needed. NonCancellable guards only the resource release — the follower's allocator must close
     // cleanly once teardown begins, whatever the cancellation (bounded: the follower's coroutines just
-    // unwind). Watermark/pendingBlock stay readable after close (not allocator-backed).
+    // unwind).
     private suspend fun cutoverToLeader(
         followerProc: FollowerLogProcessor,
         replayTarget: MessageId,
         termId: Long,
     ) {
-        val pendingBlock = followerProc.pendingBlock
+        val pendingBlock = partitionState.pendingBlock
         try {
             LOG.debug("[$dbName] transition: closing follower")
             withContext(NonCancellable) {
@@ -198,6 +198,10 @@ class LogProcessor(
                 }
             }
 
+            // Finished, so the leader starts without a hold. Restored by the catch, because a cutover
+            // that fails re-opens a follower that has to find the block still held.
+            partitionState.pendingBlock = null
+
             LOG.debug("[$dbName] transition: building leader processor")
             val resumeAfterMsgId = watchers.latestSourceMsgId
 
@@ -205,7 +209,8 @@ class LogProcessor(
             // commitLeader installs it at the serialization point.
             state = Prepared(openLeader(replayTarget, termId), resumeAfterMsgId)
         } catch (e: Throwable) {
-            state = Following(openFollower(pendingBlock))
+            partitionState.pendingBlock = pendingBlock
+            state = Following(openFollower())
             throw e
         }
     }
@@ -232,11 +237,9 @@ class LogProcessor(
         }
 
         LOG.info("[$dbName] demote — tearing down leader, re-opening follower")
-        // Cancel first: `pendingBlock` stays readable after the cancel/close — it isn't allocator-backed
-        // — so we free the old term before reading it to seed the follower.
         leaderProc.cancelAndJoin()
         leaderProc.close()
-        state = Following(openFollower(leaderProc.pendingBlock))
+        state = Following(openFollower())
     }
 
     override fun close() = state.proc.close()

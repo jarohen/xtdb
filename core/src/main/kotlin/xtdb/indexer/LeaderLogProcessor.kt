@@ -82,9 +82,6 @@ internal class LeaderLogProcessor(
     private val txResolver =
         TxResolver(allocator, nodeBase, partitionStorage, partitionState, dbName, crashLogger, skipTxs, instantSource)
 
-    var pendingBlock: PendingBlock? = null
-        private set
-
     // Where the consume pump starts tailing: the transition's replay target, which can sit below where
     // the outgoing follower had read. Everything in between is the superseded leader's, written after
     // our own claim and therefore fenced, so re-reading it applies nothing.
@@ -205,11 +202,11 @@ internal class LeaderLogProcessor(
             is ReplicaMessage.TriesAdded -> watchers.notifyApplied(record.msgId, msg.sourceMsgId)
 
             is BlockBoundary -> {
-                pendingBlock = PendingBlock(record.msgId, msg)
+                partitionState.pendingBlock = PendingBlock(record.msgId, msg)
                 // liveIndex now holds exactly this block's txs (by log order); snapshot, upload the files,
                 // append BlockUploaded and roll the index — all inside uploadBlock.
                 driver.uploadBlock(record.msgId, leaderTerm, msg)
-                pendingBlock = null
+                partitionState.pendingBlock = null
 
                 // the block's covered source position, as the follower does
                 watchers.notifyApplied(record.msgId, msg.latestProcessedMsgId)

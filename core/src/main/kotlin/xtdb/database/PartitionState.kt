@@ -7,6 +7,7 @@ import xtdb.catalog.BlockCatalog
 import xtdb.catalog.BlockCatalog.Companion.latestBlock
 import xtdb.catalog.TableCatalog
 import xtdb.indexer.LiveIndex
+import xtdb.indexer.PendingBlock
 import xtdb.indexer.TermFence
 import xtdb.api.TableRef
 import xtdb.trie.TrieCatalog
@@ -29,6 +30,18 @@ class PartitionState(
      * change on this partition. See [TermFence].
      */
     val termFence = TermFence(blockCatalogOrNull?.boundaryTermId ?: LeaderTerm.NONE)
+
+    /**
+     * The block boundary this partition is holding, if any — set when the boundary is read, cleared when
+     * its upload lands.
+     *
+     * Held here rather than by whoever is processing, so that a cutover or a demote part-way through a
+     * block finds the hold already in place instead of being handed it.
+     *
+     * Here because that is the nearest thing to the partition while the roles are separate processors;
+     * it belongs on the processor itself once there is only one of those. See #5917.
+     */
+    var pendingBlock: PendingBlock? = null
 
     override fun close() {
         liveIndexOrNull?.close()
