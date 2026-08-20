@@ -35,6 +35,7 @@ import xtdb.indexer.LeaderDriver
 import xtdb.indexer.LeaderLogProcessor
 import xtdb.indexer.LiveIndex
 import xtdb.indexer.RealLeaderDriver
+import xtdb.indexer.ReplicaFeed
 import xtdb.storage.MemoryStorage
 import xtdb.tx.TxOpts
 import xtdb.util.closeAll
@@ -121,7 +122,8 @@ class ExternalSourceTest {
         val blockUploader = BlockUploader(partitionStorage, partitionState, "xtdb", compactor, null, null, backgroundScope)
         val driver = wrapDriver(
             RealLeaderDriver(
-                partitionStorage, partitionState, blockUploader
+                partitionStorage, partitionState, blockUploader,
+                ReplicaFeed(partitionStorage.replicaLog, watchers.latestReplicaMsgId, backgroundScope).records,
             )
         )
 

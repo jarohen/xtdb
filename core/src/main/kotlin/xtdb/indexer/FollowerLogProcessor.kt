@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.Timer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.launch
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.DatabaseName
@@ -36,7 +37,7 @@ private val LOG = FollowerLogProcessor::class.logger
 
 class FollowerLogProcessor @JvmOverloads constructor(
     allocator: BufferAllocator,
-    replicaLog: PartitionLog<ReplicaMessage>,
+    replicaMsgs: ReceiveChannel<Log.Record<ReplicaMessage>>,
     private val bufferPool: BufferPool,
     private val partitionState: PartitionState,
     private val dbName: DatabaseName,
@@ -47,7 +48,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
     private val hasExternalSource: Boolean,
     private val meterRegistry: MeterRegistry? = null,
     private val maxBufferedRecords: Int = 1024,
-) : LogProcessor.Processor<ReplicaMessage> {
+) : AutoCloseable {
 
     private fun processTimer(msgType: String): Timer? = meterRegistry?.let {
         Timer.builder("xtdb.replica.process.timer")
@@ -147,7 +148,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
                 is ReplicaMessage.TriesDeleted -> false
             }
 
-    private suspend fun processRecord(record: Log.Record<ReplicaMessage>, replicaMsgId: MessageId?) {
+    private suspend fun applyMessage(record: Log.Record<ReplicaMessage>, replicaMsgId: MessageId?) {
         when (val msg = record.message) {
             is ReplicaMessage.ResolvedTx -> resolvedTxTimer.timed {
                 val systemTime = msg.systemTime
@@ -207,7 +208,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
             }
 
             is ReplicaMessage.BlockUploaded -> error(
-                "BlockUploaded should be handled by handleRecord, never reaching processRecord directly. msgId=${record.msgId}, blockIndex=${msg.blockIndex.asLexHex}, latestProcessedMsgId=${msg.latestProcessedMsgId}"
+                "BlockUploaded should be handled by handleRecord, never reaching applyMessage directly. msgId=${record.msgId}, blockIndex=${msg.blockIndex.asLexHex}, latestProcessedMsgId=${msg.latestProcessedMsgId}"
             )
 
             is ReplicaMessage.NoOp -> watchers.notifyApplied(replicaMsgId, msg.srcMsgId)
@@ -261,41 +262,39 @@ class FollowerLogProcessor @JvmOverloads constructor(
             return
         }
 
-        if (msg.stale) watchers.notifyApplied(replicaMsgId) else processRecord(record, replicaMsgId)
+        if (msg.stale) watchers.notifyApplied(replicaMsgId) else applyMessage(record, replicaMsgId)
     }
 
-    override suspend fun processRecords(records: List<Log.Record<ReplicaMessage>>) {
-        for (record in records) {
-            try {
-                val term = record.message.termId
-                if (termFence.admit(term)) handleRecord(record, record.msgId)
-                else {
-                    // Fenced: a higher-term leader has superseded this message's writer. Discard it, but
-                    // still advance the consume position (discard suppresses application, not consumption)
-                    // so a transition catch-up can't hang on a fenced no-op.
-                    LOG.debug {
-                        "[$dbName] follower: discarding fenced record ${record.msgId} " +
-                                "(term ${LeaderTerm.format(term)} < ${LeaderTerm.format(termFence.highest)})"
-                    }
-                    watchers.notifyApplied(record.msgId)
+    suspend fun processRecord(record: Log.Record<ReplicaMessage>) {
+        try {
+            val term = record.message.termId
+            if (termFence.admit(term)) handleRecord(record, record.msgId)
+            else {
+                // Fenced: a higher-term leader has superseded this message's writer. Discard it, but
+                // still advance the consume position (discard suppresses application, not consumption)
+                // so a transition catch-up can't hang on a fenced no-op.
+                LOG.debug {
+                    "[$dbName] follower: discarding fenced record ${record.msgId} " +
+                            "(term ${LeaderTerm.format(term)} < ${LeaderTerm.format(termFence.highest)})"
                 }
-            } catch (e: Throwable) {
-                if (e.isShutdownSignal) throw e
-
-                LOG.error(
-                    e,
-                    "[$dbName] follower: failed to process log record with msgId ${record.msgId} (${record.message::class.simpleName})"
-                )
-                watchers.notifyError(e)
-                throw e
+                watchers.notifyApplied(record.msgId)
             }
+        } catch (e: Throwable) {
+            if (e.isShutdownSignal) throw e
+
+            LOG.error(
+                e,
+                "[$dbName] follower: failed to process log record with msgId ${record.msgId} (${record.message::class.simpleName})"
+            )
+            watchers.notifyError(e)
+            throw e
         }
     }
 
-    // Launched last so every field the tail touches is initialised before the first record.
+    // Launched last so every field the apply path touches is initialised before the first record.
     private val job = scope.launch {
         try {
-            replicaLog.tailAll(watchers.latestReplicaMsgId, this@FollowerLogProcessor)
+            for (record in replicaMsgs) processRecord(record)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {

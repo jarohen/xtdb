@@ -114,14 +114,11 @@ internal class LeaderLogProcessor(
     private class ControlItem(val message: ReplicaMessage) : AppendItem
 
     // Unbounded, on purpose:
-    //  - the persister sends here from the same coroutine that services `replicaMsgs`;
+    //  - the persister sends here from the same coroutine that services `driver.replicaMsgs`;
     //  - a bounded channel could block that send, stalling the apply loop;
     //  - but apply is what drains the queue and makes progress → single-coroutine deadlock.
     // Backpressure comes from the block pause + the resolve-side row gauge, not channel capacity.
     private val awaitingAppend = Channel<AppendItem>(Channel.UNLIMITED)
-
-    // Records the consume pump has tailed back off the replica log, awaiting application.
-    private val replicaMsgs = Channel<Log.Record<ReplicaMessage>>(capacity = 128)
 
     // Serialize each ResolvedTx (the costly Arrow-IPC step, kept off the resolver) and append it, in
     // order, through the driver. Plain (non-transactional) appends: the sole fence on a zombie leader is
@@ -139,19 +136,13 @@ internal class LeaderLogProcessor(
         }
     }
 
-    // Tail our own replica log from where the partition has read to, posting everything back to the apply
-    // loop. The same plain tail the follower uses — a separate consumer from the source-log group
-    // subscription that drives leader election, so this doesn't interfere with it.
-    //
-    // A term that superseded us before we got here sits behind that start position — the outgoing follower
-    // read it, which is how it reached the fence — so the fence is what we ask, rather than expecting to
-    // read the superseding record back ourselves.
-    private suspend fun consumePump() {
+    // A term that superseded us sits *behind* where the feed starts reading — the outgoing follower read
+    // it, which is how it reached the fence — so the fence is what we ask, rather than expecting to read
+    // the superseding record back ourselves.
+    private fun checkNotFenced() {
         val fencedBy = partitionState.termFence.highest
         if (fencedBy > leaderTerm)
             throw LeaderSupersededException("[$dbName] superseded: log fenced by term $fencedBy > our term $leaderTerm")
-
-        driver.tailReplica(watchers.latestReplicaMsgId) { records -> records.forEach { replicaMsgs.send(it) } }
     }
 
     // ---- apply loop (consume-back) ----
@@ -507,14 +498,13 @@ internal class LeaderLogProcessor(
     // initialised before the first record. Runs under `termJob`, so `cancelAndJoin` reaps it.
     init {
         CoroutineScope(scope.coroutineContext + termJob).launch {
-            // Core: the append pump, the consume pump and the persister loop, structured together so any
-            // one failing cancels the others and surfaces the cause.
+            // Core: the append pump and the persister loop, structured together so either failing cancels
+            // the other and surfaces the cause.
             launch {
                 var cause: Throwable? = null
                 try {
                     coroutineScope {
                         launch(CoroutineName("$dbName-append-pump")) { appendPump() }
-                        launch(CoroutineName("$dbName-consume-pump")) { consumePump() }
                         persisterLoop()
                     }
                 } catch (_: CancellationException) {
@@ -570,9 +560,11 @@ internal class LeaderLogProcessor(
     }
 
     private suspend fun persisterLoop() {
+        checkNotFenced()
+
         while (true) {
             val work = selectUnbiased<Work> {
-                replicaMsgs.onReceive { Apply(it) }
+                driver.replicaMsgs.onReceive { Apply(it) }
                 if (!blockInProgress) {
                     if (pausedBatch != null) resumeCh.onReceive { Resume }
                     driver.sourceBatches.onBatch { SourceWork(it) }

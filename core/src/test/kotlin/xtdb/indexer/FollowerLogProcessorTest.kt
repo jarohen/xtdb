@@ -3,7 +3,7 @@ package xtdb.indexer
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import io.mockk.*
-import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.Channel
 import org.apache.arrow.memory.RootAllocator
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import xtdb.api.log.Log
-import xtdb.api.log.PartitionLog
 import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.Watchers
 import xtdb.api.storage.Storage
@@ -45,7 +44,6 @@ class FollowerLogProcessorTest {
     private lateinit var tableCatalog: TableCatalog
     private lateinit var trieCatalog: TrieCatalog
     private lateinit var partitionState: PartitionState
-    private lateinit var replicaLog: Log<ReplicaMessage>
 
     // runTest cancels and joins backgroundScope before tearDown, so the followers are quiescent here
     // and freed before `allocator` closes.
@@ -63,11 +61,6 @@ class FollowerLogProcessorTest {
         partitionState = PartitionState(blockCatalog, tableCatalog, trieCatalog, liveIndex)
         watchers = Watchers(latestTxId = -1, latestSourceMsgId = -1, latestReplicaMsgId = -1)
 
-        // The processor self-launches its replica tail; park it so it idles while the test drives
-        // processRecords directly — a relaxed mock would return immediately and tear the proc down.
-        replicaLog = mockk(relaxed = true)
-        coEvery { replicaLog.tailAll(any(), any(), any()) } coAnswers { awaitCancellation() }
-
         every { bufferPool.epoch } returns 1
     }
 
@@ -83,7 +76,8 @@ class FollowerLogProcessorTest {
         meterRegistry: MeterRegistry? = null,
     ) =
         FollowerLogProcessor(
-            allocator, PartitionLog(replicaLog, 0), bufferPool, partitionState, "test", compactor,
+            // Nothing is ever sent, so the drain job idles while the test drives the apply path directly.
+            allocator, Channel(), bufferPool, partitionState, "test", compactor,
             watchers, null, backgroundScope,
             hasExternalSource = hasExternalSource,
             meterRegistry = meterRegistry,
@@ -92,6 +86,10 @@ class FollowerLogProcessorTest {
 
     private fun <M> record(offset: Long, message: M) =
         Log.Record(0, offset, Instant.now(), message)
+
+    private suspend fun FollowerLogProcessor.processAll(records: List<Log.Record<ReplicaMessage>>) {
+        for (record in records) processRecord(record)
+    }
 
     @Test
     fun `buffer overflow stops ingestion`() = runTest {
@@ -104,7 +102,8 @@ class FollowerLogProcessorTest {
             record(3, ReplicaMessage.ResolvedTx(3, Instant.now(), true, null, emptyMap())),
         )
 
-        assertThrows<Fault> { proc.processRecords(records) }    }
+        assertThrows<Fault> { proc.processAll(records) }
+    }
 
     @Test
     fun `ResolvedTx skips already-applied transactions`() = runTest {
@@ -115,7 +114,7 @@ class FollowerLogProcessorTest {
         val tx42 = ReplicaMessage.ResolvedTx(42, Instant.now(), true, null, emptyMap(), srcMsgId = 42)
         val tx43 = ReplicaMessage.ResolvedTx(43, Instant.now(), true, null, emptyMap(), srcMsgId = 43)
 
-        proc.processRecords(listOf(record(0, tx40), record(1, tx42), record(2, tx43)))
+        proc.processAll(listOf(record(0, tx40), record(1, tx42), record(2, tx43)))
 
         verify(exactly = 0) { liveIndex.commitTx(match { it.txId == tx40.txId }, any()) }
         verify(exactly = 0) { liveIndex.commitTx(match { it.txId == tx42.txId }, any()) }
@@ -130,7 +129,7 @@ class FollowerLogProcessorTest {
         // a lower-term write from a superseded leader — must be fenced out
         val loTerm = ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap(), srcMsgId = 2, termId = LeaderTerm.of(0, 1))
 
-        proc.processRecords(listOf(record(0, hiTerm), record(1, loTerm)))
+        proc.processAll(listOf(record(0, hiTerm), record(1, loTerm)))
 
         verify { liveIndex.commitTx(match { it.txId == 1L }, any()) }
         verify(exactly = 0) { liveIndex.commitTx(match { it.txId == 2L }, any()) }
@@ -148,7 +147,7 @@ class FollowerLogProcessorTest {
         // ...then a not-yet-upgraded (no-term) leader writes — must NOT be fenced (mixed-version window)
         val legacy = ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap(), srcMsgId = 2, termId = LeaderTerm.NONE)
 
-        proc.processRecords(listOf(record(0, newTerm), record(1, legacy)))
+        proc.processAll(listOf(record(0, newTerm), record(1, legacy)))
 
         verify { liveIndex.commitTx(match { it.txId == 1L }, any()) }
         verify { liveIndex.commitTx(match { it.txId == 2L }, any()) }
@@ -164,7 +163,7 @@ class FollowerLogProcessorTest {
         val newLeader = ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap(), srcMsgId = 2, termId = LeaderTerm.of(1, 1))
         val zombie = ReplicaMessage.ResolvedTx(3, Instant.now(), true, null, emptyMap(), srcMsgId = 3, termId = LeaderTerm.of(0, 9))
 
-        proc.processRecords(listOf(record(0, oldLeader), record(1, newLeader), record(2, zombie)))
+        proc.processAll(listOf(record(0, oldLeader), record(1, newLeader), record(2, zombie)))
 
         verify { liveIndex.commitTx(match { it.txId == 1L }, any()) }
         verify { liveIndex.commitTx(match { it.txId == 2L }, any()) }
@@ -189,7 +188,7 @@ class FollowerLogProcessorTest {
     fun `refuses a leader term the replica log has moved past`() = runTest {
         val proc = makeProcessor()
 
-        proc.processRecords(listOf(record(0, ReplicaMessage.NoOp(termId = LeaderTerm.of(0, 9)))))
+        proc.processAll(listOf(record(0, ReplicaMessage.NoOp(termId = LeaderTerm.of(0, 9)))))
 
         // the transition checks its own claim once it's been read back, so the max *is* the claim
         assertDoesNotThrow { proc.checkTermUnfenced(LeaderTerm.of(0, 9)) }
@@ -216,7 +215,7 @@ class FollowerLogProcessorTest {
             record(4, ReplicaMessage.ResolvedTx(1000, Instant.now(), true, null, emptyMap(), srcMsgId = 1000)),
         )
 
-        proc.processRecords(staleRecords)
+        proc.processAll(staleRecords)
 
         verify(exactly = 0) { liveIndex.commitTx(any(), any()) }
         assert(watchers.latestSourceMsgId == 1000L) { "latestSourceMsgId should not have changed" }
@@ -235,7 +234,7 @@ class FollowerLogProcessorTest {
         assertNull(blockCatalog.currentBlockIndex, "no block before processing")
 
         val txId = 100L
-        proc.processRecords(listOf(
+        proc.processAll(listOf(
             record(0, ReplicaMessage.ResolvedTx(txId, Instant.now(), true, null, emptyMap())),
             record(1, ReplicaMessage.BlockBoundary(0, txId)),
             record(2, ReplicaMessage.BlockUploaded(Storage.VERSION, 1, 0, txId, emptyList())),
@@ -252,7 +251,7 @@ class FollowerLogProcessorTest {
 
         val tx1001 = ReplicaMessage.ResolvedTx(1001, Instant.now(), true, null, emptyMap(), srcMsgId = 1001)
 
-        proc.processRecords(listOf(
+        proc.processAll(listOf(
             // stale
             record(0, ReplicaMessage.TriesAdded(1, 1, emptyList(), sourceMsgId = 500)),
             // current
@@ -274,7 +273,7 @@ class FollowerLogProcessorTest {
         every { bufferPool.getByteArray(BlockCatalog.blockFilePath(0)) } returns blockProto
 
         val extTx = ReplicaMessage.ResolvedTx(0, Instant.now(), true, null, emptyMap(), srcMsgId = null)
-        proc.processRecords(listOf(
+        proc.processAll(listOf(
             record(0, extTx),
             record(1, ReplicaMessage.BlockBoundary(0, -1)),
             record(2, ReplicaMessage.BlockUploaded(Storage.VERSION, 1, 0, -1, emptyList())),
@@ -294,7 +293,7 @@ class FollowerLogProcessorTest {
         val src1 = ReplicaMessage.ResolvedTx(1, Instant.now(), true, null, emptyMap(), srcMsgId = 1)
         val ext2 = ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap(), srcMsgId = null)
 
-        proc.processRecords(listOf(record(0, ext0), record(1, src1), record(2, ext2)))
+        proc.processAll(listOf(record(0, ext0), record(1, src1), record(2, ext2)))
 
         verify { liveIndex.commitTx(match { it.txId == ext0.txId }, any()) }
         verify { liveIndex.commitTx(match { it.txId == src1.txId }, any()) }
@@ -311,7 +310,7 @@ class FollowerLogProcessorTest {
         val blockProto = block { blockIndex = 0 }.toByteArray()
         every { bufferPool.getByteArray(BlockCatalog.blockFilePath(0)) } returns blockProto
 
-        proc.processRecords(listOf(
+        proc.processAll(listOf(
             record(0, ReplicaMessage.ResolvedTx(1, Instant.now(), true, null, emptyMap())),
             record(1, ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap())),
             record(2, ReplicaMessage.BlockBoundary(0, 2)),
@@ -345,7 +344,7 @@ class FollowerLogProcessorTest {
         val blockProto = block { blockIndex = 0 }.toByteArray()
         every { bufferPool.getByteArray(BlockCatalog.blockFilePath(0)) } returns blockProto
 
-        proc.processRecords(listOf(
+        proc.processAll(listOf(
             record(0, ReplicaMessage.BlockBoundary(0, 0)),
             // these get buffered while we wait for BlockUploaded
             record(1, ReplicaMessage.ResolvedTx(1, Instant.now(), true, null, emptyMap())),

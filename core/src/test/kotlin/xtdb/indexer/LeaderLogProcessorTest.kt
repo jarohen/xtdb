@@ -101,7 +101,8 @@ class LeaderLogProcessorTest {
         val blockUploader = BlockUploader(partitionStorage, partitionState, "xtdb", compactor, null, null, backgroundScope, uploadDispatcher)
         val driver = wrapDriver(
             RealLeaderDriver(
-                partitionStorage, partitionState, blockUploader
+                partitionStorage, partitionState, blockUploader,
+                ReplicaFeed(partitionStorage.replicaLog, watchers.latestReplicaMsgId, backgroundScope).records,
             )
         )
 
@@ -176,10 +177,11 @@ class LeaderLogProcessorTest {
         val partitionState = PartitionState(blockCatalog, tableCatalog, trieCatalog, liveIndex)
         val partitionStorage = PartitionStorage(DatabaseLogs(sourceLog, replicaLog), bufferPool, null)
         val blockUploader = BlockUploader(partitionStorage, partitionState, "xtdb", compactor, null, null, backgroundScope, StandardTestDispatcher(testScheduler))
-        val driver = RealLeaderDriver(
-            partitionStorage, partitionState, blockUploader
-        )
         val watchers = Watchers(latestTxId = -1, latestSourceMsgId = -1, latestReplicaMsgId = -1)
+        val driver = RealLeaderDriver(
+            partitionStorage, partitionState, blockUploader,
+            ReplicaFeed(partitionStorage.replicaLog, watchers.latestReplicaMsgId, backgroundScope).records,
+        )
 
         val lp = LeaderLogProcessor(
             allocator, nodeBase, partitionStorage, mockk(relaxed = true),
@@ -251,10 +253,11 @@ class LeaderLogProcessorTest {
         val partitionState = PartitionState(blockCatalog, tableCatalog, trieCatalog, liveIndex)
         val partitionStorage = PartitionStorage(DatabaseLogs(sourceLog, replicaLog), bufferPool, null)
         val blockUploader = BlockUploader(partitionStorage, partitionState, "xtdb", compactor, null, null, backgroundScope, StandardTestDispatcher(testScheduler))
-        val driver = RealLeaderDriver(
-            partitionStorage, partitionState, blockUploader
-        )
         val watchers = Watchers(latestTxId = -1, latestSourceMsgId = -1, latestReplicaMsgId = -1)
+        val driver = RealLeaderDriver(
+            partitionStorage, partitionState, blockUploader,
+            ReplicaFeed(partitionStorage.replicaLog, watchers.latestReplicaMsgId, backgroundScope).records,
+        )
 
         val lp = LeaderLogProcessor(
             allocator, nodeBase, partitionStorage, mockk(relaxed = true),
@@ -625,7 +628,8 @@ class LeaderLogProcessorTest {
         val partitionStorage = PartitionStorage(DatabaseLogs(sourceLog, replicaLog), bufferPool, null)
         val blockUploader = BlockUploader(partitionStorage, partitionState, "xtdb", compactor, null, null, backgroundScope, StandardTestDispatcher(testScheduler))
         val driver = RealLeaderDriver(
-            partitionStorage, partitionState, blockUploader
+            partitionStorage, partitionState, blockUploader,
+            ReplicaFeed(partitionStorage.replicaLog, watchers.latestReplicaMsgId, backgroundScope).records,
         )
 
         val lp = LeaderLogProcessor(

@@ -122,7 +122,8 @@ class LeaderDriverSimTest : SimulationTestBase() {
                         BlockUploader(
                             partitionStorage, partitionState, "xtdb", mockk<Compactor.ForDatabase>(relaxed = true),
                             null, null, scope, uploadDispatcher = dispatcher
-                        )
+                        ),
+                        ReplicaFeed(partitionStorage.replicaLog, caughtUpTo, scope).records,
                     )
                 )
             ),

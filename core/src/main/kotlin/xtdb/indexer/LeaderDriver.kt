@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.selects.SelectClause1
 import xtdb.api.TableRef
 import xtdb.api.TransactionKey
@@ -82,13 +83,23 @@ internal interface SourceBatches {
  * in-memory state (`liveIndex.isFull()`, `blockCatalog.currentBlockIndex`). A mock holds real state
  * objects, so those reads stay consistent with what the driver has applied.
  *
- * The replica-log tail ([tailReplica]) is here despite being a read: since #5817 it is how the leader
- * learns its own writes landed, and where the term fence bites, so a sim has to be able to feed it a
- * superseding record that the real in-memory log would never produce on its own.
+ * Both logs the term reads are here as channels rather than as tails it drives: the source batches
+ * arrive from the transport, and the replica records from the partition's reader, which outlives the
+ * term. So a sim substitutes either by handing over a channel it holds the other end of.
  */
 internal interface LeaderDriver : AutoCloseable {
 
     val sourceBatches: SourceBatches
+
+    /**
+     * Records read back off our own replica log, awaiting application — one per element, because the
+     * persister takes them as an arm of a `select` against transaction resolution.
+     *
+     * Read from where the partition has got to, not from the term's start: since #5817 reading our own
+     * writes back is how the leader learns they landed, and a term that superseded us sits *behind* that
+     * position, so it is the fence rather than this channel that reports one.
+     */
+    val replicaMsgs: ReceiveChannel<Log.Record<ReplicaMessage>>
 
     /**
      * Append [msg] to the replica log and await its position.
@@ -98,13 +109,6 @@ internal interface LeaderDriver : AutoCloseable {
      * an append that fails.
      */
     suspend fun appendToReplica(msg: ReplicaMessage): Log.MessageMetadata
-
-    /**
-     * Tail our own replica log from [afterMsgId], handing each batch of records back for application.
-     * Suspends until cancelled — a plain tail, independent of the source-log group subscription that
-     * drives leader election.
-     */
-    suspend fun tailReplica(afterMsgId: MessageId, process: suspend (List<Log.Record<ReplicaMessage>>) -> Unit)
 
     /** Commit a resolved tx's writes into the durable live index. */
     suspend fun applyTx(txKey: TransactionKey, tables: Map<TableRef, RelationReader>)
@@ -127,6 +131,7 @@ internal class RealLeaderDriver(
     partitionStorage: PartitionStorage,
     partitionState: PartitionState,
     private val blockUploader: BlockUploader,
+    override val replicaMsgs: ReceiveChannel<Log.Record<ReplicaMessage>>,
 ) : LeaderDriver {
 
     private val sourceLog = partitionStorage.sourceLog
@@ -157,10 +162,6 @@ internal class RealLeaderDriver(
 
     override suspend fun appendToReplica(msg: ReplicaMessage): Log.MessageMetadata =
         replicaLog.appendMessage(msg)
-
-    override suspend fun tailReplica(
-        afterMsgId: MessageId, process: suspend (List<Log.Record<ReplicaMessage>>) -> Unit,
-    ) = replicaLog.tailAll(afterMsgId) { records -> process(records) }
 
     override suspend fun applyTx(txKey: TransactionKey, tables: Map<TableRef, RelationReader>) =
         liveIndex.commitTx(txKey, tables)

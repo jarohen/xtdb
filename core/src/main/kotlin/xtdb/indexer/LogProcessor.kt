@@ -64,21 +64,35 @@ class LogProcessor(
     // `state`, and the transport commits a leader only for the transition instance it still holds — so the
     // *committed* role change still happens only at the serialization point.
     //
-    // The leader and the follower process different message types, so the only thing a state can offer
-    // without narrowing to its variant is the teardown.
+    // The leader and the follower apply different message types, so the only thing every state can offer
+    // is the teardown — of the applier, and of the feed reading for it.
     private sealed interface State {
+        val feed: ReplicaFeed
         val proc: AutoCloseable
     }
 
-    private class Following(override val proc: FollowerLogProcessor) : State
-    private class Prepared(override val proc: LeaderLogProcessor, val resumeAfterMsgId: MessageId) : State
-    private class Leading(override val proc: LeaderLogProcessor) : State
+    // The two states holding a built leader: they differ only in whether its records are flowing yet, so
+    // a demote tears either down the same way.
+    private sealed interface LeaderState : State {
+        override val proc: LeaderLogProcessor
+    }
 
-    private fun openLeader(termId: Long): LeaderLogProcessor =
+    private class Following(override val feed: ReplicaFeed, override val proc: FollowerLogProcessor) : State
+
+    private class Prepared(
+        override val feed: ReplicaFeed, override val proc: LeaderLogProcessor, val resumeAfterMsgId: MessageId,
+    ) : LeaderState
+
+    private class Leading(override val feed: ReplicaFeed, override val proc: LeaderLogProcessor) : LeaderState
+
+    // Where the next role picks the replica log up: the applied position, which outlives every role.
+    private fun openFeed() = ReplicaFeed(replicaLog, watchers.latestReplicaMsgId, scope)
+
+    private fun openLeader(feed: ReplicaFeed, termId: Long): LeaderLogProcessor =
         // The leader term owns (and frees) its driver and its ext source.
         LeaderLogProcessor(
             allocator, base, partitionStorage, crashLogger, partitionState, dbName,
-            RealLeaderDriver(partitionStorage, partitionState, blockUploader),
+            RealLeaderDriver(partitionStorage, partitionState, blockUploader, feed.records),
             watchers,
             externalSourceFactory?.open(dbName, base.remotes, base.meterRegistry),
             skipTxs, dbCatalog,
@@ -96,7 +110,7 @@ class LogProcessor(
             termId = termId,
         )
 
-    private fun openFollower(): FollowerLogProcessor {
+    private fun openFollowing(): Following {
         LOG.info {
             buildString {
                 append("[$dbName] starting follower: ")
@@ -106,16 +120,21 @@ class LogProcessor(
             }
         }
 
-        return FollowerLogProcessor(
-            allocator, partitionStorage.replicaLog, partitionStorage.bufferPool, partitionState, dbName, compactor, watchers,
-            dbCatalog, scope,
-            hasExternalSource = hasExternalSource,
-            meterRegistry = base.meterRegistry,
+        val feed = openFeed()
+
+        return Following(
+            feed,
+            FollowerLogProcessor(
+                allocator, feed.records, partitionStorage.bufferPool, partitionState, dbName, compactor, watchers,
+                dbCatalog, scope,
+                hasExternalSource = hasExternalSource,
+                meterRegistry = base.meterRegistry,
+            )
         )
     }
 
     @Volatile
-    private var state: State = Following(openFollower())
+    private var state: State = openFollowing()
 
     init {
         base.meterRegistry?.let { reg ->
@@ -129,16 +148,16 @@ class LogProcessor(
     override fun launchTransition(partition: Int, termId: Long): Deferred<Unit> {
         // Transport contract: transition only from Following (see SubscriptionListener). A raw cast
         // would surface an out-of-order call as a cryptic ClassCastException; name it instead.
-        val followerProc = (state as? Following)?.proc
+        val following = (state as? Following)
             ?: throw Fault("[$dbName] launchTransition while not following (${state::class.simpleName})", "xtdb/log-prepare-not-following")
 
         // Launched on the database scope (not the caller's): the transition is a child of the db job
         // tree, so the transport joins/cancels this handle while db teardown cancels-and-joins it
         // before close(). See dev/doc/coroutines.adoc and allium/log-processor-lifecycle.allium.
-        return scope.async { runTransition(followerProc, termId) }
+        return scope.async { runTransition(following, termId) }
     }
 
-    private suspend fun runTransition(followerProc: FollowerLogProcessor, termId: Long) {
+    private suspend fun runTransition(following: Following, termId: Long) {
         try {
             // Append a NoOp stamped with the new term as the replay target: the follower catches up to it
             // before we cut over. A plain append now — the term on read-back is the fence, replacing the
@@ -149,8 +168,8 @@ class LogProcessor(
             LOG.debug("[$dbName] transition: replica caught up to $replayTarget")
             // Our own claim is now read back, so the follower's max term is the log's — anything above
             // it fences us, and leading would index nothing. Refuse loudly instead (#5817).
-            followerProc.checkTermUnfenced(termId)
-            cutoverToLeader(followerProc, termId)
+            following.proc.checkTermUnfenced(termId)
+            cutoverToLeader(following, termId)
         } catch (e: Throwable) {
             // Cutover already restored a live `state` if it had to; here we only report.
             if (!e.isShutdownSignal) {
@@ -170,13 +189,14 @@ class LogProcessor(
     // is needed. NonCancellable guards only the resource release — the follower's allocator must close
     // cleanly once teardown begins, whatever the cancellation (bounded: the follower's coroutines just
     // unwind).
-    private suspend fun cutoverToLeader(followerProc: FollowerLogProcessor, termId: Long) {
+    private suspend fun cutoverToLeader(following: Following, termId: Long) {
         val pendingBlock = partitionState.pendingBlock
         try {
             LOG.debug("[$dbName] transition: closing follower")
             withContext(NonCancellable) {
-                followerProc.cancelAndJoin()
-                followerProc.close()
+                following.feed.cancelAndJoin()
+                following.proc.cancelAndJoin()
+                following.proc.close()
             }
 
             openTransition(termId).use { transition ->
@@ -199,10 +219,11 @@ class LogProcessor(
 
             // Built, not committed: `state` moves to Prepared but no records flow as leader until
             // commitLeader installs it at the serialization point.
-            state = Prepared(openLeader(termId), resumeAfterMsgId)
+            val feed = openFeed()
+            state = Prepared(feed, openLeader(feed, termId), resumeAfterMsgId)
         } catch (e: Throwable) {
             partitionState.pendingBlock = pendingBlock
-            state = Following(openFollower())
+            state = openFollowing()
             throw e
         }
     }
@@ -210,7 +231,7 @@ class LogProcessor(
     override fun commitLeader(partition: Int): Log.TailSpec<SourceMessage> {
         val prepared = (state as? Prepared)
             ?: throw Fault("[$dbName] commitLeader without a prepared leader (${state::class.simpleName})", "xtdb/log-commit-not-prepared")
-        state = Leading(prepared.proc)
+        state = Leading(prepared.feed, prepared.proc)
         LOG.info("[$dbName] leader startup complete, resuming after ${prepared.resumeAfterMsgId}")
         return Log.TailSpec(prepared.resumeAfterMsgId, prepared.proc)
     }
@@ -218,20 +239,20 @@ class LogProcessor(
     override suspend fun demoteLeader(partition: Int) {
         // Genuine revoke (Leading) and abandoning an uncommitted leader (Prepared) tear down the
         // same way; an already-following listener is a no-op.
-        val leaderProc = when (val s = state) {
+        val leading = when (val s = state) {
             is Following -> {
                 LOG.debug("[$dbName] demote — already follower, no transition needed")
                 return
             }
 
-            is Prepared -> s.proc
-            is Leading -> s.proc
+            is LeaderState -> s
         }
 
         LOG.info("[$dbName] demote — tearing down leader, re-opening follower")
-        leaderProc.cancelAndJoin()
-        leaderProc.close()
-        state = Following(openFollower())
+        leading.feed.cancelAndJoin()
+        leading.proc.cancelAndJoin()
+        leading.proc.close()
+        state = openFollowing()
     }
 
     override fun close() = state.proc.close()
