@@ -51,7 +51,6 @@ internal class LeaderLogProcessor(
     private val extSource: ExternalSource?,
     skipTxs: Set<MessageId>,
     private val dbCatalog: Database.Catalog?,
-    afterReplicaMsgId: MessageId,
     private val leaderTerm: Long = 0,
     instantSource: InstantSource = InstantSource.system(),
     flushTimeout: Duration,
@@ -81,11 +80,6 @@ internal class LeaderLogProcessor(
     // joined; see TxResolver.
     private val txResolver =
         TxResolver(allocator, nodeBase, partitionStorage, partitionState, dbName, crashLogger, skipTxs, instantSource)
-
-    // Where the consume pump starts tailing: the transition's replay target, which can sit below where
-    // the outgoing follower had read. Everything in between is the superseded leader's, written after
-    // our own claim and therefore fenced, so re-reading it applies nothing.
-    private val replayFrom: MessageId = afterReplicaMsgId
 
     private val blockFlusher = BlockFlusher(flushTimeout, blockCatalog)
 
@@ -145,18 +139,26 @@ internal class LeaderLogProcessor(
         }
     }
 
-    // Tail our own replica log from the replay target and post everything back to the apply loop. The
-    // same plain tail the follower uses — a separate consumer from the source-log group subscription that
-    // drives leader election, so this doesn't interfere with it.
+    // Tail our own replica log from where the partition has read to, posting everything back to the apply
+    // loop. The same plain tail the follower uses — a separate consumer from the source-log group
+    // subscription that drives leader election, so this doesn't interfere with it.
+    //
+    // A term that superseded us before we got here sits behind that start position — the outgoing follower
+    // read it, which is how it reached the fence — so the fence is what we ask, rather than expecting to
+    // read the superseding record back ourselves.
     private suspend fun consumePump() {
-        driver.tailReplica(replayFrom) { records -> records.forEach { replicaMsgs.send(it) } }
+        val fencedBy = partitionState.termFence.highest
+        if (fencedBy > leaderTerm)
+            throw LeaderSupersededException("[$dbName] superseded: log fenced by term $fencedBy > our term $leaderTerm")
+
+        driver.tailReplica(watchers.latestReplicaMsgId) { records -> records.forEach { replicaMsgs.send(it) } }
     }
 
     // ---- apply loop (consume-back) ----
 
     // Apply one record read back off our own replica log. By term:
     //  - term > ours: a newer leader has superseded us → resign (fail the term).
-    //  - term < ours: shouldn't appear past our replay target; discard defensively, still advancing.
+    //  - term < ours: a superseded leader still appending ahead of us; discard, still advancing.
     //  - term == ours (the common case; terms are unique per leader, so an equal-term record IS our own):
     //      - ResolvedTx  → import from the resolver's head (we still hold its relations — no re-materialisation).
     //      - BlockBoundary → trigger the block upload (liveIndex now holds exactly this block's txs).

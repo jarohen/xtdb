@@ -110,7 +110,6 @@ class LeaderLogProcessorTest {
             partitionState, "test", driver, watchers,
             extSource = null,
             skipTxs = skipTxs, dbCatalog = null,
-            afterReplicaMsgId = -1,
             leaderTerm = leaderTerm,
             flushTimeout = IndexerConfig().flushDuration,
             scope = backgroundScope,
@@ -187,7 +186,6 @@ class LeaderLogProcessorTest {
             partitionState, "test", driver, watchers,
             extSource = null,
             skipTxs = emptySet(), dbCatalog = null,
-            afterReplicaMsgId = -1,
             flushTimeout = IndexerConfig().flushDuration,
             scope = backgroundScope,
         ).also(leadersToClose::add)
@@ -263,7 +261,6 @@ class LeaderLogProcessorTest {
             partitionState, "test", driver, watchers,
             extSource = null,
             skipTxs = emptySet(), dbCatalog = null,
-            afterReplicaMsgId = -1,
             flushTimeout = IndexerConfig().flushDuration,
             scope = backgroundScope,
         ).also(leadersToClose::add)
@@ -636,7 +633,6 @@ class LeaderLogProcessorTest {
             partitionState, "test", driver, watchers,
             extSource = null,
             skipTxs = setOf(10), dbCatalog = null,
-            afterReplicaMsgId = -1,
             flushTimeout = IndexerConfig().flushDuration,
             scope = backgroundScope,
         ).also(leadersToClose::add)

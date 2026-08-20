@@ -74,10 +74,7 @@ class LogProcessor(
     private class Prepared(override val proc: LeaderLogProcessor, val resumeAfterMsgId: MessageId) : State
     private class Leading(override val proc: LeaderLogProcessor) : State
 
-    private fun openLeader(
-        afterReplicaMsgId: MessageId,
-        termId: Long,
-    ): LeaderLogProcessor =
+    private fun openLeader(termId: Long): LeaderLogProcessor =
         // The leader term owns (and frees) its driver and its ext source.
         LeaderLogProcessor(
             allocator, base, partitionStorage, crashLogger, partitionState, dbName,
@@ -85,7 +82,6 @@ class LogProcessor(
             watchers,
             externalSourceFactory?.open(dbName, base.remotes, base.meterRegistry),
             skipTxs, dbCatalog,
-            afterReplicaMsgId,
             leaderTerm = termId,
             flushTimeout = flushTimeout,
             scope = scope,
@@ -145,8 +141,8 @@ class LogProcessor(
     private suspend fun runTransition(followerProc: FollowerLogProcessor, termId: Long) {
         try {
             // Append a NoOp stamped with the new term as the replay target: the follower catches up to it
-            // before we cut over, and the leader's consume pump tails from it. A plain append now — the
-            // term on read-back is the fence, replacing the transactional producer (#5817).
+            // before we cut over. A plain append now — the term on read-back is the fence, replacing the
+            // transactional producer (#5817).
             val replayTarget = replicaLog.appendMessage(ReplicaMessage.NoOp(termId = termId)).msgId
             LOG.debug("[$dbName] transition: awaiting replica catch-up to $replayTarget")
             watchers.awaitReplicaMsg(replayTarget)
@@ -154,7 +150,7 @@ class LogProcessor(
             // Our own claim is now read back, so the follower's max term is the log's — anything above
             // it fences us, and leading would index nothing. Refuse loudly instead (#5817).
             followerProc.checkTermUnfenced(termId)
-            cutoverToLeader(followerProc, replayTarget, termId)
+            cutoverToLeader(followerProc, termId)
         } catch (e: Throwable) {
             // Cutover already restored a live `state` if it had to; here we only report.
             if (!e.isShutdownSignal) {
@@ -174,11 +170,7 @@ class LogProcessor(
     // is needed. NonCancellable guards only the resource release — the follower's allocator must close
     // cleanly once teardown begins, whatever the cancellation (bounded: the follower's coroutines just
     // unwind).
-    private suspend fun cutoverToLeader(
-        followerProc: FollowerLogProcessor,
-        replayTarget: MessageId,
-        termId: Long,
-    ) {
+    private suspend fun cutoverToLeader(followerProc: FollowerLogProcessor, termId: Long) {
         val pendingBlock = partitionState.pendingBlock
         try {
             LOG.debug("[$dbName] transition: closing follower")
@@ -207,7 +199,7 @@ class LogProcessor(
 
             // Built, not committed: `state` moves to Prepared but no records flow as leader until
             // commitLeader installs it at the serialization point.
-            state = Prepared(openLeader(replayTarget, termId), resumeAfterMsgId)
+            state = Prepared(openLeader(termId), resumeAfterMsgId)
         } catch (e: Throwable) {
             partitionState.pendingBlock = pendingBlock
             state = Following(openFollower())

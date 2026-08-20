@@ -92,7 +92,7 @@ class LeaderDriverSimTest : SimulationTestBase() {
      */
     private inner class SimLeader(
         name: String, rowsPerBlock: Long, scope: CoroutineScope,
-        val termId: Long, afterReplicaMsgId: MessageId,
+        val termId: Long, caughtUpTo: MessageId,
         wrapDriver: (LeaderDriver) -> LeaderDriver = { it },
     ) : AutoCloseable {
 
@@ -108,7 +108,9 @@ class LeaderDriverSimTest : SimulationTestBase() {
 
         val partitionState = PartitionState(blockCatalog, tableCatalog, trieCatalog, liveIndex)
         val partitionStorage = PartitionStorage(DatabaseLogs(sourceLog, replicaLog), bufferPool, null)
-        val watchers = Watchers(latestTxId = -1, latestSourceMsgId = -1, latestReplicaMsgId = -1)
+        // Seeded where a real transition leaves it: the outgoing follower has read up to this leader's own
+        // claim, and that is where the leader picks the log up.
+        val watchers = Watchers(latestTxId = -1, latestSourceMsgId = -1, latestReplicaMsgId = caughtUpTo)
 
         val proc = LeaderLogProcessor(
             allocator, nodeBase, partitionStorage, CrashLogger(allocator, bufferPool, "sim-$name"),
@@ -125,7 +127,6 @@ class LeaderDriverSimTest : SimulationTestBase() {
                 )
             ),
             watchers, extSource = null, skipTxs = emptySet(), dbCatalog = null,
-            afterReplicaMsgId = afterReplicaMsgId,
             // Never left at the default: two leaders sharing term 0 would each read the other's records
             // back as its own, and the term is exactly what tells them apart.
             leaderTerm = termId,

@@ -131,7 +131,6 @@ class ExternalSourceTest {
             allocator, nodeBase, partitionStorage, crashLogger,
             partitionState, "test", driver, watchers, extSource,
             skipTxs = emptySet(), dbCatalog = null,
-            afterReplicaMsgId = -1,
             flushTimeout = IndexerConfig().flushDuration,
             scope = backgroundScope
         ).also(leadersToClose::add)

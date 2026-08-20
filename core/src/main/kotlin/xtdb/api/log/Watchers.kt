@@ -78,12 +78,9 @@ class Watchers(
      * observes a transaction committed at a consume position that has not reached the record carrying it.
      *
      * [replicaMsgId] is null where the caller has no consume position of its own: a record held during a
-     * block and replayed once the block lands, whose position was counted when it was first read, or a
-     * term replaying what the outgoing follower had already read.
-     *
-     * The position is unchecked where the source watermark is checked: it regresses when a term opens at
-     * its replay target, below where the outgoing follower had read. The records in between are the
-     * superseded leader's, fenced by our own claim sitting before them, so re-reading applies nothing.
+     * block and replayed once the block lands, whose position was counted when it was first read. Every
+     * other caller notifies at its record's own position, and a partition has one replica reader at a time,
+     * each picking the log up where the last left it — so the position only ever advances.
      */
     fun notifyApplied(
         replicaMsgId: MessageId?,
@@ -99,6 +96,9 @@ class Watchers(
             // when the block was triggered by isFull() (no FlushBlock in between)
             if (srcMsgId != null) check(srcMsgId >= it.latestSourceMsgId) {
                 "srcMsgId $srcMsgId < latestSourceMsgId ${it.latestSourceMsgId}"
+            }
+            if (replicaMsgId != null) check(replicaMsgId > it.latestReplicaMsgId) {
+                "replicaMsgId $replicaMsgId <= latestReplicaMsgId ${it.latestReplicaMsgId}"
             }
 
             it.copy(
