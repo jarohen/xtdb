@@ -1,7 +1,7 @@
 hash-threshold 100
 
 # test demonstrates that pushing predicates into the right hand side of an outer join
-(in this case single) changes query semantics and is therefore invalid.
+# (in this case single) changes query semantics and is therefore invalid.
 
 statement ok
 INSERT INTO t1(_id, col1, col2) VALUES(1,'fish',1000)
