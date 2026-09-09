@@ -127,10 +127,11 @@ It also covers the state each object owns — what counts as one value, whether 
 
 ## Running tests
 
-Before you run a test, or delegate a test run to a sub-agent, you MUST invoke the `xtdb-testing` skill.
+Before you run a test, you MUST invoke the `xtdb-testing` skill.
 
-It is the single home for every XTDB-specific testing rule and mechanism — delegation to the `gradle-tests` agent, the mid-run edit freeze, test tasks and filters, iteration counts, the simulation tests that `./gradlew test` cannot reach, diagnosing a failure, and regenerating arrow-edn golden fixtures.
-Do not reconstruct any of it from memory: the `gradle-tests` agent is generic (from the `xtdb/claude-plugins` marketplace) and carries none of this knowledge itself, so it is yours to pass on.
+It is the single home for every XTDB-specific testing rule and mechanism — running the task yourself through `dev/test-run.sh`, reconciling it with `dev/test-summary.sh`, delegating the failure text to the `gradle-test-results` agent, the mid-run edit freeze, test tasks and filters, iteration counts, the simulation tests that `./gradlew test` cannot reach, diagnosing a failure, and regenerating arrow-edn golden fixtures.
+Do not reconstruct any of it from memory.
+You run the test task; a sub-agent only relays what failed, so that Gradle's output never reaches your context and nothing that could edit the tree is holding the results.
 
 ## Rebasing and merging
 
