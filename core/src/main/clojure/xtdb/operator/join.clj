@@ -10,7 +10,7 @@
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr])
-  (:import (java.util ArrayList Iterator List Set SortedSet TreeSet)
+  (:import (java.util ArrayList Iterator List SortedSet TreeSet)
            (org.apache.arrow.memory BufferAllocator)
            (org.roaringbitmap.buffer MutableRoaringBitmap)
            (xtdb Bytes)
@@ -169,20 +169,14 @@
                        (.append build-side build-rel)))
   (.end build-side))
 
-(defn- build-pushdowns [^BuildSide build-side, pushdown-blooms, pushdown-iids]
+(defn- build-pushdowns [^BuildSide build-side, pushdown-blooms]
   (when pushdown-blooms
     (let [build-rel (.getDataRel build-side)
           build-key-col-names (vec (.getKeyColNames build-side))]
       (dotimes [col-idx (count build-key-col-names)]
-        (let [build-col-name (nth build-key-col-names col-idx)
-              build-col (.vectorForOrNull build-rel (str build-col-name))
-              ^MutableRoaringBitmap pushdown-bloom (nth pushdown-blooms col-idx)
-              ^SortedSet col-pushdown-iids (nth pushdown-iids col-idx)
-              iid-col? (= "_iid" (name build-col-name))]
+        (let [build-col (.vectorForOrNull build-rel (str (nth build-key-col-names col-idx)))
+              ^MutableRoaringBitmap pushdown-bloom (nth pushdown-blooms col-idx)]
           (dotimes [build-idx (.getRowCount build-rel)]
-            (when (and col-pushdown-iids (not (.isNull build-col build-idx)))
-              (let [v (.getObject build-col build-idx)]
-                (.add col-pushdown-iids (if iid-col? v (util/->iid v)))))
             (.add pushdown-bloom ^ints (BloomUtils/bloomHashes build-col build-idx))))))))
 
 (defn- ->child-cursors [build-plan-side build-cursor probe-cursors]
@@ -190,11 +184,26 @@
     (into [build-cursor] probe-cursors)
     (conj (vec probe-cursors) build-cursor)))
 
+(defn- ->iid-pushdown ^SortedSet [^BuildSide build-side, build-col-name, probe-col-name]
+  (when (#{"_id" "_iid"} (name probe-col-name))
+    (let [build-rel (.getDataRel build-side)
+          build-col (.vectorForOrNull build-rel (str build-col-name))
+          iid-col? (= "_iid" (name build-col-name))
+          row-count (.getRowCount build-rel)
+          iids (TreeSet. Bytes/COMPARATOR)]
+      (loop [build-idx 0]
+        (cond
+          (= build-idx row-count) iids
+          (.isNull build-col build-idx) (recur (inc build-idx))
+          :else (let [v (.getObject build-col build-idx)]
+                  (.add iids (if iid-col? v (util/->iid v)))
+                  (recur (inc build-idx))))))))
+
 (deftype JoinCursor [^BufferAllocator allocator,
                      ^BuildSide build-side, ^ICursor build-cursor, build-plan-side
                      probe-vec-types probe-key-cols ->probe-cursor
                      ^:unsynchronized-mutable ^ICursor hash-join-cursor
-                     pushdown-blooms, ^Set pushdown-iids
+                     pushdown-blooms
                      ^ComparatorFactory cmp-factory, ^JoinType join-type]
   ICursor
   (getCursorType [_] (.getJoinTypeName join-type))
@@ -207,12 +216,14 @@
       (build-phase build-side build-cursor)
       (let [shuffle? (boolean (.getShuffle build-side))]
         (when-not shuffle?
-          (build-pushdowns build-side pushdown-blooms pushdown-iids))
+          (build-pushdowns build-side pushdown-blooms))
 
         (util/with-close-on-catch [probe-cursor (->probe-cursor (when (and (not shuffle?) pushdown-blooms)
                                                                   (zipmap (map symbol probe-key-cols) pushdown-blooms))
-                                                                (when (and (not shuffle?) pushdown-iids)
-                                                                  (zipmap (map symbol probe-key-cols) pushdown-iids)))]
+                                                                (when (and (not shuffle?) pushdown-blooms)
+                                                                  (zipmap (map symbol probe-key-cols)
+                                                                          (map (partial ->iid-pushdown build-side)
+                                                                               (.getKeyColNames build-side) probe-key-cols))))]
           (set! (.hash-join-cursor this)
                 (let [probe-vec-types (update-keys probe-vec-types str)]
                   (if shuffle?
@@ -247,7 +258,7 @@
   (tryAdvance [this c]
     (when-not probe-cursor
       (build-phase build-side build-cursor)
-      (build-pushdowns build-side pushdown-blooms nil)
+      (build-pushdowns build-side pushdown-blooms)
 
       (set! (.probe-cursor this)
             (->probe-cursor (zipmap (map symbol (.getKeyColNames build-side))
@@ -410,10 +421,6 @@
                                                our-pushdown-iids (update :pushdown-iids (fnil into {}) our-pushdown-iids))))]
                      (let [pushdown-blooms (when pushdown-blooms?
                                              (vec (repeatedly (count build-key-col-names) #(MutableRoaringBitmap.))))
-                           pushdown-iids (->> probe-key-col-names
-                                              (mapv (fn [col-name]
-                                                      (when (#{"_id" "_iid"} (name col-name))
-                                                        (TreeSet. Bytes/COMPARATOR)))))
                            cmp-factory (->cmp-factory {:build-vec-types build-vec-types
                                                        :probe-vec-types probe-vec-types
                                                        :with-nil-row? with-nil-row?
@@ -429,7 +436,7 @@
                                                            (JoinCursor. allocator build-side build-cursor build-plan-side
                                                                         probe-vec-types probe-key-col-names
                                                                         ->probe-cursor-with-pushdowns nil
-                                                                        pushdown-blooms pushdown-iids cmp-factory
+                                                                        pushdown-blooms cmp-factory
                                                                         (case join-type
                                                                           ::inner-join JoinType/INNER
                                                                           ::left-outer-join JoinType/LEFT_OUTER
