@@ -1379,3 +1379,30 @@
           (t/is (= 3 (:row-count scan-op))
                 (format "scan should only read 3 rows with IID pushdown for %s _id, not full table scan (got %d)"
                         (name id-type) (:row-count scan-op))))))))
+
+(t/deftest id-join-against-non-id-typed-column-returns-matching-rows-5999
+  (util/with-open [node (xtn/start-node)]
+    (xt/execute-tx node ["INSERT INTO docs RECORDS {_id: 7, name: 'seven'}, {_id: 8, name: 'eight'}, {_id: 'abc', name: 'abc'}"
+                         "INSERT INTO nums RECORDS {_id: 1, val: 7.0}"
+                         "INSERT INTO mixed RECORDS {_id: 1, val: 7.0}, {_id: 2, val: 'abc'}"])
+    (tu/flush-block! node)
+
+    (t/is (= [{:name "seven"}]
+             (xt/q node "SELECT d.name FROM nums n JOIN docs d ON d._id = n.val"))
+          "inner join, nums named first")
+
+    (t/is (= [{:name "seven"}]
+             (xt/q node "SELECT d.name FROM docs d JOIN nums n ON d._id = n.val"))
+          "inner join, docs named first")
+
+    (t/is (= [{:name "seven"}]
+             (xt/q node "SELECT d.name FROM docs d WHERE d._id IN (SELECT n.val FROM nums n)"))
+          "semi-join")
+
+    (t/is (= [{:val 7.0, :name "seven"}]
+             (xt/q node "SELECT n.val, d.name FROM nums n LEFT JOIN docs d ON d._id = n.val"))
+          "left outer join, built on its preserved side")
+
+    (t/is (= #{{:name "seven"} {:name "abc"}}
+             (set (xt/q node "SELECT d.name FROM mixed m JOIN docs d ON d._id = m.val")))
+          "an ID-typed build value alongside a non-ID one still matches")))

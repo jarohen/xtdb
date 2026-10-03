@@ -195,8 +195,11 @@
         (cond
           (= build-idx row-count) iids
           (.isNull build-col build-idx) (recur (inc build-idx))
-          :else (let [v (.getObject build-col build-idx)]
-                  (.add iids (if iid-col? v (util/->iid v)))
+          :else (when-let [iid (let [v (.getObject build-col build-idx)]
+                                 (cond
+                                   iid-col? v
+                                   (util/valid-iid? v) (util/->iid v)))]
+                  (.add iids iid)
                   (recur (inc build-idx))))))))
 
 (deftype JoinCursor [^BufferAllocator allocator,
