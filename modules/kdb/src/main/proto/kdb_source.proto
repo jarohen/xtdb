@@ -1,0 +1,35 @@
+edition = "2023";
+
+package xtdb.kdb.proto;
+
+import "google/protobuf/any.proto";
+
+option java_multiple_files = true;
+
+message KdbSourceConfig {
+    string host = 1;
+    int32 port = 2;
+    string username = 3;
+    string password = 4;
+
+    // empty = all tables / all syms
+    repeated string tables = 5;
+    repeated string syms = 6;
+
+    google.protobuf.Any indexer = 7;
+}
+
+// The tickerplant's log (`.u.L`) and message count (`.u.i`) when we subscribed, and how many `upd`s we've
+// taken since. With an unfiltered subscription, base + received is the tickerplant's own count after this update.
+message KdbSourceToken {
+    string log_file = 1;
+    int64 base_msg_count = 2;
+    int64 received = 3;
+}
+
+message DefaultTickIndexerConfig {
+    string schema = 1;
+    string id_column = 2;
+    string time_column = 3;
+    string timezone = 4;
+}

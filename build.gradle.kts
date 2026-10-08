@@ -590,6 +590,7 @@ dependencies {
     implementation(project(":xtdb-main"))
     implementation(project(":modules:xtdb-kafka"))
     implementation(project(":modules:xtdb-postgres-source"))
+    implementation(project(":modules:xtdb-kdb"))
 
     projectDep(":xtdb-api")
     projectDep(":xtdb-core")
@@ -597,6 +598,7 @@ dependencies {
 
     projectDep(":modules:xtdb-kafka")
     projectDep(":modules:xtdb-postgres-source")
+    projectDep(":modules:xtdb-kdb")
     projectDep(":modules:xtdb-aws")
     projectDep(":modules:xtdb-azure")
     projectDep(":modules:xtdb-google-cloud")
@@ -614,6 +616,7 @@ dependencies {
     dokka(project(":modules:xtdb-google-cloud"))
     dokka(project(":modules:xtdb-kafka"))
     dokka(project(":modules:xtdb-postgres-source"))
+    dokka(project(":modules:xtdb-kdb"))
 
     // testFixtures dependencies
     testFixturesImplementation(project(":xtdb-api"))

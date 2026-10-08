@@ -1,0 +1,11 @@
+# Node config for the demo: pgwire on :5432, state under modules/kdb/build/demo-state (wiped by `demoNode`).
+# Paths are relative to the repo root, which is where `demoNode` runs.
+server:
+  host: '*'
+  port: 5432
+
+log: !Local
+  path: modules/kdb/build/demo-state/log
+
+storage: !Local
+  path: modules/kdb/build/demo-state/storage
