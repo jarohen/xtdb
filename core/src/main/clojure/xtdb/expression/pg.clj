@@ -119,3 +119,10 @@
   {:return-type #xt/type :null
    :->call-code (fn [[_regoid-code _int-code]]
                   nil)})
+
+;;; pg_indexam_has_property
+
+(defmethod expr/codegen-call [:pg_indexam_has_property :int :utf8] [_]
+  {:return-type #xt/type :null
+   :->call-code (fn [[_am-code _property-code]]
+                  nil)})

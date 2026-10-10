@@ -1262,7 +1262,7 @@
 (def-sql-fns [string_to_array] 2 2)
 
 ;; system info
-(def-sql-fns [col_description] 2 2)
+(def-sql-fns [col_description pg_indexam_has_property] 2 2)
 
 (defn- json-field-access [obj-expr field-expr]
   (cond
