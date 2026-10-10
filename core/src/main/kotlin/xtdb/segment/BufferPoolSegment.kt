@@ -72,7 +72,7 @@ class BufferPoolSegment(
                         resolveSameSystemTimeEvents(inRel, dataRel)
                     }
                 } else {
-                    dataRel.apply { load(rb) }
+                    dataRel.apply { xtdb.spike.SpikeTimers.time(xtdb.spike.SpikeTimer.REL_LOAD) { load(rb) } }
                 }
             }
         }

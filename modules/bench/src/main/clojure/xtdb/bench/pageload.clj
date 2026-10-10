@@ -72,15 +72,18 @@
    :sql-q6 :sql})
 
 (defn- run-q [node k]
+  (xtdb.spike.SpikeTimers/reset)
   (let [c0 (counters node) f0 (proc-faults) t0 (System/nanoTime)
-        n (if (= :sql-q6 k)
-            (count (xt/q node sql-q6))
-            (let [[q args] ((get queries k))]
-              (count (tu/query-ra q {:node node, :args args}))))
+        res (if (= :sql-q6 k)
+              (xt/q node sql-q6)
+              (let [[q args] ((get queries k))]
+                (tu/query-ra q {:node node, :args args})))
         t1 (System/nanoTime)]
-    (merge {:q k :ms (Math/round (/ (- t1 t0) 1e6)) :rows n}
+    (merge {:q k :ms (Math/round (/ (- t1 t0) 1e6)) :rows (count res) :first-row (first res)}
            (diff-maps c0 (counters node))
-           (diff-maps f0 (proc-faults)))))
+           (diff-maps f0 (proc-faults))
+           {:timers-ms+count (into (sorted-map) (map (fn [[k v]] [k (vec v)])) (xtdb.spike.SpikeTimers/snapshot))
+            :file-reqs (into {} (xtdb.spike.SpikeTimers/fileReqs))})))
 
 ;; ---------- JFR
 
@@ -242,7 +245,7 @@
 (defmethod b/->benchmark :pageload [_ {:keys [scale-factor no-load? reps out-dir qs jfr-qs soak-secs node-dir]}]
   (let [out-dir (util/->path out-dir)
         qs (mapv keyword (str/split qs #","))
-        jfr-qs (mapv keyword (str/split jfr-qs #","))]
+        jfr-qs (into [] (comp (remove str/blank?) (map keyword)) (str/split jfr-qs #","))]
     (Files/createDirectories out-dir (make-array java.nio.file.attribute.FileAttribute 0))
     {:title "pageload spike"
      :benchmark-type :pageload

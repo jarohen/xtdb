@@ -9,6 +9,8 @@ import xtdb.arrow.RelationReader
 import xtdb.operator.SelectionSpec
 import xtdb.segment.MergeTask
 import xtdb.segment.Segment
+import xtdb.spike.SpikeTimer
+import xtdb.spike.SpikeTimers
 import xtdb.trie.ColumnName
 import xtdb.trie.EventRowPointer
 import xtdb.util.TemporalBounds
@@ -62,7 +64,7 @@ class ScanCursor(
             val resolver = openResolver()
 
             // we're not in coroutine land here, so it's a good boundary for runBlocking
-            val loadedPages = runBlocking { task.pages.map { async { it.loadDataPage(al) } }.awaitAll() }
+            val loadedPages = SpikeTimers.time(SpikeTimer.LOAD_PAGES) { runBlocking { task.pages.map { async { it.loadDataPage(al) } }.awaitAll() } }
 
             // rows physically read off the pages we loaded — the scan's throughput denominator,
             // before iid-selection and bitemporal resolution whittle them down to the emitted rows
@@ -77,13 +79,16 @@ class ScanCursor(
             BitemporalConsumer.open(al, leafReaders, colNames).use { bitemporalConsumer ->
                 val merge = EntityMerge(pointers)
 
-                while (merge.nextEntity())
-                    resolver.resolveEntity(merge, bitemporalConsumer)
+                SpikeTimers.time(SpikeTimer.MERGE) {
+                    while (merge.nextEntity())
+                        resolver.resolveEntity(merge, bitemporalConsumer)
+                }
 
                 val colPreds = colPreds.entries
                     .filterNot { it.key == "_iid" }
                     .map { it.value }
 
+                val buildStart = System.nanoTime()
                 bitemporalConsumer.build()
                     .map { childRel ->
                         colPreds.fold(childRel) { acc, colPred -> acc.select(colPred.select(al, acc, schema, args)) }
@@ -91,6 +96,7 @@ class ScanCursor(
                     .filter { it.rowCount > 0 }
                     .safeMap { it.openSlice(al) }
                     .also { bufferedRels.addAll(it) }
+                SpikeTimers.add(SpikeTimer.BUILD_AND_PREDS, buildStart)
 
                 bufferedRels.poll()?.use {
                     c.accept(it)

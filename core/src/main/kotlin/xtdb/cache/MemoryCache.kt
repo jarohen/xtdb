@@ -11,6 +11,8 @@ import org.apache.arrow.memory.ArrowBuf
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.ForeignAllocation
 import xtdb.cache.MemoryCache.PathSlice
+import xtdb.spike.SpikeTimer
+import xtdb.spike.SpikeTimers
 import xtdb.util.*
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
@@ -149,12 +151,12 @@ class MemoryCache @JvmOverloads internal constructor(
                     // as soon as we're done with the ArrowBuf.
                     Arena.ofShared().closeOnCatch { arena ->
                         val slice = pathSlice.slice ?: Slice.from(localPath)
-                        val memSeg = pathLoader.load(localPath, slice, arena)
+                        val memSeg = SpikeTimers.time(SpikeTimer.MMAP) { pathLoader.load(localPath, slice, arena) }
 
                         cacheAl.wrapForeignAllocation(
                             object : ForeignAllocation(memSeg.byteSize(), memSeg.address()) {
                                 override fun release0() {
-                                    arena.close()
+                                    SpikeTimers.time(SpikeTimer.ARENA_CLOSE) { arena.close() }
                                     onEvict?.close()
                                     openSlices.computeIfPresent(pathSlice) { _, buf ->
                                         buf.takeIf { it.referenceManager.refCount > 0 }

@@ -30,7 +30,10 @@ object ArrowUtil {
         bodyLength: Long,
         errorString: String? = null,
     ): ArrowRecordBatch {
+        val touchStart = System.nanoTime()
         val prefixSize = if (getInt(offset) == IPC_CONTINUATION_TOKEN) 8L else 4L
+        xtdb.spike.SpikeTimers.add(xtdb.spike.SpikeTimer.FIRST_TOUCH, touchStart)
+        val decodeStart = System.nanoTime()
 
         val metadataBuf = toByteBuffer(offset + prefixSize, metadataLength - prefixSize)
 
@@ -43,7 +46,7 @@ object ArrowUtil {
             return deserializeRecordBatch(
                 recordBatchFB,
                 bodyBuf ?: error(errorString ?: "Failed to deserialize record batch at offset $offset")
-            )
+            ).also { xtdb.spike.SpikeTimers.add(xtdb.spike.SpikeTimer.RB_DECODE, decodeStart) }
 
         } catch (t: Throwable) {
             bodyBuf.referenceManager.release()

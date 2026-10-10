@@ -16,6 +16,8 @@ import xtdb.arrow.ArrowUtil.readArrowFooter
 import xtdb.arrow.ArrowUtil.toByteArray
 import xtdb.arrow.Relation
 import xtdb.cache.MemoryCache
+import xtdb.spike.SpikeTimer
+import xtdb.spike.SpikeTimers
 import xtdb.database.DatabaseName
 import xtdb.trie.FileSize
 import xtdb.util.*
@@ -82,6 +84,7 @@ internal class LocalStorage(
 
     override suspend fun getRecordBatch(key: Path, idx: Int): ArrowRecordBatch {
         recordBatchRequests?.increment()
+        SpikeTimers.fileReq(key.toString())
         val path = rootPath.resolve(key).orThrowIfMissing(key)
 
         val footer = arrowFooterCache.get(key) { path.openReadableChannel().readArrowFooter() }
@@ -89,6 +92,7 @@ internal class LocalStorage(
         val arrowBlock = footer.recordBatches.getOrNull(idx)
             ?: throw IndexOutOfBoundsException("Record batch index out of bounds of arrow file")
 
+        val cacheGetStart = System.nanoTime()
         return memoryCache.get(
             cacheRootPath.resolve(key),
             MemoryCache.Slice(arrowBlock.offset, arrowBlock.metadataLength + arrowBlock.bodyLength)
@@ -99,7 +103,7 @@ internal class LocalStorage(
                     .takeIf { it.exists() } ?: throw objectMissingException(path)
 
             Pair(bufferCachePath, null)
-        }.use { arrowBuf ->
+        }.also { SpikeTimers.add(SpikeTimer.CACHE_GET, cacheGetStart) }.use { arrowBuf ->
             arrowBuf.arrowBufToRecordBatch(
                 0,
                 arrowBlock.metadataLength,
