@@ -858,6 +858,9 @@ fun createBench(benchName: String, properties: Map<String, String>, defaultArgs:
             }
         }
 
+        // SPIKE (#6164): flag-only arg
+        if (project.hasProperty("noLoad")) args.add("--no-load")
+
         if (project.hasProperty("yourkit"))
             jvmArgs("-agentpath:/opt/yourkit/bin/linux-x86-64/libyjpagent.so=on_exit=snapshot,async_sampling_cpu,app_name=xtdb-$benchName")
 
@@ -869,6 +872,10 @@ fun createBench(benchName: String, properties: Map<String, String>, defaultArgs:
 }
 
 createBench("tpch", mapOf("scaleFactor" to "--scale-factor"))
+
+// SPIKE (#6164)
+createBench("pageload", mapOf("scaleFactor" to "--scale-factor", "reps" to "--reps", "outDir" to "--out-dir",
+                              "qs" to "--qs", "jfrQs" to "--jfr-qs", "soakSecs" to "--soak-secs"))
 
 createBench("yakbench", mapOf(
     "scaleFactor" to "--scale-factor",
