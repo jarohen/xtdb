@@ -241,7 +241,7 @@
     (t/is (= (set (for [[oid typname] [[114 "json"] [3802 "jsonb"] [16384 "transit"]
                                        [2950 "uuid"]
                                        [1043 "varchar"] [25 "text"]
-                                       [16 "boolean"] [21 "int2"] [23 "int4"] [20 "int8"]
+                                       [16 "bool"] [21 "int2"] [23 "int4"] [20 "int8"]
                                        [700 "float4"] [701 "float8"] [1700 "numeric"]
                                        [1082 "date"] [1083 "time"] [1114 "timestamp"] [1184 "timestamptz"] [3910 "tstz-range"] [1186 "interval"]
                                        [26 "oid"] [2205 "regclass"] [24 "regproc"]
