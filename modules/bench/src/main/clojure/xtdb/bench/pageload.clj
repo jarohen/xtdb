@@ -36,7 +36,7 @@
      :memory-cache-misses (long (counter-total reg "memory-cache-misses"))}))
 
 (defn- proc-faults []
-  (let [s (slurp "/proc/self/stat")
+  (let [s (String. (Files/readAllBytes (util/->path "/proc/self/stat")))
         fields (str/split (subs s (+ 2 (str/last-index-of s ")"))) #" ")]
     ;; fields from here start at stat field 3: minflt is field 10, majflt field 12
     {:minflt (parse-long (nth fields 7)) :majflt (parse-long (nth fields 9))}))
@@ -195,10 +195,10 @@
               rb (RecordBatch.)]
           (assert (= MessageHeader/RecordBatch (.headerType msg)))
           (.header msg rb)
-          (vswap! acc update ::meta-bytes (fnil + 0) (.getMetadataLength blk))
-          (vswap! acc update ::body-bytes (fnil + 0) (.getBodyLength blk))
-          (vswap! acc update ::rows (fnil + 0) (.length rb))
-          (vswap! acc update ::pages (fnil + 0) 1)
+          (vswap! acc update "_meta-bytes" (fnil + 0) (.getMetadataLength blk))
+          (vswap! acc update "_body-bytes" (fnil + 0) (.getBodyLength blk))
+          (vswap! acc update "_rows" (fnil + 0) (.length rb))
+          (vswap! acc update "_pages" (fnil + 0) 1)
           (loop [[[fp n] & more] layout, bi 0]
             (when fp
               (vswap! acc update (str/join "/" fp) (fnil + 0)
@@ -260,7 +260,7 @@
                    (log/info "env" {:unsafe (System/getProperty "arrow.enable_unsafe_memory_access")
                                     :java (System/getProperty "java.version")
                                     :xmx (.maxMemory (Runtime/getRuntime))
-                                    :pid (.pid (ProcessHandle/current))})
+                                    :pid (.pid (java.lang.ProcessHandle/current))})
 
                    (spit-edn out-dir "col-bytes.edn"
                              (try (lineitem-col-bytes node (or node-dir (util/->path "/tmp")))
@@ -278,7 +278,7 @@
                                  {:runs @runs :summary (summarise (read-samples jfr))})))
 
                    (when (pos? soak-secs)
-                     (spit (str (.resolve out-dir "soak-start")) (str (.pid (ProcessHandle/current))))
+                     (spit (str (.resolve out-dir "soak-start")) (str (.pid (java.lang.ProcessHandle/current))))
                      (let [deadline (+ (System/currentTimeMillis) (* 1000 soak-secs))
                            runs (atom [])]
                        (while (< (System/currentTimeMillis) deadline)
