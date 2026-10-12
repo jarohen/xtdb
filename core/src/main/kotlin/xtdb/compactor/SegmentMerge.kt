@@ -11,6 +11,7 @@ import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
 import xtdb.bitemporal.PolygonCalculator
 import xtdb.compactor.OutWriter.OutWriters
+import xtdb.compactor.OutWriter.OutWriters.RecencyColumn
 import xtdb.compactor.OutWriter.RecencyRowCopier
 import xtdb.compactor.RecencyPartition.WEEK
 import xtdb.metadata.PageMetadata
@@ -62,6 +63,7 @@ fun resolveSameSystemTimeEvents(
     val validFromVec = relWriter["_valid_from"]
     val validToVec = relWriter["_valid_to"]
     val opCopier = dataReader["op"].rowCopier(relWriter["op"])
+    val recencyCopier = dataReader.vectorForOrNull(Trie.RECENCY_COL)?.let { it.rowCopier(relWriter[Trie.RECENCY_COL]) }
 
     val evPtr = EventRowPointer(dataReader, path)
     val polygonCalculator = PolygonCalculator()
@@ -86,6 +88,7 @@ fun resolveSameSystemTimeEvents(
                         validFromVec.writeLong(MIN_LONG)
                         validToVec.writeLong(MAX_LONG)
                         opCopier.copyRow(evPtr.index)
+                        recencyCopier?.copyRow(evPtr.index)
                         relWriter.endRow()
                     }
                     seenErase = true
@@ -99,6 +102,7 @@ fun resolveSameSystemTimeEvents(
                             validFromVec.writeLong(polygon.getValidFrom(i))
                             validToVec.writeLong(polygon.getValidTo(i))
                             opCopier.copyRow(evPtr.index)
+                            recencyCopier?.copyRow(evPtr.index)
                             relWriter.endRow()
                         }
                     }
@@ -112,7 +116,11 @@ fun resolveSameSystemTimeEvents(
     return relWriter
 }
 
-internal class SegmentMerge(private val al: BufferAllocator) : AutoCloseable {
+/**
+ * @param writesRecency whether rows leaving the current tier carry their recency into historical files,
+ *   so that those files branch on it
+ */
+internal class SegmentMerge(private val al: BufferAllocator, private val writesRecency: Boolean) : AutoCloseable {
 
     class Result(internal val path: Path, val recency: LocalDate?, val leaves: List<PageTree.Leaf>) : AutoCloseable {
         fun openForRead() = path.openReadableChannel()
@@ -227,8 +235,19 @@ internal class SegmentMerge(private val al: BufferAllocator) : AutoCloseable {
         val schema = dataRelSchema(putFields.takeIf { it.isNotEmpty() }?.let { mergeFields(it).withName("put") })
 
         val outWriter = when (recencyPartitioning) {
-            RecencyPartitioning.Partition -> outWriters.PartitionedOutWriter(schema, recencyPartition)
-            is RecencyPartitioning.Preserve -> outWriters.OutRel(schema, recency = recencyPartitioning.recency)
+            RecencyPartitioning.Partition ->
+                outWriters.PartitionedOutWriter(
+                    schema, recencyPartition,
+                    historicalRecency = if (writesRecency) RecencyColumn.COMPUTED else RecencyColumn.ABSENT
+                )
+            is RecencyPartitioning.Preserve -> {
+                val recencyColumn =
+                    if (recencyPartitioning.recency != null && segments.all { it.schema.fields.any { f -> f.name == Trie.RECENCY_COL } })
+                        RecencyColumn.CARRIED
+                    else RecencyColumn.ABSENT
+
+                outWriters.OutRel(schema, recency = recencyPartitioning.recency, recencyColumn = recencyColumn)
+            }
         }
 
         return outWriter.use {
@@ -295,7 +314,7 @@ internal fun main() {
 
     try {
         RootAllocator().use { al ->
-            SegmentMerge(al).use { segMerge ->
+            SegmentMerge(al, writesRecency = false).use { segMerge ->
                 trieKeys
                     .safeMap { trieKey -> LocalSegment(al, slug, dir, trieKey) }
                     .useAll { segments ->

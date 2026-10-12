@@ -1,5 +1,7 @@
 package xtdb.compactor
 
+import xtdb.api.CompactorConfig
+
 import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
@@ -47,7 +49,7 @@ interface Compactor : AutoCloseable {
     }
 
     fun interface Factory {
-        fun create(meterRegistry: MeterRegistry?, threads: Int): Compactor
+        fun create(meterRegistry: MeterRegistry?, config: CompactorConfig): Compactor
     }
 
     interface ForDatabase : AutoCloseable {
@@ -74,7 +76,7 @@ interface Compactor : AutoCloseable {
 
         companion object {
             @JvmStatic
-            fun real(pageSize: Int, recencyPartition: RecencyPartition?) =
+            fun real(pageSize: Int, recencyPartition: RecencyPartition?, writesRecency: Boolean) =
                 object : Factory {
                     override fun create(allocator: BufferAllocator, partitionStorage: PartitionStorage, partitionState: PartitionState, watchers: Watchers) = object : Driver {
                         private val al = allocator.openChildAllocator("compactor")
@@ -84,7 +86,7 @@ interface Compactor : AutoCloseable {
                         private val tableCat = partitionState.tableCatalog
 
                         private val trieWriter = PageTrieWriter(al, bp, calculateBlooms = true)
-                        private val segMerge = SegmentMerge(al)
+                        private val segMerge = SegmentMerge(al, writesRecency)
 
                         private fun Job.trieDetails(
                             trieKey: TrieKey,
@@ -120,7 +122,7 @@ interface Compactor : AutoCloseable {
                                                                 trieWriter.writePageTree(
                                                                     slug, trieKey,
                                                                     loader, it.leaves.asTree,
-                                                                    pageSize
+                                                                    pageSize, pinnedDepth = job.part?.size ?: 0
                                                                 )
 
                                                             job.trieDetails(trieKey, dataFileSize, trieMetadata)

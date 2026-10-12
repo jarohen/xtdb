@@ -10,7 +10,11 @@ import org.junit.jupiter.api.Test
 import xtdb.TaggedValue
 import xtdb.api.TableRef
 import xtdb.api.query.IKeyFn.KeyFn.SNAKE_CASE_STRING
+import xtdb.arrow.Relation
 import xtdb.arrow.STRUCT_TYPE
+import xtdb.arrow.VectorType.Companion.INSTANT
+import xtdb.arrow.VectorType.Companion.ofType
+import org.apache.arrow.vector.types.pojo.Schema
 import xtdb.compactor.SegmentMerge.RecencyPartitioning
 import xtdb.indexer.LiveTable
 import xtdb.segment.MemorySegment
@@ -24,6 +28,7 @@ import xtdb.util.safeMap
 import xtdb.util.useAll
 import java.nio.ByteBuffer
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
@@ -84,6 +89,8 @@ class SegmentMergeTest {
         "op" to TaggedValue(Keyword.intern("put"), mapOf("_id" to id, "v" to v))
     )
 
+    private fun recency(year: Int) = mapOf(Trie.RECENCY_COL to year(year))
+
     private fun SegmentMerge.rowsOf(result: SegmentMerge.Result) =
         result.openAllAsRelation().use { rel ->
             rel.toMaps(SNAKE_CASE_STRING).map { row ->
@@ -91,7 +98,10 @@ class SegmentMergeTest {
             }
         }
 
-    private fun withSegments(block: (List<MemorySegment>) -> Unit) {
+    /**
+     * @param recencies per live table, the recency every one of its rows carries - or null for rows carrying none
+     */
+    private fun withSegments(recencies: List<Int?> = listOf(null, null), block: (List<MemorySegment>) -> Unit) {
         LiveTable.open(al, foo, TableSlug.of(foo), 0L, RowCounter()).use { lt0Base ->
             LiveTable.open(al, foo, TableSlug.of(foo), 0L, RowCounter()).use { lt1Base ->
                 val lt0 = lt0Base
@@ -102,9 +112,15 @@ class SegmentMergeTest {
                     .indexTx(Instant.parse("2022-01-01T00:00:00Z"), "foo" to 1L)
                     .indexTx(Instant.parse("2023-01-01T00:00:00Z"), "foo" to 2L, "bar" to 2L)
 
-                listOf(lt0, lt1)
-                    .safeMap { lt ->
-                        val rel = lt.relation.openSlice(al)
+                listOf(lt0, lt1).zip(recencies)
+                    .safeMap { (lt, recency) ->
+                        val rel =
+                            if (recency == null) lt.relation.openSlice(al)
+                            else Relation(al, Schema(lt.relation.schema.fields + (Trie.RECENCY_COL ofType INSTANT))).apply {
+                                append(lt.relation)
+                                val recencyVec = this[Trie.RECENCY_COL]
+                                repeat(rowCount) { recencyVec.writeObject(year(recency)) }
+                            }
                         MemorySegment(lt.trie.compactLogs().withIidReader(rel["_iid"]), rel)
                     }
                     .useAll(block)
@@ -114,7 +130,7 @@ class SegmentMergeTest {
 
     @Test
     fun `merging segments yields each iid's events newest first`() = withSegments { segments ->
-        SegmentMerge(al).use { segMerge ->
+        SegmentMerge(al, writesRecency = false).use { segMerge ->
             segMerge.mergeSegmentsSync(segments, null, RecencyPartitioning.Preserve(null)).use { results ->
                 assertEquals(
                     listOf(
@@ -131,7 +147,7 @@ class SegmentMergeTest {
 
     @Test
     fun `a path filter restricts the merge to the iids under that path`() = withSegments { segments ->
-        SegmentMerge(al).use { segMerge ->
+        SegmentMerge(al, writesRecency = false).use { segMerge ->
             segMerge.mergeSegmentsSync(segments, byteArrayOf(2), RecencyPartitioning.Preserve(null)).use { results ->
                 assertEquals(
                     listOf(listOf(put("bar", 2, 2023), put("bar", 1, 2021), put("bar", 0, 2020))),
@@ -143,13 +159,30 @@ class SegmentMergeTest {
 
     @Test
     fun `partitioning by recency splits superseded events into weekly files`() = withSegments { segments ->
-        SegmentMerge(al).use { segMerge ->
+        SegmentMerge(al, writesRecency = false).use { segMerge ->
             segMerge.mergeSegmentsSync(segments, null, RecencyPartitioning.Partition).use { results ->
                 assertEquals(
                     mapOf(
                         "r20210104.arrow" to listOf(put("bar", 0, 2020)),
                         "r20220103.arrow" to listOf(put("foo", 0, 2020)),
                         "r20230102.arrow" to listOf(put("bar", 1, 2021), put("foo", 1, 2022)),
+                        "rc.arrow" to listOf(put("bar", 2, 2023), put("foo", 2, 2023)),
+                    ),
+                    results.associate { it.path.fileName.toString() to segMerge.rowsOf(it) }
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `writing recency, each superseded event carries its recency into its weekly file`() = withSegments { segments ->
+        SegmentMerge(al, writesRecency = true).use { segMerge ->
+            segMerge.mergeSegmentsSync(segments, null, RecencyPartitioning.Partition).use { results ->
+                assertEquals(
+                    mapOf(
+                        "r20210104.arrow" to listOf(put("bar", 0, 2020) + recency(2021)),
+                        "r20220103.arrow" to listOf(put("foo", 0, 2020) + recency(2022)),
+                        "r20230102.arrow" to listOf(put("bar", 1, 2021) + recency(2023), put("foo", 1, 2022) + recency(2023)),
                         "rc.arrow" to listOf(put("bar", 2, 2023), put("foo", 2, 2023)),
                     ),
                     results.associate { it.path.fileName.toString() to segMerge.rowsOf(it) }
@@ -168,7 +201,7 @@ class SegmentMergeTest {
 
             val rel = lt.relation.openSlice(al)
             MemorySegment(lt.trie.compactLogs().withIidReader(rel["_iid"]), rel).use { segment ->
-                SegmentMerge(al).use { segMerge ->
+                SegmentMerge(al, writesRecency = false).use { segMerge ->
                     segMerge.mergeSegmentsSync(listOf(segment), null, RecencyPartitioning.Partition).use { results ->
                         assertEquals(
                             mapOf(
@@ -184,4 +217,40 @@ class SegmentMergeTest {
             }
         }
     }
+
+    @Test
+    fun `a historical merge carries each row's recency when every input carries it`() =
+        withSegments(recencies = listOf(2024, 2025)) { segments ->
+            SegmentMerge(al, writesRecency = false).use { segMerge ->
+                segMerge.mergeSegmentsSync(segments, null, RecencyPartitioning.Preserve(LocalDate.of(2025, 1, 6))).use { results ->
+                    assertEquals(
+                        listOf(
+                            listOf(
+                                put("bar", 2, 2023) + recency(2025), put("bar", 1, 2021) + recency(2024), put("bar", 0, 2020) + recency(2024),
+                                put("foo", 2, 2023) + recency(2025), put("foo", 1, 2022) + recency(2025), put("foo", 0, 2020) + recency(2024)
+                            )
+                        ),
+                        results.map { segMerge.rowsOf(it) }
+                    )
+                }
+            }
+        }
+
+    @Test
+    fun `a historical merge drops recency when any input lacks it`() =
+        withSegments(recencies = listOf(2024, null)) { segments ->
+            SegmentMerge(al, writesRecency = false).use { segMerge ->
+                segMerge.mergeSegmentsSync(segments, null, RecencyPartitioning.Preserve(LocalDate.of(2025, 1, 6))).use { results ->
+                    assertEquals(
+                        listOf(
+                            listOf(
+                                put("bar", 2, 2023), put("bar", 1, 2021), put("bar", 0, 2020),
+                                put("foo", 2, 2023), put("foo", 1, 2022), put("foo", 0, 2020)
+                            )
+                        ),
+                        results.map { segMerge.rowsOf(it) }
+                    )
+                }
+            }
+        }
 }
