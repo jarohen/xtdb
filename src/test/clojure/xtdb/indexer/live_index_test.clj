@@ -13,6 +13,7 @@
   (:import [java.util Random UUID]
            [org.apache.arrow.memory BufferAllocator]
            (xtdb.api TransactionResult$Committed)
+           (xtdb.api.tx TxStamp)
            (xtdb.arrow Relation)
            (xtdb.indexer ResolvedTx)
            (xtdb.trie ArrowHashTrie ArrowHashTrie$Leaf MemoryHashTrie$Leaf)))
@@ -125,9 +126,9 @@
           (tu/flush-block! node)
 
           ;; sizes include the block boundary's term_id (=1 for a fresh leader, added in #5817 level 1),
-          ;; its position in that term (#6105), and the table registry each block carries (#4037)
-          (t/is (= [(os/->StoredObject (util/->path "blocks/b00.binpb") 169)
-                    (os/->StoredObject (util/->path "blocks/b01.binpb") 170)]
+          ;; its position in that term (#6105), the table registry each block carries (#4037), and its two clocks (#6209)
+          (t/is (= [(os/->StoredObject (util/->path "blocks/b00.binpb") 189)
+                    (os/->StoredObject (util/->path "blocks/b01.binpb") 190)]
                    (.listAllObjects bp (util/->path "blocks")))))))))
 
 (t/deftest staged-empty-create-table-visible-across-a-batch-5507
@@ -139,7 +140,7 @@
         tx-key #xt/tx-key {:tx-id 0, :system-time #xt/instant "2020-01-01T00:00:00Z"}]
     (util/with-open [staged (with-open [create-tx (tu/->open-tx tx-key)]
                               (.executeSql create-tx "CREATE TABLE foo (_id, bar)")
-                              (ResolvedTx/stage create-tx 0 (TransactionResult$Committed. tx-key) nil nil))
+                              (ResolvedTx/stage create-tx 0 (TxStamp. (.getTxId tx-key) (.getSystemTime tx-key) nil) nil nil nil))
                      observer-tx (tu/->open-tx #xt/tx-key {:tx-id 1, :system-time #xt/instant "2020-01-01T00:00:01Z"})
                      snap (.openSnapshot live-index [staged] observer-tx)]
       (t/is (.containsKey (.getTableInfo snap) table)

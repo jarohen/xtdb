@@ -33,8 +33,15 @@ message TriesDeleted {
     repeated string trie_keys = 2;
 }
 
+// Whether a tx moved its database's DML clock; one that staged no data rows moves only the ingest clock.
+enum SystemClock {
+    MOVED = 0;
+    UNMOVED = 1;
+}
+
 message ResolvedTx {
     int64 tx_id = 1;
+    // The time the tx is known by: its system time where it moved the DML clock, else its ingest time.
     int64 system_time_micros = 2;
     bool committed = 3;
     bytes error = 4;
@@ -50,6 +57,10 @@ message ResolvedTx {
     // Set when this tx came from the source log; absent for ext-source txs whose tx_id is an
     // independent counter rather than a source-log msgId.
     int64 src_msg_id = 9 [features.field_presence = EXPLICIT];
+
+    // Absent: both times are system_time_micros.
+    int64 ingest_time_micros = 10 [features.field_presence = EXPLICIT];
+    SystemClock system_clock = 11;
 }
 
 message BlockBoundary {

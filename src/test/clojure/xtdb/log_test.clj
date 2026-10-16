@@ -11,6 +11,7 @@
             [xtdb.util :as util])
   (:import [java.time Duration Instant InstantSource]
            xtdb.api.Xtdb$Config
+           xtdb.api.tx.TxStamp
            [xtdb.api.log InMemoryLog Log$Factory ReadOnlyLog
             ReplicaMessage$ResolvedTx SourceMessage$DetachDatabase]
            xtdb.arrow.Relation))
@@ -342,7 +343,7 @@
                       (writeTo [_ _]))]
 
     (.appendMessageBlocking replica-log
-                            (ReplicaMessage$ResolvedTx. 0 (Instant/now)
+                            (ReplicaMessage$ResolvedTx. (TxStamp/dml 0 (Instant/now))
                                                         true nil {} nil nil nil 0 nil)
                             0)
 
@@ -370,7 +371,7 @@
                       (writeTo [_ _]))]
 
     (.appendMessageBlocking replica-log
-                            (ReplicaMessage$ResolvedTx. 0 (Instant/now)
+                            (ReplicaMessage$ResolvedTx. (TxStamp/dml 0 (Instant/now))
                                                         true nil {} nil nil nil 0 nil)
                             0)
 

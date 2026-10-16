@@ -12,6 +12,7 @@ import xtdb.arrow.VectorType.Companion.I64
 import xtdb.arrow.VectorType.Companion.INSTANT
 import xtdb.arrow.VectorType.Companion.TRANSIT
 import xtdb.authz.RoleMembership
+import xtdb.database.ClockBasis
 import xtdb.database.DatabaseName
 import xtdb.database.PartitionState
 import xtdb.database.PartitionStorage
@@ -71,6 +72,7 @@ class OpenTx
     private val partitionState: PartitionState,
     private val dbName: DatabaseName,
     val txKey: TransactionKey,
+    val ingestTime: Instant,
     val externalSourceToken: ExternalSourceToken?,
     private val tracer: Tracer? = null,
     // In-flight resolved predecessors this tx must read behind (read-your-writes across the batch),
@@ -80,6 +82,13 @@ class OpenTx
 
     val systemTime get() = txKey.systemTime
     val systemTimeMicros = systemTime.asMicros
+    private val ingestTimeMicros = ingestTime.asMicros
+
+    private val stamp: TxStamp
+        get() = TxStamp(
+            txKey.txId, ingestTime,
+            systemTime.takeIf { tableTxs.any { (ref, table) -> !IngestTables.contains(ref) && table.wroteRows } },
+        )
 
     private val tableTxs = HashMap<TableRef, Table>()
 
@@ -129,22 +138,29 @@ class OpenTx
      * The value this tx writes [ref] on top of: the newest staged one among the predecessors it resolves
      * behind, else the live index's — which is also what opens a table none of them has written.
      */
-    private fun openTableTx(ref: TableRef): LiveTable.Tx =
-        resolvedTxs.asReversed().firstNotNullOfOrNull { it.liveTable(ref) }?.openTx(systemTimeMicros)
-            ?: partitionState.liveIndex.openTable(ref, systemTimeMicros)
+    private fun openTableTx(ref: TableRef): LiveTable.Tx {
+        val micros = if (IngestTables.contains(ref)) ingestTimeMicros else systemTimeMicros
 
-    internal fun writeTxRow(error: Throwable?, userMetadata: Map<*, *>?) {
+        return resolvedTxs.asReversed().firstNotNullOfOrNull { it.liveTable(ref) }?.openTx(micros)
+            ?: partitionState.liveIndex.openTable(ref, micros)
+    }
+
+    /**
+     * Writes this tx's `xt.txs` row, and returns the tx's stamp: both times, if it staged rows in a data table,
+     * else its ingest time alone. Call it before [sealTables], which hands the staged tables over.
+     */
+    internal fun writeTxRow(error: Throwable?, userMetadata: Map<*, *>?): TxStamp {
+        val stamp = stamp
         val txId = txKey.txId
-        val systemTimeMicros = txKey.systemTime.asMicros
 
         val liveTable = table(TableRef("xt", "txs"))
         val docWriter = liveTable.putDocWriter
 
         liveTable.writeId(txId)
-        liveTable.writeDefaultValidTime()
+        liveTable.writeValidTimeMicros(ingestTimeMicros, MAX_LONG)
 
         docWriter.vectorFor("_id", I64.arrowType, false).writeLong(txId)
-        docWriter.vectorFor("system_time", INSTANT.arrowType, false).writeLong(systemTimeMicros)
+        docWriter.vectorFor("system_time", INSTANT.arrowType, false).writeLong(stamp.txKey.systemTime.asMicros)
         docWriter.vectorFor("committed", BOOL.arrowType, false).writeBoolean(error == null)
         docWriter.vectorFor("user_metadata", VectorType.structOf().arrowType, true).writeObject(userMetadata)
 
@@ -165,6 +181,8 @@ class OpenTx
         docWriter.endStruct()
 
         liveTable.endPut()
+
+        return stamp
     }
 
 
@@ -186,7 +204,7 @@ class OpenTx
                 override val storage get() = partitionStorage
                 override val queryState get() = partitionState
                 // a tx always builds a fresh read-your-writes snapshot; the read basis doesn't apply
-                override fun openSnapshot(minBasis: List<Instant?>?) =
+                override fun openSnapshot(minBasis: List<ClockBasis>?) =
                     DatabaseSnapshot(listOf(liveIndex.openSnapshot(resolvedTxs, this@OpenTx)))
             }
 
@@ -242,9 +260,11 @@ class OpenTx
             argFields = args?.schema?.fields,
         )
 
-        when (val stmt = nodeBase.querySource.prepareTxSql(sql, queryCatalog, prepareOpts)) {
-            is SqlStatement.GrantRole -> writeRoleMembership(stmt.user, stmt.role, currentTime, user, revoke = false)
-            is SqlStatement.RevokeRole -> writeRoleMembership(stmt.user, stmt.role, currentTime, user, revoke = true)
+        val stmt = nodeBase.querySource.prepareTxSql(sql, queryCatalog, prepareOpts)
+
+        when (stmt) {
+            is SqlStatement.GrantRole -> writeRoleMembership(stmt.user, stmt.role, user, revoke = false)
+            is SqlStatement.RevokeRole -> writeRoleMembership(stmt.user, stmt.role, user, revoke = true)
 
             is SqlStatement.CreateTable -> createTable(stmt.table, stmt.colNames)
 
@@ -347,7 +367,6 @@ class OpenTx
     private fun writeRoleMembership(
         user: String,
         role: String,
-        currentTime: Instant,
         principal: String?,
         revoke: Boolean
     ) {
@@ -363,11 +382,10 @@ class OpenTx
                 "xtdb/not-authorized", mapOf("user" to principal),
             )
 
-        val ts = currentTime.asMicros
         val table = table(TableRef("xt", "role_membership"))
 
         table.writeIid(RoleMembership.membershipIid(user, role))
-        table.writeValidTimeMicros(ts, MAX_LONG)
+        table.writeValidTimeMicros(ingestTimeMicros, MAX_LONG)
 
         if (revoke) {
             table.endDelete()
@@ -464,6 +482,8 @@ class OpenTx
 
         /** The document-column sink for a put: write the doc's columns here, between the id/valid-time writes and [endPut]. */
         val putDocWriter: VectorWriter by lazy(LazyThreadSafetyMode.NONE) { putVec }
+
+        internal val wroteRows get() = tx.rowCount > tx.startRowIdx
 
         internal fun declareColumns(colNames: List<String>) {
             for (colName in colNames) putDocWriter.vectorFor(colName, NULL_TYPE, false)

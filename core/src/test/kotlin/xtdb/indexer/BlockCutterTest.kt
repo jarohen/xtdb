@@ -94,7 +94,7 @@ internal class BlockCutterTest {
         fun applyRows(txId: Long, rows: Int) {
             OpenTx(
                 allocator, nodeBase, partitionStorage, partitionState, "test",
-                TransactionKey(txId, Instant.EPOCH), null
+                TransactionKey(txId, Instant.EPOCH), Instant.EPOCH, null
             ).use { tx ->
                 repeat(rows) {
                     tx.table(table).apply {
@@ -104,9 +104,9 @@ internal class BlockCutterTest {
                         endPut()
                     }
                 }
-                tx.writeTxRow(null, null)
+                val stamp = tx.writeTxRow(null, null)
                 tx.sealTables().associateTo(mutableMapOf()) { it.ref to it.liveTable }
-                    .closeAllOnCatch { liveIndex.applyTx(tx.txKey, it) }
+                    .closeAllOnCatch { liveIndex.applyTx(stamp, it) }
             }
         }
 

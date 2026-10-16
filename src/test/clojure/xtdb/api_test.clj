@@ -147,12 +147,11 @@
 
   (t/is (= [{:v "a"}] (xt/q *node* "SELECT v FROM docs")))
 
-  (t/is (= [{:tx-id 1, :system-time #xt/zoned-date-time "2026-01-01T00:00:00.000001Z[UTC]"}]
-           (xt/q *node* "SELECT _id AS tx_id, system_time FROM xt.txs WHERE NOT committed"))
-        "the rejected tx takes the smoothed system-time, advancing the clock past the one it asked for")
+  (t/is (= [{:tx-id 1}]
+           (xt/q *node* "SELECT _id AS tx_id FROM xt.txs WHERE NOT committed")))
 
   (xt/execute-tx *node* [[:sql "INSERT INTO docs (_id, v) VALUES (1, 'c')"]]
-                 {:system-time #xt/instant "2026-01-01T00:00:00.000002Z"})
+                 {:system-time #xt/instant "2026-01-01T00:00:00.000001Z"})
 
   (t/is (= [{:v "c"}] (xt/q *node* "SELECT v FROM docs"))))
 

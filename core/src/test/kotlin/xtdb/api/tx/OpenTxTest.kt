@@ -37,7 +37,7 @@ class OpenTxTest {
             TestPartition(allocator, bp).use { partition ->
                 OpenTx(
                     allocator, nodeBase, partition.storage, partition.state, dbName,
-                    TransactionKey(0, Instant.EPOCH), null
+                    TransactionKey(0, Instant.EPOCH), Instant.EPOCH, null
                 ).use(f)
             }
         }

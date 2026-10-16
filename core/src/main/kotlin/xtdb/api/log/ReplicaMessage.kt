@@ -2,6 +2,9 @@ package xtdb.api.log
 
 import com.google.protobuf.ByteString
 import xtdb.api.tx.ExternalSourceToken
+import xtdb.api.tx.TxStamp
+import xtdb.api.TransactionKey
+import xtdb.log.proto.SystemClock
 import xtdb.database.Database
 import xtdb.types.MessageId
 import xtdb.log.proto.ReplicaLogMessage
@@ -68,8 +71,17 @@ sealed interface ReplicaMessage {
                                 else -> null
                             }
                             ResolvedTx(
-                                it.txId,
-                                fromMicros(it.systemTimeMicros),
+                                if (it.hasIngestTimeMicros())
+                                    TxStamp(
+                                        it.txId,
+                                        fromMicros(it.ingestTimeMicros),
+                                        when (it.systemClock) {
+                                            SystemClock.MOVED -> fromMicros(it.systemTimeMicros)
+                                            SystemClock.UNMOVED -> null
+                                            else -> error("unknown system clock: ${it.systemClock}")
+                                        },
+                                    )
+                                else TxStamp.dml(it.txId, fromMicros(it.systemTimeMicros)),
                                 it.committed,
                                 it.error.toByteArray().let { bs ->
                                     if (bs.isEmpty()) null else readTransit(bs, MSGPACK) as Throwable
@@ -131,8 +143,7 @@ sealed interface ReplicaMessage {
     }
 
     data class ResolvedTx(
-        val txId: MessageId,
-        val systemTime: Instant,
+        val stamp: TxStamp,
         val committed: Boolean,
         val error: Throwable?,
         val tableData: Map<String, ByteString>,
@@ -146,12 +157,17 @@ sealed interface ReplicaMessage {
         override val termId: Long,
         override val termSeq: Long? = null,
     ) : ProtobufMessage() {
+        val txId get() = stamp.txId
+        val txKey get() = stamp.txKey
+
         override fun withTermSeq(termSeq: Long) = copy(termSeq = termSeq)
 
         override fun toLogMessage() = replicaLogMessage {
             resolvedTx = resolvedTx {
-                this.txId = this@ResolvedTx.txId
-                this.systemTimeMicros = this@ResolvedTx.systemTime.asMicros
+                this.txId = this@ResolvedTx.stamp.txId
+                this.systemTimeMicros = this@ResolvedTx.stamp.txKey.systemTime.asMicros
+                this.ingestTimeMicros = this@ResolvedTx.stamp.ingestTime.asMicros
+                this.systemClock = if (this@ResolvedTx.stamp.systemTime == null) SystemClock.UNMOVED else SystemClock.MOVED
                 this.committed = this@ResolvedTx.committed
                 this.error = this@ResolvedTx.error?.let { ByteString.copyFrom(writeTransit(it, MSGPACK)) } ?: ByteString.EMPTY
                 this.tableData.putAll(this@ResolvedTx.tableData)

@@ -39,6 +39,12 @@ message TxKey {
     int64 system_time = 2;
 }
 
+// Where a partition's ingest and DML clocks stood after a block's latest tx. Absent system_time: no DML yet.
+message Clocks {
+    int64 ingest_time = 1;
+    int64 system_time = 2 [features.field_presence = EXPLICIT];
+}
+
 message TableEntry {
     uint32 oid = 1;
     string schema_name = 2;
@@ -75,4 +81,7 @@ message Block {
     // boundary knows the next position its term expects. Absent for blocks written before
     // this field, or whose boundary carried none. See #6105.
     int64 boundary_term_seq = 10;
+
+    // Absent: both clocks stand at latest_completed_tx's system_time.
+    Clocks latest_clocks = 11;
 }

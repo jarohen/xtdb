@@ -2,6 +2,20 @@
 title: SQL Transactions
 ---
 
+<details>
+<summary>Changelog (last updated v2.2)</summary>
+
+v2.2: only data writes move the system-time a `SYSTEM_TIME` has to advance on
+
+: A transaction's `SYSTEM_TIME` has to be later than the latest transaction that wrote data, not the latest transaction of any kind — see [`SET TRANSACTION`](#set-transaction-v22).
+
+  Previously, DDL, aborted transactions and DML that matched no rows each took a system-time from the log, so a backfill submitted after any of them was rejected for not advancing.
+  Each of those is now recorded in `xt.txs` at the time the log received it, which no longer constrains a later `SYSTEM_TIME`.
+
+  There are no upgrade steps.
+
+</details>
+
 For examples on how to submit SQL transactions in each client library, see the [individual driver documentation](/drivers).
 
 ## Transaction operations
@@ -220,9 +234,9 @@ return rr.Diagram(rr.Sequence('SET', 'TRANSACTION', rr.Choice(0, ro, rw)))
 * For how a list of transaction modes is read, how a later `SET TRANSACTION` merges into an earlier one, when it is accepted, `TIMEZONE`, and read-only transactions, see the [query reference](/reference/main/sql/queries#set-transaction-v22).
 * For read-write transactions:
   * `SYSTEM_TIME` overrides the system-time of the transaction, used for an initial backfill of the database.
-    It must be strictly later than the system-time of the latest completed transaction — a backfill submitting several transactions gives each its own system-time rather than sharing one.
+    It must be strictly later than the system-time of the latest completed transaction that wrote data — a backfill submitting several transactions gives each its own system-time rather than sharing one.
     A system-time that doesn't advance aborts the transaction, and the abort is recorded in `xt.txs`.
-    The aborted transaction still takes a system-time of its own, 1µs past the latest completed one, so a retry has to advance on that rather than on the instant it asked for.
+    Only transactions that write data move the system-time a later transaction has to advance on: DDL, aborted transactions and DML that matches no rows don't, so a backfill can follow any of them.
     Otherwise, the system-time of the transaction will be defined by the log.
   * `ASYNC` affects whether the connection will wait for the transaction to be indexed before returning from `COMMIT`.
     If not provided, it defaults to `false` - i.e. the connection will wait for the transaction to be indexed before returning.

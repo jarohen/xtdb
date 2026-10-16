@@ -31,6 +31,9 @@ import java.util.HashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.StampedLock
 import xtdb.api.tx.OpenTx
+import xtdb.api.tx.TxHead
+import xtdb.api.tx.TxStamp
+import xtdb.database.ClockBasis
 
 private val LOG = LiveIndex::class.logger
 
@@ -54,11 +57,17 @@ class LiveIndex private constructor(
     private val allocator: BufferAllocator,
     private val tableCatalog: TableCatalog,
     val trieCatalog: TrieCatalog,
-    @Volatile var latestCompletedTx: TransactionKey?,
+    head: TxHead?,
     initialBlockIdx: Long,
     indexerConfig: IndexerConfig,
     private val ioDispatcher: CoroutineDispatcher,
 ) : Snapshot.Source, AutoCloseable {
+
+    @Volatile
+    var head: TxHead? = head
+        private set
+
+    val latestCompletedTx: TransactionKey? get() = head?.latestCompletedTx
 
     private val tables = HashMap<TableRef, LiveTable>()
 
@@ -152,7 +161,7 @@ class LiveIndex private constructor(
      * The leader's path for a transaction it resolved itself; one it reads back without having staged —
      * a promoted leader catching up — arrives as a deserialised relation and goes through [commitTx].
      */
-    fun applyTx(txKey: TransactionKey, tables: MutableMap<TableRef, LiveTable>) {
+    fun applyTx(txStamp: TxStamp, tables: MutableMap<TableRef, LiveTable>) {
         val stamp = snapLock.writeLock()
         try {
             tableCatalog.registerTables(tables.keys)
@@ -175,16 +184,20 @@ class LiveIndex private constructor(
                 if (displaced !== liveTable) displaced?.close()
             }
 
-            latestCompletedTx = txKey
+            markApplied(txStamp)
         } finally {
             snapLock.unlock(stamp)
         }
     }
 
+    private fun markApplied(txStamp: TxStamp) {
+        head = TxHead.after(head, txStamp)
+    }
+
     // Promote a committed tx into the live tables straight from its relations — no IPC round-trip.
     // The leader passes its staged relation slices; a follower deserializes the replica message's
     // table data first (see `loadTableData`). The caller owns [tables] and closes them afterwards.
-    fun commitTx(txKey: TransactionKey, tables: Map<TableRef, RelationReader>) {
+    fun commitTx(txStamp: TxStamp, tables: Map<TableRef, RelationReader>) {
         val stamp = snapLock.writeLock()
         try {
             // Inside the lock, so a table's identity and its rows reach readers together — snapshot
@@ -203,7 +216,7 @@ class LiveIndex private constructor(
                 this@LiveIndex.tables[ref] = liveTable.importData(rel)
             }
 
-            latestCompletedTx = txKey
+            markApplied(txStamp)
         } finally {
             snapLock.unlock(stamp)
         }
@@ -218,18 +231,20 @@ class LiveIndex private constructor(
         }
     }
 
-    private fun Snapshot.freshEnough(minSystemTime: Instant?) =
-        minSystemTime == null || txBasis?.systemTime?.let { !it.isBefore(minSystemTime) } == true
+    private fun Instant?.reaches(min: Instant?) = min == null || (this != null && this >= min)
 
-    override fun openSnapshot(minSystemTime: Instant?): Snapshot {
+    private fun Snapshot.freshEnough(min: ClockBasis?) =
+        min == null || (head?.ingestTime.reaches(min.ingestTime) && head?.systemTime.reaches(min.systemTime))
+
+    override fun openSnapshot(minBasis: ClockBasis?): Snapshot {
         snapLock.withReadLock {
-            sharedSnap!!.let { if (it.freshEnough(minSystemTime)) return it.also { s -> s.retain() } }
+            sharedSnap!!.let { if (it.freshEnough(minBasis)) return it.also { s -> s.retain() } }
         }
 
         // cache too stale for the caller's basis — rebuild under the write lock, double-checking first
         val stamp = snapLock.writeLock()
         try {
-            if (!sharedSnap!!.freshEnough(minSystemTime)) refreshSnap0()
+            if (!sharedSnap!!.freshEnough(minBasis)) refreshSnap0()
             return sharedSnap!!.also { it.retain() }
         } finally {
             snapLock.unlock(stamp)
@@ -310,7 +325,7 @@ class LiveIndex private constructor(
             LiveIndex(
                 open { allocator.newChildAllocator("live-index", 0, Long.MAX_VALUE) },
                 tableCatalog, trieCatalog,
-                tableCatalog.latestCompletedTx,
+                tableCatalog.head,
                 (tableCatalog.currentBlockIndex ?: -1L) + 1L,
                 indexerConfig,
                 ioDispatcher,

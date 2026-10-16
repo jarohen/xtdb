@@ -1,6 +1,7 @@
 package xtdb.indexer
 
 import io.kotest.matchers.shouldBe
+import xtdb.api.tx.TxStamp
 import org.apache.arrow.memory.BufferAllocator
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
@@ -19,7 +20,7 @@ class ResolvedTxTableDataTest {
             repeat(10) { rel.writeRow(mapOf("_id" to it.toLong(), "name" to "row-$it")) }
 
             ReplicaMessage.ResolvedTx(
-                txId = 3, systemTime = Instant.EPOCH, committed = true, error = null,
+                stamp = TxStamp.dml(3, Instant.EPOCH), committed = true, error = null,
                 tableData = mapOf("public/docs" to rel.toArrowStream(4, 3)),
                 termId = 1,
             )

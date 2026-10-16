@@ -13,6 +13,7 @@ import xtdb.api.TableRef
 import xtdb.trie.ColumnName
 import xtdb.util.closeAll
 import xtdb.api.tx.OpenTx
+import xtdb.api.tx.TxStamp
 
 /**
  * A committed-but-not-yet-durable transaction, held in memory between the resolver committing it and the
@@ -35,14 +36,19 @@ import xtdb.api.tx.OpenTx
  * awaits durability per-tx on that path.
  */
 class ResolvedTx private constructor(
-    val txKey: TransactionKey,
+    val stamp: TxStamp,
     val srcMsgId: MessageId,
-    val txResult: TransactionResult,
+    private val error: Throwable?,
     val externalSourceToken: ExternalSourceToken?,
     val pending: CompletableDeferred<TransactionResult>?,
     val dbOp: DbOp?,
     private val tables: MutableMap<TableRef, Table>,
 ) : AutoCloseable {
+
+    val txKey: TransactionKey get() = stamp.txKey
+
+    val txResult: TransactionResult
+        get() = if (error == null) TransactionResult.Committed(txKey) else TransactionResult.Aborted(txKey, error)
 
     /**
      * One table's staged writes, as the value that table takes if this tx applies.
@@ -92,13 +98,8 @@ class ResolvedTx private constructor(
      * bytes exist only for the replica log.
      */
     fun toReplicaMessage(termId: Long): ReplicaMessage.ResolvedTx {
-        val (committed, error) = when (txResult) {
-            is TransactionResult.Committed -> true to null
-            is TransactionResult.Aborted -> false to txResult.error
-        }
-
         return ReplicaMessage.ResolvedTx(
-            txKey.txId, txKey.systemTime, committed, error,
+            stamp, error == null, error,
             tableData = tables.entries.associate { (ref, table) ->
                 ref.schemaAndTable to
                         table.liveTable.relation.toArrowStream(table.rowsFrom, table.rowCount)
@@ -119,12 +120,12 @@ class ResolvedTx private constructor(
          */
         @JvmStatic
         fun stage(
-            openTx: OpenTx, srcMsgId: MessageId,
-            txResult: TransactionResult, dbOp: DbOp?,
+            openTx: OpenTx, srcMsgId: MessageId, stamp: TxStamp,
+            error: Throwable?, dbOp: DbOp?,
             pending: CompletableDeferred<TransactionResult>?,
         ): ResolvedTx =
             ResolvedTx(
-                openTx.txKey, srcMsgId, txResult, openTx.externalSourceToken, pending, dbOp,
+                stamp, srcMsgId, error, openTx.externalSourceToken, pending, dbOp,
                 // Every table the tx touched, including 0-row ones: `CREATE TABLE` declares columns with no
                 // rows, and it must register in the durable index on promotion. Its segment declares no
                 // columns, so the table's existence reaches resolution via its `columnTypes` instead

@@ -25,6 +25,7 @@ import xtdb.api.log.*
 import xtdb.api.log.ReplicaMessage.NoOp
 import xtdb.catalog.TableCatalog
 import xtdb.compactor.Compactor
+import xtdb.database.ClockBasis
 import xtdb.database.DatabaseLogs
 import xtdb.database.PartitionState
 import xtdb.database.PartitionStorage
@@ -483,7 +484,7 @@ class LogProcessorSimTest : SimulationTestBase() {
     }
 
     private fun assertSnapshotHasNoAbortedRows(node: SimNode, abortedTxIds: Set<MessageId>) {
-        node.liveIndex.openSnapshot(node.liveIndex.latestCompletedTx?.systemTime).use { snap ->
+        node.liveIndex.openSnapshot(node.liveIndex.head?.let { ClockBasis(it.ingestTime, it.systemTime) }).use { snap ->
             assertEquals(
                 node.liveIndex.latestCompletedTx?.txId, snap.txBasis?.txId,
                 "snapshot basis should equal liveIndex.latestCompletedTx (seed=$currentSeed)"

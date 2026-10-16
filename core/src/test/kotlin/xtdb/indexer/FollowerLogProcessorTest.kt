@@ -1,6 +1,7 @@
 package xtdb.indexer
 
 import io.micrometer.core.instrument.MeterRegistry
+import xtdb.api.tx.TxStamp
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import io.mockk.mockk
 import org.apache.arrow.memory.RootAllocator
@@ -103,9 +104,9 @@ class FollowerLogProcessorTest {
 
         val records = listOf(
             record(0, ReplicaMessage.BlockBoundary(0, 0, termId = TERM)),
-            record(1, ReplicaMessage.ResolvedTx(1, Instant.now(), true, null, emptyMap(), termId = TERM)),
-            record(2, ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap(), termId = TERM)),
-            record(3, ReplicaMessage.ResolvedTx(3, Instant.now(), true, null, emptyMap(), termId = TERM)),
+            record(1, ReplicaMessage.ResolvedTx(TxStamp.dml(1, Instant.now()), true, null, emptyMap(), termId = TERM)),
+            record(2, ReplicaMessage.ResolvedTx(TxStamp.dml(2, Instant.now()), true, null, emptyMap(), termId = TERM)),
+            record(3, ReplicaMessage.ResolvedTx(TxStamp.dml(3, Instant.now()), true, null, emptyMap(), termId = TERM)),
         )
 
         assertThrows<Fault> { proc.processRecords(records) }    }
@@ -119,7 +120,7 @@ class FollowerLogProcessorTest {
 
             proc.processRecords(listOf(
                 record(0, ReplicaMessage.BlockBoundary(0, 0, termId = TERM)),
-                record(1, ReplicaMessage.ResolvedTx(7, Instant.now(), true, null, emptyMap(), srcMsgId = 1, termId = TERM)),
+                record(1, ReplicaMessage.ResolvedTx(TxStamp.dml(7, Instant.now()), true, null, emptyMap(), srcMsgId = 1, termId = TERM)),
                 record(2, ReplicaMessage.BlockUploaded(Storage.VERSION, 1, 0, 0, emptyList(), termId = TERM)),
             ))
 
@@ -133,7 +134,7 @@ class FollowerLogProcessorTest {
 
         val inherited = PendingBlock(0, ReplicaMessage.BlockBoundary(0, 0, termId = TERM))
         inherited += record(
-            1, ReplicaMessage.ResolvedTx(3, Instant.now(), true, null, emptyMap(), srcMsgId = 2, termId = TERM)
+            1, ReplicaMessage.ResolvedTx(TxStamp.dml(3, Instant.now()), true, null, emptyMap(), srcMsgId = 2, termId = TERM)
         )
 
         val proc = makeProcessor(pendingBlock = inherited)
@@ -153,9 +154,9 @@ class FollowerLogProcessorTest {
         val proc = makeProcessor()
 
         proc.processRecords(listOf(
-            record(0, ReplicaMessage.ResolvedTx(40, Instant.now(), true, null, emptyMap(), srcMsgId = 40, termId = TERM)),
-            record(1, ReplicaMessage.ResolvedTx(42, Instant.now(), true, null, emptyMap(), srcMsgId = 42, termId = TERM)),
-            record(2, ReplicaMessage.ResolvedTx(43, Instant.now(), true, null, emptyMap(), srcMsgId = 43, termId = TERM)),
+            record(0, ReplicaMessage.ResolvedTx(TxStamp.dml(40, Instant.now()), true, null, emptyMap(), srcMsgId = 40, termId = TERM)),
+            record(1, ReplicaMessage.ResolvedTx(TxStamp.dml(42, Instant.now()), true, null, emptyMap(), srcMsgId = 42, termId = TERM)),
+            record(2, ReplicaMessage.ResolvedTx(TxStamp.dml(43, Instant.now()), true, null, emptyMap(), srcMsgId = 43, termId = TERM)),
         ))
 
         // Applying either of the first two would go backwards through `Watchers.notifyApplied`, whose
@@ -173,12 +174,12 @@ class FollowerLogProcessorTest {
         val proc = makeProcessor()
 
         proc.processRecords(listOf(
-            record(0, ReplicaMessage.ResolvedTx(500, Instant.now(), true, null, emptyMap(), srcMsgId = 500, termId = TERM)),
+            record(0, ReplicaMessage.ResolvedTx(TxStamp.dml(500, Instant.now()), true, null, emptyMap(), srcMsgId = 500, termId = TERM)),
             record(1, ReplicaMessage.TriesAdded(1, 1, emptyList(), sourceMsgId = 600, termId = TERM)),
             record(2, ReplicaMessage.BlockBoundary(1, 700, termId = TERM)),
             record(3, ReplicaMessage.BlockUploaded(1, 1, 1, 800, emptyList(), termId = TERM)),
             // at the boundary — skipped too
-            record(4, ReplicaMessage.ResolvedTx(1000, Instant.now(), true, null, emptyMap(), srcMsgId = 1000, termId = TERM)),
+            record(4, ReplicaMessage.ResolvedTx(TxStamp.dml(1000, Instant.now()), true, null, emptyMap(), srcMsgId = 1000, termId = TERM)),
         ))
 
         assertNull(liveIndex.latestCompletedTx, "nothing applied")
@@ -198,7 +199,7 @@ class FollowerLogProcessorTest {
 
         val txId = 100L
         proc.processRecords(listOf(
-            record(0, ReplicaMessage.ResolvedTx(txId, Instant.now(), true, null, emptyMap(), termId = TERM)),
+            record(0, ReplicaMessage.ResolvedTx(TxStamp.dml(txId, Instant.now()), true, null, emptyMap(), termId = TERM)),
             record(1, ReplicaMessage.BlockBoundary(0, txId, termId = TERM)),
             record(2, ReplicaMessage.BlockUploaded(Storage.VERSION, 1, 0, txId, emptyList(), termId = TERM)),
         ))
@@ -214,7 +215,7 @@ class FollowerLogProcessorTest {
 
         proc.processRecords(listOf(
             record(0, ReplicaMessage.TriesAdded(1, 1, emptyList(), sourceMsgId = 500, termId = TERM)),
-            record(1, ReplicaMessage.ResolvedTx(1001, Instant.now(), true, null, emptyMap(), srcMsgId = 1001, termId = TERM)),
+            record(1, ReplicaMessage.ResolvedTx(TxStamp.dml(1001, Instant.now()), true, null, emptyMap(), srcMsgId = 1001, termId = TERM)),
         ))
 
         assertEquals(1001L, liveIndex.latestCompletedTx?.txId)
@@ -231,7 +232,7 @@ class FollowerLogProcessorTest {
         writeBlockFile(0)
 
         proc.processRecords(listOf(
-            record(0, ReplicaMessage.ResolvedTx(0, Instant.now(), true, null, emptyMap(), srcMsgId = null, termId = TERM)),
+            record(0, ReplicaMessage.ResolvedTx(TxStamp.dml(0, Instant.now()), true, null, emptyMap(), srcMsgId = null, termId = TERM)),
             record(1, ReplicaMessage.BlockBoundary(0, -1, termId = TERM)),
             record(2, ReplicaMessage.BlockUploaded(Storage.VERSION, 1, 0, -1, emptyList(), termId = TERM)),
         ))
@@ -247,9 +248,9 @@ class FollowerLogProcessorTest {
         val proc = makeProcessor(hasExternalSource = true)
 
         proc.processRecords(listOf(
-            record(0, ReplicaMessage.ResolvedTx(0, Instant.now(), true, null, emptyMap(), srcMsgId = null, termId = TERM)),
-            record(1, ReplicaMessage.ResolvedTx(1, Instant.now(), true, null, emptyMap(), srcMsgId = 1, termId = TERM)),
-            record(2, ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap(), srcMsgId = null, termId = TERM)),
+            record(0, ReplicaMessage.ResolvedTx(TxStamp.dml(0, Instant.now()), true, null, emptyMap(), srcMsgId = null, termId = TERM)),
+            record(1, ReplicaMessage.ResolvedTx(TxStamp.dml(1, Instant.now()), true, null, emptyMap(), srcMsgId = 1, termId = TERM)),
+            record(2, ReplicaMessage.ResolvedTx(TxStamp.dml(2, Instant.now()), true, null, emptyMap(), srcMsgId = null, termId = TERM)),
         ))
 
         assertEquals(2L, watchers.latestTxId, "all three applied")
@@ -266,8 +267,8 @@ class FollowerLogProcessorTest {
 
         proc.processRecords(listOf(
             record(0, ReplicaMessage.BlockBoundary(0, 0, termId = TERM)),
-            record(1, ReplicaMessage.ResolvedTx(1, Instant.now(), true, null, emptyMap(), termId = TERM)),
-            record(2, ReplicaMessage.ResolvedTx(2, Instant.now(), true, null, emptyMap(), termId = TERM)),
+            record(1, ReplicaMessage.ResolvedTx(TxStamp.dml(1, Instant.now()), true, null, emptyMap(), termId = TERM)),
+            record(2, ReplicaMessage.ResolvedTx(TxStamp.dml(2, Instant.now()), true, null, emptyMap(), termId = TERM)),
             record(3, ReplicaMessage.BlockUploaded(Storage.VERSION, 1, 0, 0, emptyList(), termId = TERM)),
         ))
 

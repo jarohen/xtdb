@@ -1,6 +1,7 @@
 package xtdb.indexer
 
 import clojure.lang.Keyword
+import xtdb.api.tx.TxStamp
 import com.google.protobuf.ByteString
 import io.mockk.coEvery
 import io.mockk.mockk
@@ -140,7 +141,7 @@ internal class LeaderLogProcessorTest : LeaderTermTest() {
         proc.applyReplicaMessage(
             Log.Record(
                 0, 0, Instant.now(),
-                ReplicaMessage.ResolvedTx(0, Instant.now(), true, null, emptyMap(), srcMsgId = null, termId = 0)
+                ReplicaMessage.ResolvedTx(TxStamp.dml(0, Instant.now()), true, null, emptyMap(), srcMsgId = null, termId = 0)
             )
         )
 
@@ -156,7 +157,7 @@ internal class LeaderLogProcessorTest : LeaderTermTest() {
             proc.applyReplicaMessage(
                 Log.Record(
                     0, 0, Instant.now(),
-                    ReplicaMessage.ResolvedTx(0, Instant.now(), true, null, emptyMap(), srcMsgId = 0, termId = 1)
+                    ReplicaMessage.ResolvedTx(TxStamp.dml(0, Instant.now()), true, null, emptyMap(), srcMsgId = 0, termId = 1)
                 )
             )
         }
@@ -216,7 +217,7 @@ internal class LeaderLogProcessorTest : LeaderTermTest() {
         proc.applyReplicaMessage(
             record(
                 1,
-                ReplicaMessage.ResolvedTx(7, Instant.now(), true, null, emptyMap(), srcMsgId = 6, termId = 0)
+                ReplicaMessage.ResolvedTx(TxStamp.dml(7, Instant.now()), true, null, emptyMap(), srcMsgId = 6, termId = 0)
             )
         )
 
