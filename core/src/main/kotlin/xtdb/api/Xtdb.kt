@@ -357,7 +357,7 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
                 if (txRes.txKey.txId == txId) return txRes.toExecutedTx()
             }
 
-            val sql = "SELECT system_time, committed, error FROM xt.txs FOR ALL VALID_TIME WHERE _id = $txId"
+            val sql = "SELECT COALESCE(system_time, _system_from) AS system_time, committed, error FROM xt.txs FOR ALL VALID_TIME WHERE _id = $txId"
             return openStatement(parseStatement(sql), awaitDb)
                 .openQuery(QueryOpts(null, defaultTz))
                 .use { c ->

@@ -160,7 +160,8 @@ class OpenTx
         liveTable.writeValidTimeMicros(ingestTimeMicros, MAX_LONG)
 
         docWriter.vectorFor("_id", I64.arrowType, false).writeLong(txId)
-        docWriter.vectorFor("system_time", INSTANT.arrowType, false).writeLong(stamp.txKey.systemTime.asMicros)
+        docWriter.vectorFor("system_time", INSTANT.arrowType, stamp.systemTime == null)
+            .let { w -> stamp.systemTime?.let { w.writeLong(it.asMicros) } ?: w.writeNull() }
         docWriter.vectorFor("committed", BOOL.arrowType, false).writeBoolean(error == null)
         docWriter.vectorFor("user_metadata", VectorType.structOf().arrowType, true).writeObject(userMetadata)
 

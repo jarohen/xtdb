@@ -4,7 +4,6 @@ import com.google.protobuf.ByteString
 import xtdb.api.tx.ExternalSourceToken
 import xtdb.api.tx.TxStamp
 import xtdb.api.TransactionKey
-import xtdb.log.proto.SystemClock
 import xtdb.database.Database
 import xtdb.types.MessageId
 import xtdb.log.proto.ReplicaLogMessage
@@ -75,11 +74,7 @@ sealed interface ReplicaMessage {
                                     TxStamp(
                                         it.txId,
                                         fromMicros(it.ingestTimeMicros),
-                                        when (it.systemClock) {
-                                            SystemClock.MOVED -> fromMicros(it.systemTimeMicros)
-                                            SystemClock.UNMOVED -> null
-                                            else -> error("unknown system clock: ${it.systemClock}")
-                                        },
+                                        if (it.hasSystemTimeMicros()) fromMicros(it.systemTimeMicros) else null,
                                     )
                                 else TxStamp.dml(it.txId, fromMicros(it.systemTimeMicros)),
                                 it.committed,
@@ -165,9 +160,8 @@ sealed interface ReplicaMessage {
         override fun toLogMessage() = replicaLogMessage {
             resolvedTx = resolvedTx {
                 this.txId = this@ResolvedTx.stamp.txId
-                this.systemTimeMicros = this@ResolvedTx.stamp.txKey.systemTime.asMicros
+                this@ResolvedTx.stamp.systemTime?.let { this.systemTimeMicros = it.asMicros }
                 this.ingestTimeMicros = this@ResolvedTx.stamp.ingestTime.asMicros
-                this.systemClock = if (this@ResolvedTx.stamp.systemTime == null) SystemClock.UNMOVED else SystemClock.MOVED
                 this.committed = this@ResolvedTx.committed
                 this.error = this@ResolvedTx.error?.let { ByteString.copyFrom(writeTransit(it, MSGPACK)) } ?: ByteString.EMPTY
                 this.tableData.putAll(this@ResolvedTx.tableData)
