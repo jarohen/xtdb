@@ -76,8 +76,41 @@ Xtdb.openNode().use { node ->
 }
 ```
 
-The same node also serves the [FlightSQL listener](/adbc/reference#over-the-wire-flightsql), so you can reach it from the Apache ADBC Java FlightSQL client over the wire instead.
-One caveat there: that client doesn't query `getSessionOptions`, so `getCurrentCatalog` / `getCurrentDbSchema` are unsupported over the wire (an upstream gap, not an XTDB one). The in-process path is unaffected.
+### Over the wire
+
+From a JVM that isn't running the node, connect to the node's [Flight SQL server](/adbc/reference#over-the-wire-flightsql) with the Apache ADBC Java Flight SQL driver — there is no XTDB-specific driver to add:
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation("org.apache.arrow.adbc:adbc-driver-flight-sql:0.23.0")
+}
+```
+
+The connection it returns is the same `AdbcConnection` interface as the in-process one, so the rest of your code doesn't change:
+
+```kotlin
+import org.apache.arrow.adbc.driver.flightsql.FlightSqlDriver
+import org.apache.arrow.memory.RootAllocator
+
+RootAllocator().use { allocator ->
+    FlightSqlDriver(allocator).open(mapOf("uri" to "grpc+tcp://localhost:3000")).use { db ->
+        db.connect().use { conn ->
+            conn.createStatement().use { stmt ->
+                stmt.setSqlQuery("SELECT 1")
+                stmt.executeQuery().use { result ->
+                    val reader = result.reader
+                    while (reader.loadNextBatch()) println(reader.vectorSchemaRoot.contentToTSVString())
+                }
+            }
+        }
+    }
+}
+```
+
+- **`grpc+tcp://`, not `grpc+tls://`**: the Flight SQL server doesn't terminate TLS itself, so a TLS connection goes through a proxy in front of it.
+- **`getCurrentCatalog` / `getCurrentDbSchema` are unsupported over the wire**: this client doesn't query `getSessionOptions` (an upstream gap, not an XTDB one). The in-process path is unaffected.
+- **Behind a load balancer, a connection has to keep reaching one node** — see [Running more than one node](/adbc#running-more-than-one-node).
 
 See the [ADBC reference](/adbc/reference) for the full supported surface (its examples are in Kotlin).
 

@@ -83,8 +83,42 @@ try (var node = Xtdb.openNode();
 }
 ```
 
-The same node also serves the [FlightSQL listener](/adbc/reference#over-the-wire-flightsql), so you can reach it from the Apache ADBC Java FlightSQL client over the wire instead.
-One caveat there: that client doesn't query `getSessionOptions`, so `getCurrentCatalog` / `getCurrentDbSchema` are unsupported over the wire (an upstream gap, not an XTDB one). The in-process path is unaffected.
+### Over the wire
+
+From a JVM that isn't running the node, connect to the node's [Flight SQL server](/adbc/reference#over-the-wire-flightsql) with the Apache ADBC Java Flight SQL driver — there is no XTDB-specific driver to add:
+
+```xml
+<dependency>
+    <groupId>org.apache.arrow.adbc</groupId>
+    <artifactId>adbc-driver-flight-sql</artifactId>
+    <version>0.23.0</version>
+</dependency>
+```
+
+The connection it returns is the same `AdbcConnection` interface as the in-process one, so the rest of your code doesn't change:
+
+```java
+import java.util.Map;
+import org.apache.arrow.adbc.driver.flightsql.FlightSqlDriver;
+import org.apache.arrow.memory.RootAllocator;
+
+try (var allocator = new RootAllocator();
+     var db = new FlightSqlDriver(allocator).open(Map.of("uri", "grpc+tcp://localhost:3000"));
+     var conn = db.connect();
+     var stmt = conn.createStatement()) {
+    stmt.setSqlQuery("SELECT 1");
+    try (var result = stmt.executeQuery()) {
+        var reader = result.getReader();
+        while (reader.loadNextBatch()) {
+            System.out.println(reader.getVectorSchemaRoot().contentToTSVString());
+        }
+    }
+}
+```
+
+- **`grpc+tcp://`, not `grpc+tls://`**: the Flight SQL server doesn't terminate TLS itself, so a TLS connection goes through a proxy in front of it.
+- **`getCurrentCatalog` / `getCurrentDbSchema` are unsupported over the wire**: this client doesn't query `getSessionOptions` (an upstream gap, not an XTDB one). The in-process path is unaffected.
+- **Behind a load balancer, a connection has to keep reaching one node** — see [Running more than one node](/adbc#running-more-than-one-node).
 
 See the [ADBC reference](/adbc/reference) for the full supported surface.
 

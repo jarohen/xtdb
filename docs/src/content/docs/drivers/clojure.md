@@ -102,6 +102,56 @@ In-process XTDB is particularly useful for testing and interactive development -
 
 This node uses exactly the same API as the remote client - so, again, from here, check out the [`xtdb.api` API docs](/drivers/clojure/codox/xtdb.api.html) to submit data and run queries.
 
+## Arrow-native access via ADBC
+
+An in-process node is already an [ADBC](/adbc) database: `xt/q` and `xt/execute-tx` against a node run through its ADBC connection, decoding the Arrow results into Clojure data, with no pgwire in between.
+
+`xt/open-adbc-conn` opens a connection of your own on the node, for when you want one session across several calls - a transaction, or reads that see your own writes.
+It returns an `org.apache.arrow.adbc.core.AdbcConnection`, which the `xtdb.api` functions accept, and which you close:
+
+```clojure
+(require '[xtdb.api :as xt]
+         '[xtdb.node :as xtn])
+
+(with-open [node (xtn/start-node)
+            conn (xt/open-adbc-conn node)]
+  (xt/execute-tx conn [[:put-docs :users {:xt/id "jms", :name "James"}]])
+  (xt/q conn "SELECT * FROM users"))
+
+;; => [{:xt/id "jms", :name "James"}]
+```
+
+For the results as Arrow rather than Clojure data, use the connection through the ADBC Java API directly:
+
+```clojure
+(import '(org.apache.arrow.adbc.core AdbcConnection)
+        '(org.apache.arrow.vector.ipc ArrowReader))
+
+(with-open [stmt (.createStatement ^AdbcConnection conn)]
+  (.setSqlQuery stmt "SELECT * FROM users")
+  (with-open [res (.executeQuery stmt)]
+    (let [rdr ^ArrowReader (.getReader res)]
+      (while (.loadNextBatch rdr)
+        (println (.contentToTSVString (.getVectorSchemaRoot rdr)))))))
+```
+
+### Over the wire
+
+`xtdb.flight-sql/open-conn` connects to a remote node's [Flight SQL server](/adbc/reference#over-the-wire-flightsql), and returns a connection the `xtdb.api` functions accept, as `xt/open-adbc-conn`'s does.
+It lives in `xtdb-core`, so add that alongside `xtdb-api`, and close the connection when you're done:
+
+```clojure
+(require '[xtdb.api :as xt]
+         '[xtdb.flight-sql :as fsql])
+
+(with-open [conn (fsql/open-conn {:host "localhost", :port 3000})]
+  (xt/q conn "SELECT * FROM users"))
+```
+
+- **`:host`** defaults to `127.0.0.1`, **`:port`** is the node's Flight SQL port (`3000` in the Docker images), and **`:dbname`** selects the database (default `xtdb`).
+- **The connection holds a Flight SQL session**, so its reads see its own writes and its transactions aren't shared with other clients.
+  Behind a load balancer, it has to keep reaching the same node - see [Running more than one node](/adbc#running-more-than-one-node).
+
 ## Babashka
 
 [Babashka](https://babashka.org/) is a fast-starting Clojure scripting environment that can also connect to XTDB. See the [driver-examples repository](https://github.com/xtdb/driver-examples) for Babashka-specific examples.
