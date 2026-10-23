@@ -3,142 +3,128 @@
             [clojure.tools.logging :as log]
             [xtdb.api :as xt]
             [xtdb.bench :as b]
-            [xtdb.test-util :as tu]
-            [xtdb.time :as time]
             [xtdb.util :as util])
-  (:import (java.time Duration Instant LocalTime)
-           (java.util AbstractMap)))
+  (:import (java.time Duration Instant)))
 
-(defn random-float [min max] (+ min (* (rand) (- max min))))
+(def ^:private ^Instant start-instant #xt/instant "2020-01-01T00:00:00Z")
+(def ^:private ^Duration interval (Duration/ofMinutes 5))
+(def ^:private intervals-per-day 288)
+(def ^:private devices-per-tx 5000)
 
-(defn docs [devices readings]
-  (->> (tu/->instants :minute 5 #inst "2020-01-01")
-       (partition 2 1)
-       (take readings)
-       (map (fn [[start end]]
-              (into [:put-docs {:into :readings :valid-from start :valid-to end}]
-                    (for [i (range devices)]
-                      {:xt/id i :value (random-float -100 100)}))))))
+(def ^:private all-metrics [:temperature :humidity :pressure :battery])
 
-(def max-valid-time-q
-  "SELECT max(_valid_from) AS max_valid_time
-   FROM readings FOR ALL VALID_TIME
-   WHERE _id = 0")
+(defn- metrics-for [n]
+  (vec (take n (concat all-metrics (map #(keyword (str "metric" %)) (range))))))
 
-(defn- subtract-period
-  ([inst-like period] (subtract-period inst-like period 1))
-  ([inst-like period len]
-   (let [inst (time/->instant inst-like)]
-     (case period
-       :now inst
-       :hour (.minusSeconds inst (* 60 60 len))
-       :day (.minusSeconds inst (* 60 60 24 len))
-       :week (.minusSeconds inst (* 60 60 24 7 len))
-       :month (.minusSeconds inst (* 60 60 24 30 len))
-       :quarter (.minusSeconds inst (* 60 60 24 30 3 len))
-       :year (.minusSeconds inst (* 60 60 24 30 12 len))))))
+(defn- ->interval-start ^Instant [^long idx]
+  (.plus start-instant (.multipliedBy interval idx)))
 
-(defn aggregate-query
-  ([node start end] (aggregate-query node start end {}))
-  ([node start end opts]
-   (xt/q node ["SELECT AVG(value) AS avg, MIN(VALUE) AS min, MAX(VALUE) AS max
-                FROM readings FOR VALID_TIME BETWEEN ? AND ?
-                GROUP BY _id" start end]
-         opts)))
+(defn- submit-interval! [node metrics devices idx]
+  (let [valid-from (->interval-start idx)
+        valid-to (.plus valid-from interval)]
+    (doseq [dev-start (range 0 devices devices-per-tx)
+            :let [dev-ids (range dev-start (min devices (+ dev-start devices-per-tx)))]]
+      (xt/submit-tx node
+                    (for [metric metrics]
+                      (into [:put-docs {:into metric :valid-from valid-from :valid-to valid-to}]
+                            (for [i dev-ids]
+                              {:xt/id i :value (- (* 200 (rand)) 100)})))))))
 
-(defn check-query
-  "A query that returns the number 5 min intervals in the range. Good for sanity checking."
-  ([node start end] (aggregate-query node start end {}))
-  ([node start end opts]
-   (xt/q node ["SELECT COUNT(*) AS cnt, _id AS id
-                FROM readings FOR VALID_TIME BETWEEN ? AND ?
-                GROUP BY _id" start end]
-         opts)))
+(defn- scan-rows-read [node sql args]
+  (->> (xt/q node (into [(str "EXPLAIN ANALYZE " sql)] args))
+       (filter #(= :scan (:op %)))
+       (keep #(get-in % [:attributes :scan-rows-read]))
+       (reduce + 0)))
 
-(defn ->query-stage
-  ([interval] (->query-stage interval nil))
-  ([interval offset] (->query-stage interval offset 1))
-  ([interval offset len]
-   {:t :do
-    :stage (if offset
-             (keyword (str "query-offset-" len "-" (name offset) "-interval-" (name interval)))
-             (keyword (str "query-recent-interval-" (name interval))))
-    :tasks [{:t :call :f (fn [{:keys [node !state]}]
-                           (let [{:keys [latest-completed-tx max-valid-time]} @!state
-                                 max-valid-time (cond-> max-valid-time
-                                                  offset (subtract-period offset len))]
-                             (aggregate-query node (subtract-period max-valid-time interval) max-valid-time
-                                              {:current-time (:system-time latest-completed-tx)})))}]}))
+(defn- agg-sql [metric]
+  (format "SELECT AVG(value) AS avg, MIN(value) AS min, MAX(value) AS max
+           FROM %s FOR VALID_TIME BETWEEN ? AND ?" (name metric)))
 
-(defn ->ingestion-stage
-  ([devices readings] (->ingestion-stage devices readings {}))
-  ([devices readings {:keys [backfill?], :or {backfill? true}}]
-   [{:t :call, :stage :ingest
-     :f (fn [{:keys [node]}]
-          (log/infof "Inserting %d readings for %d devices" readings devices)
+(defn- cross-metric-sql [metrics]
+  (->> metrics
+       (map #(format "SELECT '%s' AS metric, AVG(value) AS avg FROM %s FOR VALID_TIME BETWEEN ? AND ?"
+                     (name %) (name %)))
+       (interpose " UNION ALL ")
+       (apply str)))
 
-          (doseq [[idx batch] (map vector (range) (docs devices readings))
-                  :let [[_put-docs {:keys [^Instant valid-from, ^Instant valid-to]}] batch]]
-            (when (zero? (mod idx 1000))
-              (log/debugf "Submitting readings from %s (batch %d)" (str valid-from) idx))
+(defn- ->query-stage [stage-name sql n-tables ->window]
+  {:t :call
+   :stage stage-name
+   :f (fn [{:keys [node !state]}]
+        (let [[from to] (->window (:end @!state))
+              args (vec (take (* 2 n-tables) (cycle [from to])))
+              rows-read (scan-rows-read node sql args)
+              start-ms (System/currentTimeMillis)
+              res (xt/q node (into [sql] args))
+              q-ms (- (System/currentTimeMillis) start-ms)]
+          (log/infof "QUERY-RESULT stage=%s window=[%s, %s] rows-scanned=%d query-ms=%d result=%s"
+                     (name stage-name) from to rows-read q-ms (pr-str (take 4 res)))
+          (println (format "QUERY-RESULT stage=%s rows-scanned=%d query-ms=%d" (name stage-name) rows-read q-ms))))})
 
-            (xt/submit-tx node [batch]
-                          (when backfill?
-                            {:system-time (.plus valid-to (Duration/ofNanos (* idx 1000)))}))))}
-    {:t :call, :stage :sync
-     :f (fn [{:keys [node]}]
-          (b/sync-node node (Duration/ofMinutes 5)))}
+(defn- window [^Duration len ^Duration offset]
+  (fn [^Instant end]
+    (let [to (.minus end offset)]
+      [(.minus to len) to])))
 
-    {:t :call, :stage :compact
-     :f (fn [{:keys [node]}]
-          (b/flush-block! node)
-          (b/compact! node))}]))
+(defn- ->ingestion-stage [{:keys [devices intervals metrics]}]
+  [{:t :call, :stage :ingest
+    :f (fn [{:keys [node]}]
+         (log/infof "Inserting %d intervals for %d devices across %d metrics (%d rows)"
+                    intervals devices (count metrics) (* intervals devices (count metrics)))
+         (doseq [idx (range intervals)]
+           (when (zero? (mod idx 100))
+             (log/infof "Submitting readings from %s (interval %d/%d)" (->interval-start idx) idx intervals))
+           (submit-interval! node metrics devices idx)))}
+   {:t :call, :stage :sync
+    :f (fn [{:keys [node]}] (b/sync-node node (Duration/ofHours 6)))}
+   {:t :call, :stage :compact
+    :f (fn [{:keys [node]}]
+         (b/flush-block! node)
+         (b/compact! node))}])
 
 (defmethod b/cli-flags :readings [_]
   [[nil "--devices devices" "device count"
     :parse-fn parse-long
-    :default 10000]
-   [nil "--readings READINGS" "reading count per device"
+    :default 100000]
+   [nil "--days DAYS" "days of readings (one reading per device per metric every 5 minutes)"
     :parse-fn parse-long
-    :default 10000]
-
+    :default 90]
+   [nil "--metrics METRICS" "metric count, each in its own table"
+    :parse-fn parse-long
+    :default 4]
+   [nil "--within-file-recency-branching BOOL" "enable compactor.withinFileRecencyBranching (true/false)"
+    :id :within-file-recency-branching?
+    :parse-fn parse-boolean
+    :default false]
    ["-h" "--help"]])
 
-(defmethod b/->benchmark :readings [_ {:keys [readings devices seed no-load?] :or {seed 0}}]
-  (log/info {:readings readings :devices devices :seed seed :no-load? no-load?})
-  {:title "Readings benchmarks"
-   :benchmark-type :readings
-   :seed seed
-   :parameters {:readings readings :devices devices :seed seed :no-load? no-load?}
-   :->state #(do {:!state (atom {})})
-   :tasks (concat (when-not no-load?
-                    (->ingestion-stage devices readings))
-
-                  [{:t :call
-                    :f (fn [{:keys [node !state]}]
-                         (let [latest-completed-tx (-> (xt/status node)
-                                                       (get-in [:latest-completed-txs "xtdb" 0]))
-                               max-valid-time (-> (xt/q node max-valid-time-q)
-                                                  first
-                                                  :max-valid-time)]
-                           (swap! !state into {:latest-completed-tx latest-completed-tx
-                                               :max-valid-time max-valid-time})))}]
-
-                  ;; this accumulates over the most recent interval
-                  (for [interval [:now :hour :day :week :month :quarter :year]]
-                    (->query-stage interval))
-
-                  ;; running the same queries but a month (valid-time) in the past
-                  (for [interval [:now :hour :day :week :month :quarter :year]]
-                    (->query-stage interval :month))
-
-                  (for [interval [:now :hour :day :week :month :quarter :year]]
-                    (->query-stage interval :quarter)))})
+(defmethod b/->benchmark :readings [_ {:keys [devices days metrics within-file-recency-branching? seed no-load?]
+                                       :or {devices 100000, days 90, metrics 4, seed 0}}]
+  (let [metrics (metrics-for metrics)
+        intervals (* days intervals-per-day)
+        end (->interval-start intervals)
+        q-metric (first metrics)
+        hour (Duration/ofHours 1)
+        day (Duration/ofDays 1)]
+    (log/info {:devices devices :days days :metrics metrics :intervals intervals
+               :within-file-recency-branching? within-file-recency-branching? :seed seed})
+    {:title "Readings benchmarks"
+     :benchmark-type :readings
+     :seed seed
+     :parameters {:devices devices :days days :metrics (count metrics) :seed seed :no-load? no-load?
+                  :within-file-recency-branching? (boolean within-file-recency-branching?)}
+     :->state #(do {:!state (atom {:end end})})
+     :tasks (concat (when-not no-load?
+                      (->ingestion-stage {:devices devices :intervals intervals :metrics metrics}))
+                    [(->query-stage :query-last-hour (agg-sql q-metric) 1 (window hour Duration/ZERO))
+                     (->query-stage :query-last-day (agg-sql q-metric) 1 (window day Duration/ZERO))
+                     (->query-stage :query-hour-7d-back (agg-sql q-metric) 1 (window hour (Duration/ofDays 7)))
+                     (->query-stage :query-hour-30d-back (agg-sql q-metric) 1 (window hour (Duration/ofDays 30)))
+                     (->query-stage :query-cross-metric-last-hour (cross-metric-sql metrics) (count metrics)
+                                    (window hour Duration/ZERO))])}))
 
 ;; not intended to be run as a test - more for ease of REPL dev
 (t/deftest ^:benchmark run-readings
-  (let [path (util/->path "/home/james/tmp/readings-bench")
-        no-load? true]
-
-    (-> (b/->benchmark :readings {:readings 100000, :devices 10000, :no-load? no-load?})
-        (b/run-benchmark {:node-dir path, :no-load? no-load?}))))
+  (util/with-tmp-dirs #{node-tmp-dir}
+    (-> (b/->benchmark :readings {:devices 100, :days 1, :metrics 2})
+        (b/run-benchmark {:node-dir node-tmp-dir}))))

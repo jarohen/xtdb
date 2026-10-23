@@ -485,7 +485,7 @@
     benchmark-type)
   :default ::default)
 
-(defn run-benchmark [benchmark {:keys [node-dir no-load? config-file bench-log-file timeout tracing-endpoint] :as _opts}]
+(defn run-benchmark [benchmark {:keys [node-dir no-load? config-file bench-log-file timeout tracing-endpoint within-file-recency-branching?] :as _opts}]
   (let [benchmark-fn (compile-benchmark (-> benchmark
                                             (assoc :bench-log-file bench-log-file)
                                             (assoc :timeout timeout)))]
@@ -505,7 +505,8 @@
       (letfn [(run [node-dir]
                 (try
                   (with-open [node (tu/->local-node (cond-> {:node-dir node-dir
-                                                             :instant-src (InstantSource/system)}
+                                                             :instant-src (InstantSource/system)
+                                                             :within-file-recency-branching? (when within-file-recency-branching? true)}
                                                       tracing-endpoint (assoc :tracer {:enabled? true
                                                                                        :endpoint tracing-endpoint
                                                                                        :service-name "xtdb-bench"})))]
