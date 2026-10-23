@@ -20,7 +20,7 @@
   (.plus start-instant (.multipliedBy interval idx)))
 
 (defn- submit-interval! [node metrics devices idx]
-  (let [valid-from (->interval-start idx)
+  (let [^Instant valid-from (->interval-start idx)
         valid-to (.plus valid-from interval)]
     (doseq [dev-start (range 0 devices devices-per-tx)
             :let [dev-ids (range dev-start (min devices (+ dev-start devices-per-tx)))]]
