@@ -10,8 +10,7 @@
   (:import (java.time Duration)))
 
 (def ^:dynamic *qs*
-  (-> (into #{} (range 1 (inc (count tpch-ra/queries))))
-      (disj 21)))
+  #{6})
 
 (defn query-tpch [stage-name query-language scale-factor expected i]
   (let [q (nth tpch-ra/queries i)
@@ -80,7 +79,9 @@
 
            (queries-stage :cold-queries query-language scale-factor)
 
-           (queries-stage :hot-queries query-language scale-factor)]})
+           {:t :do, :stage :hot-repeats
+            :tasks (vec (for [rep (range 10)]
+                          (queries-stage (keyword (str "hot-queries-" rep)) query-language scale-factor)))}]})
 
 (comment
   (binding [*qs* #{1}]

@@ -869,6 +869,9 @@ fun createBench(benchName: String, properties: Map<String, String>, defaultArgs:
         if (project.hasProperty("jfr"))
             jvmArgs("-XX:StartFlightRecording=settings=profile,dumponexit=true,filename=${System.getProperty("user.home")}/Snapshots/xtdb-$benchName-%t.jfr")
 
+        if (project.hasProperty("narrowVarTypes"))
+            jvmArgs("-Dxtdb.narrowVarTypes=true")
+
         this.args = args
     }
 }
