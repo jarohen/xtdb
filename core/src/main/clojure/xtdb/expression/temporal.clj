@@ -514,55 +514,55 @@
   (->interval Period/ZERO d))
 
 ;; Used for DAY as lone start-field
-(defn ->day-md*-interval [^Period p ^Duration d]
-  (->interval (Period/ofDays (+ (.getDays p) (.toDays d))) Duration/ZERO))
+(defn ->day-md*-interval [^long days ^Duration d]
+  (Interval. 0 (+ days (.toDays d)) 0))
 
 ;; Used for DAY as start-field and HOUR as end-field
-(defn ->day-hour-md*-interval [^Period p ^Duration d]
-  (->interval (Period/ofDays (+ (.getDays p) (.toDays d))) (Duration/ofHours (rem (.toHours d) 24))))
+(defn ->day-hour-md*-interval [^long days ^Duration d]
+  (Interval. 0 (+ days (.toDays d)) (.toNanos (Duration/ofHours (rem (.toHours d) 24)))))
 
 ;; Used for DAY as start-field and MINUTE as end-field
-(defn ->day-minute-md*-interval [^Period p ^Duration d]
-  (->interval (Period/ofDays (+ (.getDays p) (.toDays d))) (Duration/ofMinutes (rem (.toMinutes d) 1440))))
+(defn ->day-minute-md*-interval [^long days ^Duration d]
+  (Interval. 0 (+ days (.toDays d)) (.toNanos (Duration/ofMinutes (rem (.toMinutes d) 1440)))))
 
 ;; Used for DAY as start-field and SECOND as end-field
-(defn ->day-second-md*-interval [^Period p ^Duration d ^long fractional-precision]
+(defn ->day-second-md*-interval [^long days ^Duration d ^long fractional-precision]
   (let [^Duration altered-precision-duration (time/alter-duration-precision fractional-precision d)]
-    (->interval (Period/ofDays (+ (.getDays p) (.toDays d)))
-                (.minusDays altered-precision-duration (.toDays d)))))
+    (Interval. 0 (+ days (.toDays d))
+               (.toNanos (.minusDays altered-precision-duration (.toDays d))))))
 
 ;; Used for HOUR as lone start-field or as end-field
-(defn ->hour-md*-interval [^Period p ^Duration d]
-  (->interval Period/ZERO (.plusDays (Duration/ofHours (.toHours d)) (.getDays p))))
+(defn ->hour-md*-interval [^long days ^Duration d]
+  (Interval. 0 0 (.toNanos (.plusDays (Duration/ofHours (.toHours d)) days))))
 
 ;; Used for MINUTE as lone start-field or as end-field
-(defn ->minute-md*-interval [^Period p ^Duration d]
-  (->interval Period/ZERO (.plusDays (Duration/ofMinutes (.toMinutes d)) (.getDays p))))
+(defn ->minute-md*-interval [^long days ^Duration d]
+  (Interval. 0 0 (.toNanos (.plusDays (Duration/ofMinutes (.toMinutes d)) days))))
 
 ;; Used for SECOND as lone start-field or as end-field
-(defn ->second-md*-interval [^Period p ^Duration d ^long fractional-precision]
+(defn ->second-md*-interval [^long days ^Duration d ^long fractional-precision]
   (let [^Duration altered-precision-duration (time/alter-duration-precision fractional-precision d)]
-    (->interval Period/ZERO (.plusDays altered-precision-duration (.getDays p)))))
+    (Interval. 0 0 (.toNanos (.plusDays altered-precision-duration days)))))
 
 (defn normalize-interval-to-md*-iq [^Interval itvl {:keys [start-field end-field fractional-precision]}]
-  (let [period (.getPeriod itvl)
+  (let [days (.getDays itvl)
         duration (.getDuration itvl)]
 
-    (when (> (.toTotalMonths period) 0)
+    (when (> (.getMonths itvl) 0)
       (throw (throw (err/incorrect :xtdb.expression/cannot-normalize-md*-interval-with-months
                                    "Cannot normalize month-day-micro/nano interval with non-zero month component"))))
 
     (case [start-field end-field]
-      ["DAY" nil] (->day-md*-interval period duration)
-      ["DAY" "HOUR"] (->day-hour-md*-interval period duration)
-      ["DAY" "MINUTE"] (->day-minute-md*-interval period duration)
-      ["DAY" "SECOND"] (->day-second-md*-interval period duration fractional-precision)
-      ["HOUR" nil] (->hour-md*-interval period duration)
-      ["HOUR" "MINUTE"] (->minute-md*-interval period duration)
-      ["HOUR" "SECOND"] (->second-md*-interval period duration fractional-precision)
-      ["MINUTE" nil] (->minute-md*-interval period duration)
-      ["MINUTE" "SECOND"] (->second-md*-interval period duration fractional-precision)
-      ["SECOND" nil] (->second-md*-interval period duration fractional-precision))))
+      ["DAY" nil] (->day-md*-interval days duration)
+      ["DAY" "HOUR"] (->day-hour-md*-interval days duration)
+      ["DAY" "MINUTE"] (->day-minute-md*-interval days duration)
+      ["DAY" "SECOND"] (->day-second-md*-interval days duration fractional-precision)
+      ["HOUR" nil] (->hour-md*-interval days duration)
+      ["HOUR" "MINUTE"] (->minute-md*-interval days duration)
+      ["HOUR" "SECOND"] (->second-md*-interval days duration fractional-precision)
+      ["MINUTE" nil] (->minute-md*-interval days duration)
+      ["MINUTE" "SECOND"] (->second-md*-interval days duration fractional-precision)
+      ["SECOND" nil] (->second-md*-interval days duration fractional-precision))))
 
 (defn gen-normalize-call [interval-qualifier]
   (if interval-qualifier (list `(normalize-interval-to-md*-iq ~interval-qualifier)) '()))
@@ -606,13 +606,12 @@
 
 
 (defn normalize-interval-to-ym-iq [^Interval itvl {:keys [start-field end-field]}]
-  (let [period (.getPeriod itvl)
-        total-months-in-period (.toTotalMonths period)
-        years-in-period (quot total-months-in-period 12)]
+  (let [months (.getMonths itvl)
+        years (quot months 12)]
     (case [start-field end-field]
-      ["YEAR" nil] (->interval (Period/ofYears years-in-period) Duration/ZERO)
-      ["YEAR" "MONTH"] (->interval (Period/of years-in-period (mod total-months-in-period 12) 0) Duration/ZERO)
-      ["MONTH" nil] (->interval (Period/ofMonths total-months-in-period) Duration/ZERO))))
+      ["YEAR" nil] (Interval. (* years 12) 0 0)
+      ["YEAR" "MONTH"] (Interval. (+ (* years 12) (mod months 12)) 0 0)
+      ["MONTH" nil] (Interval. months 0 0))))
 
 (defmethod expr/codegen-cast [:interval :interval] [{:keys [^VectorType source-type] interval-qualifier :cast-opts}]
   (let [source-unit (st/interval-type->unit source-type)]
@@ -1593,53 +1592,29 @@
    :->call-code (fn [[_ epoch-day-code]]
                   (truncate-date-code field epoch-day-code))})
 
-(defn truncated-millennium [^Period period]
-  (let [months (.toTotalMonths period)]
-    (Period/ofMonths (- months (rem months 12000)))))
-
-(defn truncated-century [^Period period]
-  (let [months (.toTotalMonths period)]
-    (Period/ofMonths (- months (rem months 1200)))))
-
-(defn truncated-decade [^Period period]
-  (let [months (.toTotalMonths period)]
-    (Period/ofMonths (- months (rem months 120)))))
-
-(defn truncated-year [^Period period]
-  (let [months (.toTotalMonths period)]
-    (Period/ofMonths (- months (rem months 12)))))
-
-(defn truncated-quarter [^Period period]
-  (let [months (.toTotalMonths period)]
-    (Period/ofMonths (- months (rem months 3)))))
-
-(defn truncated-month [^Period period]
-  (let [months (.toTotalMonths period)]
-    (Period/ofMonths months)))
-
-(defn truncated-week [^Period period]
-  (let [day (.getDays period)]
-    (Period/of (.getYears period) (.getMonths period) (- day (rem day 7)))))
+(defn truncated-months ^long [^long months ^long multiple]
+  (- months (rem months multiple)))
 
 (defmethod expr/codegen-call [:date_trunc :utf8 :interval] [{[{field :literal} _] :args, [_ interval-type] :arg-types}]
   {:return-type interval-type
    :->call-code (fn [[_ itvl]]
-                  (let [period `(.getPeriod ^Interval ~itvl)
+                  (let [months `(.getMonths ^Interval ~itvl)
+                        days `(.getDays ^Interval ~itvl)
                         duration `(.getDuration ^Interval ~itvl)]
                     (case field
-                      "MILLENNIUM" `(->interval (truncated-millennium ~period))
-                      "CENTURY" `(->interval (truncated-century ~period))
-                      "DECADE" `(->interval (truncated-decade ~period))
-                      "YEAR" `(->interval (truncated-year ~period))
-                      "QUARTER" `(->interval (truncated-quarter ~period))
-                      "MONTH" `(->interval (truncated-month ~period))
-                      "WEEK" `(->interval (truncated-week ~period))
-                      "DAY" `(->interval ~period)
-                      "HOUR" `(->interval ~period (.truncatedTo ~duration ChronoUnit/HOURS))
-                      "MINUTE" `(->interval ~period (.truncatedTo ~duration ChronoUnit/MINUTES))
-                      "SECOND" `(->interval ~period (.truncatedTo ~duration ChronoUnit/SECONDS))
-                      "MILLISECOND" `(->interval ~period (.truncatedTo ~duration ChronoUnit/MILLIS))
-                      "MICROSECOND" `(->interval ~period (.truncatedTo ~duration ChronoUnit/MICROS)))))})
+                      "MILLENNIUM" `(Interval. (truncated-months ~months 12000) 0 0)
+                      "CENTURY" `(Interval. (truncated-months ~months 1200) 0 0)
+                      "DECADE" `(Interval. (truncated-months ~months 120) 0 0)
+                      "YEAR" `(Interval. (truncated-months ~months 12) 0 0)
+                      "QUARTER" `(Interval. (truncated-months ~months 3) 0 0)
+                      "MONTH" `(Interval. ~months 0 0)
+                      "WEEK" `(Interval. ~months (truncated-months ~days 7) 0)
+                      "DAY" `(Interval. ~months ~days 0)
+                      "HOUR" `(Interval. ~months ~days (.toNanos (.truncatedTo ~duration ChronoUnit/HOURS)))
+                      "MINUTE" `(Interval. ~months ~days (.toNanos (.truncatedTo ~duration ChronoUnit/MINUTES)))
+                      "SECOND" `(Interval. ~months ~days (.toNanos (.truncatedTo ~duration ChronoUnit/SECONDS)))
+                      "MILLISECOND" `(Interval. ~months ~days (.toNanos (.truncatedTo ~duration ChronoUnit/MILLIS)))
+                      "MICROSECOND" `(Interval. ~months ~days (.toNanos (.truncatedTo ~duration ChronoUnit/MICROS))))))})
 
 (defmethod expr/codegen-call [:age :timestamp-local :timestamp-local] [{[^VectorType$Mono x-type, ^VectorType$Mono y-type] :arg-types}]
   (let [x-unit (st/timestamp-type->unit x-type)

@@ -502,6 +502,79 @@
     "P1Y-3D" (Interval. 12 -3 0)
     "P-1Y-10M3DT4H" (Interval. -22 3 (* 4 3600 1000000000))))
 
+(defn- period-duration-cast [^Interval i {:keys [start-field end-field ^long fractional-precision]}]
+  (let [p (.getPeriod i)
+        d (.getDuration i)
+        months (.toTotalMonths p)
+        years (quot months 12)
+        days (Period/ofDays (+ (.getDays p) (.toDays d)))
+        ^Duration altered (time/alter-duration-precision fractional-precision d)]
+    (case [start-field end-field]
+      ["YEAR" nil] (Interval. (Period/ofYears years) Duration/ZERO)
+      ["YEAR" "MONTH"] (Interval. (Period/of years (mod months 12) 0) Duration/ZERO)
+      ["MONTH" nil] (Interval. (Period/ofMonths months) Duration/ZERO)
+      ["DAY" nil] (Interval. days Duration/ZERO)
+      ["DAY" "HOUR"] (Interval. days (Duration/ofHours (rem (.toHours d) 24)))
+      ["DAY" "MINUTE"] (Interval. days (Duration/ofMinutes (rem (.toMinutes d) 1440)))
+      ["DAY" "SECOND"] (Interval. days (.minusDays altered (.toDays d)))
+      ["HOUR" nil] (Interval. Period/ZERO (.plusDays (Duration/ofHours (.toHours d)) (.getDays p)))
+      (["HOUR" "MINUTE"] ["MINUTE" nil]) (Interval. Period/ZERO (.plusDays (Duration/ofMinutes (.toMinutes d)) (.getDays p)))
+      (["HOUR" "SECOND"] ["MINUTE" "SECOND"] ["SECOND" nil])
+      (Interval. Period/ZERO (.plusDays altered (.getDays p))))))
+
+(defn- period-duration-trunc [^Interval i field]
+  (let [p (.getPeriod i)
+        d (.getDuration i)
+        months (.toTotalMonths p)
+        by-months #(Interval. (Period/ofMonths (- months (rem months %))) Duration/ZERO)]
+    (case field
+      "MILLENNIUM" (by-months 12000)
+      "CENTURY" (by-months 1200)
+      "DECADE" (by-months 120)
+      "YEAR" (by-months 12)
+      "QUARTER" (by-months 3)
+      "MONTH" (by-months 1)
+      "WEEK" (Interval. (Period/of 0 months (- (.getDays p) (rem (.getDays p) 7))) Duration/ZERO)
+      "DAY" (Interval. p Duration/ZERO)
+      "HOUR" (Interval. p (.truncatedTo d ChronoUnit/HOURS))
+      "MINUTE" (Interval. p (.truncatedTo d ChronoUnit/MINUTES))
+      "SECOND" (Interval. p (.truncatedTo d ChronoUnit/SECONDS))
+      "MILLISECOND" (Interval. p (.truncatedTo d ChronoUnit/MILLIS))
+      "MICROSECOND" (Interval. p (.truncatedTo d ChronoUnit/MICROS)))))
+
+(defn- outcome [f]
+  (try (f) (catch Exception _ ::error)))
+
+(def ^:private md-interval-gen
+  (tcg/fmap (fn [[days micros]] (Interval. 0 days (* micros 1000)))
+            (tcg/tuple (tcg/choose -1000000 1000000)
+                       (tcg/such-that #(not (zero? %)) (tcg/choose -9000000000000000 9000000000000000)))))
+
+(tct/defspec interval-casts-match-period-duration-arithmetic-prop
+  (tcp/for-all [i md-interval-gen
+                [start-field end-field] (tcg/elements [["DAY" nil] ["DAY" "HOUR"] ["DAY" "MINUTE"] ["DAY" "SECOND"]
+                                                       ["HOUR" nil] ["HOUR" "MINUTE"] ["HOUR" "SECOND"]
+                                                       ["MINUTE" nil] ["MINUTE" "SECOND"] ["SECOND" nil]])
+                fractional-precision (tcg/choose 0 6)]
+    (let [iq {:start-field start-field, :end-field end-field, :leading-precision 8, :fractional-precision fractional-precision}]
+      (= (outcome #(period-duration-cast i iq))
+         (outcome #(et/project1 (list 'cast-interval 'i iq) {:i i}))))))
+
+(tct/defspec year-month-interval-casts-match-period-arithmetic-prop
+  (tcp/for-all [months (tcg/choose -100000 100000)
+                [start-field end-field] (tcg/elements [["YEAR" nil] ["YEAR" "MONTH"] ["MONTH" nil]])]
+    (let [i (Interval. months 0 0)
+          iq {:start-field start-field, :end-field end-field, :leading-precision 8, :fractional-precision 0}]
+      (= (outcome #(period-duration-cast i iq))
+         (outcome #(et/project1 (list 'cast-interval 'i iq) {:i i}))))))
+
+(tct/defspec interval-date-trunc-matches-period-duration-arithmetic-prop
+  (tcp/for-all [i (tcg/one-of [md-interval-gen (tcg/fmap #(Interval. % 0 0) (tcg/choose -100000 100000))])
+                field (tcg/elements ["MILLENNIUM" "CENTURY" "DECADE" "YEAR" "QUARTER" "MONTH" "WEEK"
+                                     "DAY" "HOUR" "MINUTE" "SECOND" "MILLISECOND" "MICROSECOND"])]
+    (= (outcome #(period-duration-trunc i field))
+       (outcome #(et/project1 (list 'date_trunc field 'i) {:i i})))))
+
 (t/deftest cast-interval-to-interval
   (letfn [(test-cast
             [src-value iq]
