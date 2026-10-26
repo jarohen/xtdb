@@ -1,26 +1,30 @@
-# usage: proc.py <run-prefix>... — main-thread vol ctxsw per hot rep and on-CPU/wall over hot reps 20..end
-import sys, re, datetime
+# usage: proc.py <run-prefix>... — main-thread on-CPU % of wall and voluntary ctxsw per query, hot reps >= 20 (linear interp of 2s /proc samples)
+import sys, re, datetime, bisect, collections
+def secs(h, mi, s, ms): return int(h)*3600+int(mi)*60+int(s)+int(ms)/1000
 for pre in sys.argv[1:]:
-    starts = {}
-    day = None
+    st, dn = {}, {}
     for l in open(pre + '.gradle.log'):
-        m = re.match(r'(\d\d):(\d\d):(\d\d)\.(\d+) \[main\] INFO  xtdb.bench - Starting stage: :hot-queries-(\d+)$', l.strip())
+        m = re.match(r'(\d\d):(\d\d):(\d\d)\.(\d+) \[main\] INFO  xtdb.bench - (Starting|Done) stage: :hot-queries-(\d+)-(q\d+)', l)
         if m:
-            h, mi, s, ms, n = m.groups()
-            starts[int(n)] = int(h)*3600+int(mi)*60+int(s)+int(ms)/1000
-        m = re.match(r'(\d\d):(\d\d):(\d\d)\.(\d+) \[main\] INFO  xtdb.bench - Starting stage: :summary', l.strip())
-        if m:
-            h, mi, s, ms = m.groups(); starts['end'] = int(h)*3600+int(mi)*60+int(s)+int(ms)/1000
+            *t, kind, n, q = m.groups()
+            (st if kind == 'Starting' else dn)[(int(n), q)] = secs(*t)
     rows = []
     for l in open(pre + '.proc'):
         ts, v, n, cpu = l.split()
         t = datetime.datetime.fromtimestamp(float(ts))
-        rows.append((t.hour*3600+t.minute*60+t.second+t.microsecond/1e6, int(v), int(n), int(cpu)))
-    if 20 not in starts or 'end' not in starts:
-        print(pre, 'no window', sorted(k for k in starts if k != 'end')[-3:]); continue
-    a, b = starts[20], starts['end']
-    w = [r for r in rows if a <= r[0] <= b]
-    if len(w) < 2: print(pre, 'few samples'); continue
-    (t0, v0, n0, c0), (t1, v1, n1, c1) = w[0], w[-1]
-    reps = sum(1 for k in starts if k != 'end' and k >= 20 and a <= starts[k] and starts[k] >= t0 and starts[k] < t1)
-    print(f"{pre.rsplit('/',1)[-1]:20} window {t1-t0:6.1f}s main on-CPU {(c1-c0)/100/(t1-t0)*100:5.1f}% volCtxSw/s {(v1-v0)/(t1-t0):7.0f} ~volCtxSw/rep(q1+q6) {(v1-v0)/max(reps,1):7.0f}")
+        rows.append((t.hour*3600+t.minute*60+t.second+t.microsecond/1e6, int(v), int(cpu)))
+    xs = [r[0] for r in rows]
+    def at(t, i):
+        k = bisect.bisect_left(xs, t)
+        if k == 0 or k >= len(xs): return None
+        (t0, *a), (t1, *b) = rows[k-1], rows[k]
+        return a[i] + (b[i]-a[i])*(t-t0)/(t1-t0)
+    agg = collections.defaultdict(lambda: [0, 0, 0, 0])
+    for (n, q), s in st.items():
+        if n < 20 or (n, q) not in dn: continue
+        e = dn[(n, q)]
+        vals = [at(s, 0), at(e, 0), at(s, 1), at(e, 1)]
+        if None in vals: continue
+        a = agg[q]; a[0] += e - s; a[1] += vals[1]-vals[0]; a[2] += (vals[3]-vals[2])/100; a[3] += 1
+    for q, (wall, v, cpu, k) in sorted(agg.items()):
+        print(f"{pre.rsplit('/',1)[-1]:20} {q:4} n {k:3} main on-CPU {cpu/wall*100:5.1f}%  volCtxSw/run {v/k:7.0f}")
