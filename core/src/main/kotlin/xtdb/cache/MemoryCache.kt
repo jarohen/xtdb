@@ -208,9 +208,89 @@ class MemoryCache @JvmOverloads internal constructor(
         }
     }
 
+    // --- dart: retained LRU cache, loaded on the caller's coroutine (xtdb.memoryCache.legacy=true for the old path)
+
+    private class Loading(val done: CompletableDeferred<Unit> = CompletableDeferred())
+
+    private class Ready(val buf: ArrowBuf, val size: Long)
+
+    private val lock = Any()
+
+    // access-ordered: iteration starts at the least-recently used entry
+    private val entries = LinkedHashMap<PathSlice, Any>(1024, 0.75f, true)
+
+    private fun evictIdle(needBytes: Long) {
+        val it = entries.entries.iterator()
+        while (cacheAl.allocatedMemory + needBytes > cacheAl.limit && it.hasNext()) {
+            val e = it.next().value
+            // refCnt == 1: only the cache holds it, and nobody can retain without the lock
+            if (e is Ready && e.buf.refCnt() == 1) {
+                it.remove()
+                e.buf.referenceManager.release()
+            }
+        }
+    }
+
+    private suspend fun getRetained(pathSlice: PathSlice, fetch: Fetch): ArrowBuf {
+        while (true) {
+            var mine: Loading? = null
+            val existing = synchronized(lock) {
+                when (val e = entries[pathSlice]) {
+                    is Ready -> return e.buf.also { it.referenceManager.retain() }
+                    is Loading -> e
+                    else -> Loading().also { mine = it; entries[pathSlice] = it }
+                }
+            }
+
+            val loading = mine
+            if (loading == null) {
+                runCatching { existing.done.await() }
+                    .onFailure { if (it is CancellationException) currentCoroutineContext().ensureActive() }
+                continue
+            }
+
+            try {
+                val (localPath, onEvict) = fetch(pathSlice.path)
+                val arena = Arena.ofShared()
+                val memSeg = try {
+                    pathLoader.load(localPath, pathSlice.slice ?: Slice.from(localPath), arena)
+                } catch (t: Throwable) {
+                    arena.close(); onEvict?.close(); throw t
+                }
+
+                val buf = synchronized(lock) {
+                    try {
+                        evictIdle(memSeg.byteSize())
+                        cacheAl.wrapForeignAllocation(
+                            object : ForeignAllocation(memSeg.byteSize(), memSeg.address()) {
+                                override fun release0() {
+                                    arena.close()
+                                    onEvict?.close()
+                                }
+                            })
+                    } catch (t: Throwable) {
+                        entries.remove(pathSlice)
+                        arena.close(); onEvict?.close(); throw t
+                    }.also { buf ->
+                        entries[pathSlice] = Ready(buf, memSeg.byteSize())
+                        buf.referenceManager.retain() // one for the cache, one for the caller
+                    }
+                }
+                loading.done.complete(Unit)
+                return buf
+            } catch (t: Throwable) {
+                synchronized(lock) { if (entries[pathSlice] === loading) entries.remove(pathSlice) }
+                loading.done.completeExceptionally(t)
+                throw t
+            }
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Suppress("NAME_SHADOWING")
     suspend fun get(key: Path, slice: Slice? = null, fetch: Fetch): ArrowBuf {
+        if (!LEGACY) return getRetained(PathSlice(key, slice), fetch)
+
         LOGGER.debug("Sending get for $key / $slice...")
         val pathSlice = PathSlice(key, slice)
 
@@ -238,6 +318,10 @@ class MemoryCache @JvmOverloads internal constructor(
     }
 
     override fun close() {
+        synchronized(lock) {
+            entries.values.forEach { if (it is Ready) it.buf.referenceManager.release() }
+            entries.clear()
+        }
         fetchCh.close()
         runBlocking { fetchParentJob.cancelAndJoin() }
         cacheAl.close()
@@ -263,6 +347,8 @@ class MemoryCache @JvmOverloads internal constructor(
     internal val stats0 get() = cacheAl.let { Stats(it.allocatedMemory, it.limit - it.allocatedMemory) }
 
     companion object {
+        private val LEGACY = java.lang.Boolean.getBoolean("xtdb.memoryCache.legacy")
+
         @JvmStatic
         fun factory() = Factory()
 

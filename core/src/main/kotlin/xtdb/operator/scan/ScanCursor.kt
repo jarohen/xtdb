@@ -62,7 +62,9 @@ class ScanCursor(
             val resolver = openResolver()
 
             // we're not in coroutine land here, so it's a good boundary for runBlocking
-            val loadedPages = runBlocking { task.pages.map { async { it.loadDataPage(al) } }.awaitAll() }
+            val loadedPages =
+                if (SEQ_PAGE_LOAD) runBlocking { task.pages.map { it.loadDataPage(al) } }
+                else runBlocking { task.pages.map { async { it.loadDataPage(al) } }.awaitAll() }
 
             // rows physically read off the pages we loaded — the scan's throughput denominator,
             // before iid-selection and bitemporal resolution whittle them down to the emitted rows
@@ -108,3 +110,5 @@ class ScanCursor(
         ownedSegments.closeAll()
     }
 }
+
+private val SEQ_PAGE_LOAD = java.lang.Boolean.getBoolean("xtdb.scan.seqPageLoad")
