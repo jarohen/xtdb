@@ -276,6 +276,14 @@ class MemoryCache @JvmOverloads internal constructor(
                                 }
                             })
                     } catch (t: Throwable) {
+                        if (t is org.apache.arrow.memory.OutOfMemoryException) {
+                            val readies = entries.values.filterIsInstance<Ready>()
+                            LOGGER.warn("dart OOM: entries=${entries.size} ready=${readies.size} " +
+                                    "idleBytes=${readies.filter { it.buf.refCnt() == 1 }.sumOf { it.size }} " +
+                                    "pinnedBytes=${readies.filter { it.buf.refCnt() > 1 }.sumOf { it.size }} " +
+                                    "refCnts=${readies.groupingBy { it.buf.refCnt() }.eachCount()} " +
+                                    "alloc=${cacheAl.allocatedMemory} limit=${cacheAl.limit} need=${memSeg.byteSize()}")
+                        }
                         entries.remove(pathSlice)
                         arena.close(); onEvict?.close(); throw t
                     }.also { buf ->
@@ -343,7 +351,8 @@ class MemoryCache @JvmOverloads internal constructor(
         fun maxSizeRatio(maxSizeRatio: Double) = apply { this.maxSizeRatio = maxSizeRatio }
 
         fun open(al: BufferAllocator, meterRegistry: MeterRegistry? = null): MemoryCache {
-            val maxSizeBytes = maxSizeBytes ?: (maxDirectMemory * maxSizeRatio).toLong()
+            val maxSizeBytes = System.getProperty("xtdb.memoryCache.maxBytes")?.toLong()
+                ?: maxSizeBytes ?: (maxDirectMemory * maxSizeRatio).toLong()
             return MemoryCache(al, maxSizeBytes)
                 .also { meterRegistry?.registerMemoryCache(it) }
         }
