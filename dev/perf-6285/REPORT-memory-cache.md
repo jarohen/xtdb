@@ -109,7 +109,7 @@ seqbig-r6            q6   n  30 main on-CPU  92.1%  volCtxSw/run      34
 - legacy ≈ orchestrator's profile (64%/57% on-CPU, ~21K switches) — confirms the box matches
 - noretain still ~1 switch per page fetch: the remaining park is the `HandshakeAllThreads` VM op from `arena.close()` on release
 - retained/fits: ~0 switches; the ~6–9% remaining off-CPU wall is not on the fetch path (GC/JIT/stage boundaries — not chased)
-- the gain exceeds the off-CPU share: re-mmapping per page also cost on-CPU (page-table repopulation / minor faults on every touch, munmap TLB shootdown) — the orchestrator's 'unattributed ~13%' disappears with persistent mappings
+- the gain exceeds the off-CPU share: re-mmapping per page also cost on-CPU (page-table repopulation / minor faults on every touch, munmap TLB shootdown) — *inferred*: the orchestrator's 'unattributed ~13%' is gone with persistent mappings (not profiled directly)
 
 ## Compaction (load, n=1 each)
 - legacy load: compact stage 126.2s; retained (fixed accounting, 1.5GiB): 104.3s (−17%)
