@@ -20,6 +20,9 @@ Run with `dev/perf-6285/dart-tools/ab.sh <tag> <variant>...`; the variants are d
   - no buddy fragmentation
 - **Today's main is much faster than the previous dart's baseline** (legacy Q1 4.4s vs 8.9s then), so absolute numbers don't compare across the two reports
 
+- **Round 3 (trimmed buddy)**: 2.8% waste instead of 34% when the pool fits, but under churn it fragments (storms of up to ~10K evictions per allocation), and the hit rate falls below plain buddy. Address-aware eviction is the missing piece.
+- **Arrow mode won't land** (orchestrator, after the user rejected the power-of-two waste): Netty's size classes hide roughly 10% inside it. Its numbers are kept for the record.
+
 ## Decisions from the user mid-run (relayed to the orchestrator)
 - **D1: no double-caching**: pread through the OS page cache is out; O_DIRECT stays. `p1pc` is reference only.
 - **D2: no bypass past the limit**: serving a miss from outside the pool when no frame can be freed breaks the memory bound. The direction is to fail loudly; waiting for an unpin is a follow-up (see Q1).
@@ -123,6 +126,63 @@ p15inc-r4.log        q6   cold   2152 n  30 median    1936 mean    1936 min   18
 | p1a (arrow) | 1 | 1G | 3156 | 1948 | −28% | −33% | 26.1 |
 | p1pc (region, page cache; D1: reference only) | 3 | 1G | 3110 | 1660 | −29% | −43% | 16 |
 | p15inc / p1inc | 1 / 1 | | 3458 / 3100 | 1936 / 1972 | | | 8.1 / 0.3 |
+
+## Round 3 — buddy with tail trimming (orchestrator request, after the user rejected power-of-two waste)
+- **Variant** (`-Dxtdb.pagePool.trim=true -Dxtdb.pagePool.arena=true -Dxtdb.pagePool.ratio=<r>`), 1 JVM each
+  - allocate the order-k block as before, keep only `readLen` rounded up to 4KiB, and return the tail to the free lists as aligned power-of-two pieces (`alloc_pages_exact`-style)
+  - on evict, free the used range as aligned power-of-two pieces, largest-first from the start, and let buddy coalescing merge
+- **Region from `Arena.ofShared().allocate(...)`**: counts against MaxDirectMemorySize; the pool is sized as a ratio of max direct memory
+  - bench JVM: MaxDirectMemorySize = 3g + pool, so Arrow keeps the same 3g headroom as legacy
+  - `fitt` 6g × 0.5; `p15t` 4608m × ⅓; `p1t` 4g × 0.25
+  - `Arena.allocate` zero-fills, so the whole region is resident from startup: `fitt` RssAnon 4.86G vs 3.64G for the Unsafe region, where only touched bytes are resident
+```
+fitt-r6.log          q1   cold   5087 n  30 median    2347 mean    2346 min   2273 sd     49
+fitt-r6.log          q6   cold   1130 n  30 median     966 mean     969 min    931 sd     22
+p15t-r6.log          q1   cold   3894 n  30 median    2938 mean    2905 min   2363 sd    192
+p15t-r6.log          q6   cold   2031 n  30 median    1838 mean    1827 min   1198 sd    202
+p1t-r6.log           q1   cold   4550 n  30 median    3076 mean    3079 min   2990 sd     49
+p1t-r6.log           q6   cold   2182 n  30 median    1924 mean    1925 min   1860 sd     40
+fitt-r6              q1   n  30 main on-CPU  98.8%  volCtxSw/run       4
+fitt-r6              q6   n  29 main on-CPU  98.8%  volCtxSw/run       1
+p15t-r6              q1   n  30 main on-CPU  76.3%  volCtxSw/run    4349
+p15t-r6              q6   n  29 main on-CPU  70.5%  volCtxSw/run    3291
+p1t-r6               q1   n  30 main on-CPU  74.5%  volCtxSw/run    5021
+p1t-r6               q6   n  29 main on-CPU  69.5%  volCtxSw/run    3664
+run             RssAnon  RssFile  cgUsage   cgRss  cgCache cgMapped  actFile inactFile  workSet |   hit%     hits   misses    evict readMB/s
+fitt-r6           4.86G    0.03G   10.93G  10.05G    0.87G    0.22G    0.25G     0.61G   10.32G |  100.0   686320        0        0        0
+p15t-r6           3.31G    0.03G    9.32G   8.49G    0.82G    0.22G    0.41G     0.40G    8.92G |   15.7   108816   586434   581042      652
+p1t-r6            2.85G    0.03G    8.80G   8.03G    0.77G    0.22G    0.31G     0.45G    8.35G |    3.8    27750   707576   702186      713
+```
+
+| | plain buddy (region, r4) | trimmed buddy (r6) | arrow (r4) |
+|---|---|---|---|
+| frame bytes / page bytes, hot set | 2.51G / 1.87G (+34%) | 1.92G / 1.87G (+2.8%) | 1.98G (+5.6%)¹ |
+| fit Q1 / Q6 | 2316 / 950 (r1–3) | 2347 / 966 | 2336 / 914 |
+| 1.5G: Q1 / Q6 / hit% | 3158 / 1679 / 26.7 | 2938 / 1838 / 15.7 | 2956 / 1615 / 59.7 |
+| 1G: Q1 / Q6 / hit% | 3236 / 1933 / 7.2 | 3076 / 1924 / 3.8 | 3156 / 1948 / 26.1 |
+| alloc failures (bypass) per run, 1.5G / 1G | 0 / 2 | 127 / 63 | 0 / 0 |
+
+¹ the `frameAl` accounted bytes; netty's own size classes may hide more underneath (orchestrator's estimate ~10%; not measured here)
+
+- **Fragmentation gauges** (trimmed buddy, whole run)
+
+| | p15t | p1t |
+|---|---|---|
+| evictions / miss | 0.99 | 0.99 |
+| allocs needing eviction / miss | 0.20 | 0.37 |
+| max evictions in one alloc | 9,738 | 6,064 |
+| mean free bytes when an alloc had to evict | 155MB (10% of pool) | 127MB (12%) |
+| mean largest free block then | 193KB | 142KB |
+| at close: free / largest free | 193MB / 64KB | 129MB / 64KB |
+| alloc failures, all for the one 36MB page (order 26) | 127 | 63 |
+
+- **Fixes the waste when the pool fits**: 2.8% over page bytes, and fit performance unchanged
+- **Under churn it fragments badly**
+  - 10–12% of the pool sits free in ≤ 200KB pieces at the moment an allocation needs to evict
+  - eviction is in queue order, not address order, so freeing one frame rarely completes a block of the needed order: the allocator evicts in storms of up to ~10K frames, flushing warm main-queue frames with them
+  - the hit rate ends up *below* plain buddy (15.7% vs 26.7% at 1.5G, 3.8% vs 7.2% at 1G), and the 36MB page fails at 63–127 per run, with 0.7–1.3GB free but no 64MiB block
+- **Q1/Q6 under churn are similar to plain buddy** (Q1 a little faster, Q6 mixed): O_DIRECT miss cost dominates either way
+- **What would make a buddy-family allocator work under churn**: address-aware eviction (choose a victim *block* of the needed order and evict the frames inside it, like the kernel's compaction or a segregated-fit allocator), not a FIFO of frames. Alternatively size-class slabs with per-class eviction (memcached-style), at the cost of cross-class rebalancing.
 
 ## Main thread on-CPU and context switches (`proc.py`, hot reps ≥ 20)
 ```
@@ -231,7 +291,7 @@ p15inc-r4         3.35G    0.03G    8.84G   8.24G    0.60G    0.22G    0.14G    
 ## Suggested sub-goals (each one tidy or one advance; dependencies in brackets)
 - **T1** tidy: `adoptInto` — buffers that may be shared (pool-owned) are retained, not ownership-transferred, at the four `loadBuffer`/`openSlice` sites; behaviour-preserving while nothing is pool-owned
 - **T2** tidy: give `BufferPool` a page-read seam (`readPage(path, offset, len, al): ArrowBuf`) that `LocalStorage.getRecordBatch` and `RemoteBufferPool.getRecordBatch` call; `MemoryCache` stays behind it
-- **A1** advance: `PagePool` (arrow mode: limited `RootAllocator`, exact frames, S3-FIFO, CAS pins, loading placeholder, O_DIRECT pread on an IO dispatcher) behind config, `LocalStorage` only; fails with an `xtdb.error` anomaly when nothing can be evicted (Q1) [T1, T2]
+- **A1** advance: `PagePool` (region from an FFM arena sized as a ratio of max direct memory, exact-ish frames, S3-FIFO, CAS pins, loading placeholder, O_DIRECT pread on an IO dispatcher) behind config, `LocalStorage` only; fails with an `xtdb.error` anomaly when nothing can be evicted (Q1) [T1, T2, Q4]
   - includes Micrometer gauges: pool bytes, resident, pinned frames, hits, misses, evictions, alloc failures, read-latency timer
 - **A2** advance: `RemoteBufferPool` reads through the pool; the disk-cache pin is held only for the pread [A1]
 - **A3** advance: make the pool the default and delete `MemoryCache` (fetch loop, `openSlices`, per-slice arenas) [A1, A2, Q2]
@@ -260,6 +320,7 @@ p15inc-r4         3.35G    0.03G    8.84G   8.24G    0.60G    0.22G    0.14G    
   - recommendation (orchestrator agrees): fail loudly with an anomaly by default
   - wait-for-unpin as a follow-up, behind a per-query pin quota sized to the scan's parallelism so a query can never pin more than its share
 - **Q2: how to size the pool**: a fraction of container memory, or explicit? Today `MemoryCache`'s default is 0.5 × MaxDirectMemory, and arrow-mode frames live under the same netty limit — share it, or carve it out?
+- **Q4: which frame allocator inside the region**: trimmed buddy needs address-aware eviction to survive churn; size-class slabs need rebalancing. Worth a dart of its own: measure fragmentation gauges (above) against the trimmed-buddy baseline.
 - **Q3: is a loop-resistant policy worth it**, given today's workload is repeated full scans? Prefetch (A4) may matter more than the policy.
 
 ## Dead-ends / notes
