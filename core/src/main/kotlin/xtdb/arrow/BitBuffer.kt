@@ -224,14 +224,14 @@ internal class BitBuffer private constructor(
             writeOnes(bitCount)
         } else {
             buf = arrowBuf.writerIndex(bufferSize(bitCount))
-                .let { it.referenceManager.transferOwnership(it, allocator).transferredBuffer }
+                .adoptInto(allocator)
 
             writerBitIndex = bitCount
         }
     }
 
     fun openSlice(al: BufferAllocator) =
-        BitBuffer(al, buf.referenceManager.transferOwnership(buf, al).transferredBuffer, writerBitIndex)
+        BitBuffer(al, buf.adoptInto(al), writerBitIndex)
 
     fun clear() {
         buf.setZero(0, buf.capacity())

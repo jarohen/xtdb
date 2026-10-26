@@ -89,6 +89,17 @@ internal class LocalStorage(
         val arrowBlock = footer.recordBatches.getOrNull(idx)
             ?: throw IndexOutOfBoundsException("Record batch index out of bounds of arrow file")
 
+        val pagePool = xtdb.cache.PagePool.INSTANCE
+        if (pagePool != null) {
+            return pagePool.get(path, arrowBlock.offset, arrowBlock.metadataLength + arrowBlock.bodyLength, allocator)
+                .use { arrowBuf ->
+                    arrowBuf.arrowBufToRecordBatch(
+                        0, arrowBlock.metadataLength, arrowBlock.bodyLength,
+                        "Failed opening record batch '$path' at block-idx $idx"
+                    )
+                }
+        }
+
         return memoryCache.get(
             cacheRootPath.resolve(key),
             MemoryCache.Slice(arrowBlock.offset, arrowBlock.metadataLength + arrowBlock.bodyLength)

@@ -11,6 +11,11 @@ import java.math.BigDecimal
 import java.nio.ByteBuffer
 import kotlin.math.max
 
+// DART: PagePool buffers belong to the pool's own root - share them (retain) rather than transferring the accounting
+internal fun ArrowBuf.adoptInto(al: BufferAllocator): ArrowBuf =
+    if (xtdb.cache.PagePool.owns(this)) also { it.referenceManager.retain() }
+    else referenceManager.transferOwnership(this, al).transferredBuffer
+
 internal val NULL_CHECKS =
     System.getenv("XTDB_VECTOR_NULL_CHECKS")?.toBoolean()
         ?: System.getProperty("xtdb.vector.null-checks")?.toBoolean()
@@ -179,11 +184,11 @@ internal class ExtensibleBuffer private constructor(private val allocator: Buffe
     internal fun loadBuffer(arrowBuf: ArrowBuf, writerIndex: Long = arrowBuf.writerIndex()) {
         buf.close()
         buf = arrowBuf.writerIndex(writerIndex)
-            .let { it.referenceManager.transferOwnership(it, allocator).transferredBuffer }
+            .adoptInto(allocator)
     }
 
     fun openSlice(al: BufferAllocator) =
-        ExtensibleBuffer(al, buf.referenceManager.transferOwnership(buf, al).transferredBuffer)
+        ExtensibleBuffer(al, buf.adoptInto(al))
 
     fun clear() {
         buf.setZero(0, buf.capacity())

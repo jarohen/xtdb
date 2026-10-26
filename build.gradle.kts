@@ -878,6 +878,9 @@ fun createBench(benchName: String, properties: Map<String, String>, defaultArgs:
         if (project.hasProperty("staleSnapshot"))
             jvmArgs("-Dxtdb.bench.staleSnapshot=true")
 
+        if (project.hasProperty("extraJvmArgs"))
+            jvmArgs((project.property("extraJvmArgs") as String).split(" ").filter { it.isNotBlank() })
+
         if (project.hasProperty("hotReps"))
             jvmArgs("-Dxtdb.bench.hotReps=${project.property("hotReps")}")
 
