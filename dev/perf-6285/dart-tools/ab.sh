@@ -20,6 +20,10 @@ for v in "$@"; do
     fitt) args="-XX:MaxDirectMemorySize=6g -Dxtdb.pagePool.ratio=0.5 -Dxtdb.pagePool.arena=true -Dxtdb.pagePool.trim=true";;
     p15t) args="-XX:MaxDirectMemorySize=4608m -Dxtdb.pagePool.ratio=0.3333334 -Dxtdb.pagePool.arena=true -Dxtdb.pagePool.trim=true";;
     p1t) args="-XX:MaxDirectMemorySize=4g -Dxtdb.pagePool.ratio=0.25 -Dxtdb.pagePool.arena=true -Dxtdb.pagePool.trim=true";;
+    # slab mode: size classes + 64MiB slabs from Arenas (count against MaxDirectMemorySize), pool sized as a ratio of it
+    fits) args="-XX:MaxDirectMemorySize=6g -Dxtdb.pagePool.ratio=0.5 -Dxtdb.pagePool.mode=slab";;
+    p15s) args="-XX:MaxDirectMemorySize=4608m -Dxtdb.pagePool.ratio=0.3333334 -Dxtdb.pagePool.mode=slab";;
+    p1s) args="-XX:MaxDirectMemorySize=4g -Dxtdb.pagePool.ratio=0.25 -Dxtdb.pagePool.mode=slab";;
     p15inc) args="-Dxtdb.pagePool.bytes=1536m -Dxtdb.pagePool.admit=incumbent";;
     p1inc) args="-Dxtdb.pagePool.bytes=1g -Dxtdb.pagePool.admit=incumbent";;
     p1ainc) args="-Dxtdb.pagePool.bytes=1g -Dxtdb.pagePool.mode=arrow -Dxtdb.pagePool.admit=incumbent -XX:MaxDirectMemorySize=4g";;
