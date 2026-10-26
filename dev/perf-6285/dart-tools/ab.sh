@@ -18,7 +18,7 @@ for v in "$@"; do
   sync; echo 1 > /proc/sys/vm/drop_caches
   cp /sys/fs/cgroup/memory/memory.stat $out.cg-before
   bash dev/perf-6285/dart-tools/sample.sh $out.proc & sp=$!
-  ./gradlew tpch -PscaleFactor=1 -Pdir=$HOME/bench/sf1 -PnoLoad -PnarrowVarTypes -PbenchLogFile=$out.log "-PextraJvmArgs=-Dxtdb.dart.variant=$v $args" > $out.gradle.log 2>&1
+  ./gradlew tpch -PscaleFactor=1 -Pdir=$HOME/bench/sf1 -PnoLoad -PnarrowVarTypes ${HOTREPS:+-PhotReps=$HOTREPS} -PbenchLogFile=$out.log "-PextraJvmArgs=-Dxtdb.dart.variant=$v $args" > $out.gradle.log 2>&1
   echo "$v-$tag exit $?"
   cp /sys/fs/cgroup/memory/memory.stat $out.cg-after
   kill $sp

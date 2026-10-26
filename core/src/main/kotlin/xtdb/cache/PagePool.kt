@@ -40,7 +40,7 @@ class PagePool(
 ) {
     companion object {
         private const val MIN_SHIFT = 12
-        private const val MAX_SHIFT = 24
+        private const val MAX_SHIFT = 26
         private const val MIN_BLOCK = 1L shl MIN_SHIFT
         private const val MAX_BLOCK = 1L shl MAX_SHIFT
 
@@ -269,8 +269,10 @@ class PagePool(
         var p = pos
         while (bb.hasRemaining()) {
             val n = ch.read(bb, p)
-            if (n < 0) break
+            if (n <= 0) break
             p += n
+            // O_DIRECT: a short read means EOF, and the next position wouldn't be aligned anyway
+            if (direct && (p and (MIN_BLOCK - 1)) != 0L) break
         }
         check(bb.position() >= minBytes) { "short read on $path at $pos: ${bb.position()} < $minBytes" }
         readNanos.addAndGet(System.nanoTime() - start)
@@ -278,7 +280,7 @@ class PagePool(
     }
 
     private suspend fun loadBypass(path: Path, offset: Long, length: Long, al: BufferAllocator): ArrowBuf {
-        bypasses.incrementAndGet()
+        if (bypasses.incrementAndGet() < 20) LOGGER.info("PagePool bypass: $path @$offset len=$length")
         val buf = al.buffer(length)
         try {
             withContext(ioDispatcher) {
