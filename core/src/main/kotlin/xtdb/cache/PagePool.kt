@@ -9,7 +9,9 @@ import org.apache.arrow.memory.ArrowBuf
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.ForeignAllocation
 import org.apache.arrow.memory.RootAllocator
+import xtdb.util.info
 import xtdb.util.logger
+import xtdb.util.warn
 import java.lang.foreign.MemorySegment
 import java.nio.channels.FileChannel
 import java.nio.file.Path
