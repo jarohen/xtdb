@@ -32,11 +32,13 @@ private val LOGGER = MemoryCache::class.logger
  */
 class MemoryCache @JvmOverloads internal constructor(
     al: BufferAllocator,
-    maxSizeBytes: Long,
+    private val maxSizeBytes: Long,
     private val pathLoader: PathLoader = PathLoader(),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : AutoCloseable {
-    private val cacheAl = al.newChildAllocator("memory-cache", 0, maxSizeBytes)
+    // retained mode bounds residentBytes itself: Arrow moves a slice's accounting in and out of cacheAl
+    // (outside our lock) as other allocators' ledgers take and drop ownership of it
+    private val cacheAl = al.newChildAllocator("memory-cache", 0, if (LEGACY || NO_RETAIN) maxSizeBytes else Long.MAX_VALUE)
 
     private val openSlices = ConcurrentHashMap<PathSlice, ArrowBuf>()
 
@@ -219,17 +221,22 @@ class MemoryCache @JvmOverloads internal constructor(
     // access-ordered: iteration starts at the least-recently used entry
     private val entries = LinkedHashMap<PathSlice, Any>(1024, 0.75f, true)
 
+    private var residentBytes = 0L
+
     private fun evictIdle(needBytes: Long) {
         if (NO_RETAIN) return
         val it = entries.entries.iterator()
-        while (cacheAl.allocatedMemory + needBytes > cacheAl.limit && it.hasNext()) {
+        while (residentBytes + needBytes > maxSizeBytes && it.hasNext()) {
             val e = it.next().value
             // refCnt == 1: only the cache holds it, and nobody can retain without the lock
             if (e is Ready && e.buf.refCnt() == 1) {
                 it.remove()
+                residentBytes -= e.size
                 e.buf.referenceManager.release()
             }
         }
+        if (residentBytes + needBytes > maxSizeBytes)
+            throw org.apache.arrow.memory.OutOfMemoryException("memory-cache: $residentBytes resident (all in use) + $needBytes > $maxSizeBytes")
     }
 
     private suspend fun getRetained(pathSlice: PathSlice, fetch: Fetch): ArrowBuf {
@@ -282,12 +289,13 @@ class MemoryCache @JvmOverloads internal constructor(
                                     "idleBytes=${readies.filter { it.buf.refCnt() == 1 }.sumOf { it.size }} " +
                                     "pinnedBytes=${readies.filter { it.buf.refCnt() > 1 }.sumOf { it.size }} " +
                                     "refCnts=${readies.groupingBy { it.buf.refCnt() }.eachCount()} " +
-                                    "alloc=${cacheAl.allocatedMemory} limit=${cacheAl.limit} need=${memSeg.byteSize()}")
+                                    "alloc=${cacheAl.allocatedMemory} resident=$residentBytes max=$maxSizeBytes need=${memSeg.byteSize()}")
                         }
                         entries.remove(pathSlice)
                         arena.close(); onEvict?.close(); throw t
                     }.also { buf ->
                         entries[pathSlice] = Ready(buf, memSeg.byteSize())
+                        if (!NO_RETAIN) residentBytes += memSeg.byteSize()
                         if (!NO_RETAIN) buf.referenceManager.retain() // one for the cache, one for the caller
                     }
                 }
@@ -336,6 +344,7 @@ class MemoryCache @JvmOverloads internal constructor(
         synchronized(lock) {
             if (!NO_RETAIN) entries.values.toList().forEach { if (it is Ready) it.buf.referenceManager.release() }
             entries.clear()
+            residentBytes = 0
         }
         fetchCh.close()
         runBlocking { fetchParentJob.cancelAndJoin() }
