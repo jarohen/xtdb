@@ -12,6 +12,13 @@ for v in "$@"; do
     p15pc) args="-Dxtdb.pagePool.bytes=1536m -Dxtdb.pagePool.direct=false";;
     p1) args="-Dxtdb.pagePool.bytes=1g";;
     p1pc) args="-Dxtdb.pagePool.bytes=1g -Dxtdb.pagePool.direct=false";;
+    # arrow mode: frames from a root allocator limited to the pool size; netty counts them against MaxDirectMemorySize, so raise it by the pool size
+    fita) args="-Dxtdb.pagePool.bytes=3g -Dxtdb.pagePool.mode=arrow -XX:MaxDirectMemorySize=6g";;
+    p15a) args="-Dxtdb.pagePool.bytes=1536m -Dxtdb.pagePool.mode=arrow -XX:MaxDirectMemorySize=4608m";;
+    p1a) args="-Dxtdb.pagePool.bytes=1g -Dxtdb.pagePool.mode=arrow -XX:MaxDirectMemorySize=4g";;
+    p15inc) args="-Dxtdb.pagePool.bytes=1536m -Dxtdb.pagePool.admit=incumbent";;
+    p1inc) args="-Dxtdb.pagePool.bytes=1g -Dxtdb.pagePool.admit=incumbent";;
+    p1ainc) args="-Dxtdb.pagePool.bytes=1g -Dxtdb.pagePool.mode=arrow -Dxtdb.pagePool.admit=incumbent -XX:MaxDirectMemorySize=4g";;
   esac
   out=$HOME/bench/runs/$v-$tag
   mkdir -p $HOME/bench/runs

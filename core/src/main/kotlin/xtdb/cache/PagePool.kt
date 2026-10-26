@@ -8,7 +8,10 @@ import kotlinx.coroutines.withContext
 import org.apache.arrow.memory.ArrowBuf
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.ForeignAllocation
+import org.apache.arrow.memory.AllocationListener
+import org.apache.arrow.memory.OutOfMemoryException
 import org.apache.arrow.memory.RootAllocator
+import org.apache.arrow.memory.rounding.RoundingPolicy
 import xtdb.util.info
 import xtdb.util.logger
 import xtdb.util.warn
@@ -62,14 +65,15 @@ class PagePool(
                     parseSize(sz),
                     direct = System.getProperty("xtdb.pagePool.direct", "true").toBoolean(),
                     ioParallelism = System.getProperty("xtdb.pagePool.io", "8").toInt()
-                ).also { LOGGER.info("PagePool: capacity=${it.capacityBytes} direct=${it.direct}") }
+                ).also { LOGGER.info("PagePool: capacity=${it.capacityBytes} direct=${it.direct} mode=${System.getProperty("xtdb.pagePool.mode", "region")} admit=${System.getProperty("xtdb.pagePool.admit", "s3")}") }
             }
         }
 
         @JvmStatic
         fun owns(buf: ArrowBuf): Boolean {
             val pool = INSTANCE ?: return false
-            return buf.referenceManager.allocator === pool.allocator
+            val al = buf.referenceManager.allocator
+            return al === pool.allocator || (pool.frameAl != null && al === pool.frameAl)
         }
 
         private fun orderFor(len: Long): Int {
@@ -79,12 +83,19 @@ class PagePool(
         }
     }
 
-    private val regionBytes = (capacityBytes / MAX_BLOCK).coerceAtLeast(1) * MAX_BLOCK
-    private val rawAddr = unsafe.allocateMemory(regionBytes + MIN_BLOCK)
+    // DART: 'region' = one Unsafe-allocated region + buddy allocator; 'arrow' = each frame its own allocation from a
+    // root allocator whose limit is the pool size (exact sizes, no power-of-two rounding)
+    private val arrowMode = System.getProperty("xtdb.pagePool.mode", "region") == "arrow"
+
+    private val regionBytes =
+        if (arrowMode) capacityBytes else (capacityBytes / MAX_BLOCK).coerceAtLeast(1) * MAX_BLOCK
+    private val rawAddr = if (arrowMode) 0L else unsafe.allocateMemory(regionBytes + MIN_BLOCK)
     private val baseAddr = (rawAddr + MIN_BLOCK - 1) and (MIN_BLOCK - 1).inv()
-    private val region: MemorySegment = MemorySegment.ofAddress(baseAddr).reinterpret(regionBytes)
 
     val allocator: BufferAllocator = RootAllocator(Long.MAX_VALUE)
+
+    val frameAl: BufferAllocator? =
+        if (arrowMode) RootAllocator(AllocationListener.NOOP, capacityBytes, RoundingPolicy { it }) else null
 
     @Suppress("OPT_IN_USAGE")
     private val ioDispatcher = Dispatchers.IO.limitedParallelism(ioParallelism)
@@ -94,7 +105,7 @@ class PagePool(
 
     init {
         var off = 0L
-        while (off < regionBytes) {
+        while (!arrowMode && off < regionBytes) {
             freeLists[MAX_SHIFT].add(off); off += MAX_BLOCK
         }
     }
@@ -134,12 +145,10 @@ class PagePool(
 
         @Volatile
         var freq = 0
-        var blockOff = -1L
-        var order = 0
-        var dataOff = 0L
+        var addr = 0L
+        var frameBytes = 0L
+        var free: () -> Unit = {}
         var inMain = false
-
-        val frameBytes get() = 1L shl order
 
         fun tryPin(): Boolean {
             while (true) {
@@ -154,7 +163,7 @@ class PagePool(
         }
 
         fun toArrowBuf(): ArrowBuf =
-            allocator.wrapForeignAllocation(object : ForeignAllocation(length, baseAddr + blockOff + dataOff) {
+            allocator.wrapForeignAllocation(object : ForeignAllocation(length, addr) {
                 override fun release0() = unpin()
             })
     }
@@ -185,7 +194,8 @@ class PagePool(
     fun statsLine() =
         "PagePool stats: hits=${hits.get()} misses=${misses.get()} evictions=${evictions.get()} bypasses=${bypasses.get()} " +
                 "resident=${residentBytes} small=$smallBytes main=$mainBytes frames=${frames.size} pinnedFrames=$pinnedFrames " +
-                "readBytes=${readBytes.get()} readMs=${readNanos.get() / 1_000_000}"
+                "readBytes=${readBytes.get()} readMs=${readNanos.get() / 1_000_000} allocFailures=${allocFailures.get()}" +
+                (frameAl?.let { " frameAlBytes=${it.allocatedMemory}" } ?: "")
 
     init {
         Thread({
@@ -198,9 +208,27 @@ class PagePool(
         Runtime.getRuntime().addShutdownHook(Thread { System.err.println("${java.time.Instant.now()} FINAL ${statsLine()}") })
     }
 
+    private val incumbent = System.getProperty("xtdb.pagePool.admit", "s3") == "incumbent"
+    private var insertsSinceAging = 0L
+
+    // DART: loop resistance - once main is full, a ghost hit only displaces main's head if that head has gone cold;
+    // main's frequencies halve every ~4 pool-fulls of inserts so stale incumbents eventually lose
+    private fun admitToMain(): Boolean {
+        if (!incumbent) return true
+        if (++insertsSinceAging > 4L * (main.size + small.size)) {
+            insertsSinceAging = 0
+            main.forEach { it.freq = it.freq / 2 }
+        }
+        val head = main.firstOrNull() ?: return true
+        if (mainBytes + smallBytes < regionBytes * 9 / 10) return true
+        if (head.freq == 0) return true
+        main.removeFirst(); main.addLast(head)
+        return false
+    }
+
     private fun evictFrame(f: Frame) {
         frames.remove(f.key, f)
-        buddyFree(f.blockOff, f.order)
+        f.free()
         evictions.incrementAndGet()
     }
 
@@ -208,12 +236,16 @@ class PagePool(
      * @return true if a frame was evicted
      */
     private fun evictOne(): Boolean {
-        var budget = 4 * (small.size + main.size) + 8
+        // freq is capped at 3, so ~4 passes over both queues (plus promotions) visit every unpinned frame at freq 0
+        var budget = 16 * (small.size + main.size) + 64
+        // pinned frames skipped in small since its last progress - once we've been round small, fall through to main
+        var smallSkips = 0
         while (budget-- > 0) {
-            if (small.isNotEmpty() && (smallBytes >= regionBytes / 10 || main.isEmpty())) {
+            if (small.isNotEmpty() && smallSkips < small.size && (smallBytes >= regionBytes / 10 || main.isEmpty())) {
                 val f = small.removeFirst()
                 smallBytes -= f.frameBytes
                 if (f.freq > 0) {
+                    smallSkips = 0
                     f.freq = 0; f.inMain = true
                     main.addLast(f); mainBytes += f.frameBytes
                 } else if (f.pins.compareAndSet(0, -1)) {
@@ -221,6 +253,7 @@ class PagePool(
                     ghost[f.key] = true
                     return true
                 } else {
+                    smallSkips++
                     small.addLast(f); smallBytes += f.frameBytes
                 }
             } else if (main.isNotEmpty()) {
@@ -240,13 +273,45 @@ class PagePool(
         return false
     }
 
+    val allocFailures = AtomicLong()
+
+    private fun allocFailure(what: String, evictedThisCall: Int) {
+        if (allocFailures.incrementAndGet() <= 20) {
+            val pinned = small.count { it.pins.get() > 0 } + main.count { it.pins.get() > 0 }
+            val dead = small.count { it.pins.get() < 0 } + main.count { it.pins.get() < 0 }
+            val freqs = (small + main).groupingBy { it.freq }.eachCount()
+            LOGGER.warn("PagePool alloc failure ($what): evictedThisCall=$evictedThisCall small=${small.size} main=${main.size} pinned=$pinned dead=$dead freqs=$freqs smallBytes=$smallBytes mainBytes=$mainBytes frameAl=${frameAl?.allocatedMemory}")
+        }
+    }
+
     private fun allocBlock(order: Int): Long = synchronized(lock) {
+        var evicted = 0
         while (true) {
             val off = buddyAlloc(order)
             if (off >= 0) return off
-            if (!evictOne()) return -1
+            if (!evictOne()) {
+                allocFailure("region order=$order", evicted); return -1
+            }
+            evicted++
         }
         @Suppress("UNREACHABLE_CODE") -1
+    }
+
+    private fun allocArrowFrame(size: Long): ArrowBuf {
+        val al = frameAl!!
+        var evicted = 0
+        while (true) {
+            try {
+                return al.buffer(size)
+            } catch (e: OutOfMemoryException) {
+                synchronized(lock) {
+                    if (!evictOne()) {
+                        allocFailure("arrow size=$size", evicted); throw e
+                    }
+                    evicted++
+                }
+            }
+        }
     }
 
     private val channels = ConcurrentHashMap<Path, FileChannel>()
@@ -318,32 +383,43 @@ class PagePool(
             val dataOff = offset - alignedStart
             val readLen = if (direct) ((offset + length + MIN_BLOCK - 1) and (MIN_BLOCK - 1).inv()) - alignedStart else length
             val order = orderFor(readLen)
-            if (order > MAX_SHIFT) return loadBypass(path, offset, length, fallbackAl)
+            if (!arrowMode && order > MAX_SHIFT) return loadBypass(path, offset, length, fallbackAl)
 
             val f = Frame(key, length)
             if (frames.putIfAbsent(key, f) != null) continue
             misses.incrementAndGet()
 
             try {
-                val blockOff = allocBlock(order)
-                if (blockOff < 0) {
-                    frames.remove(key, f)
-                    f.loaded.complete(Unit)
-                    return loadBypass(path, offset, length, fallbackAl)
+                val frameBase: Long
+                if (arrowMode) {
+                    val buf = allocArrowFrame(if (direct) readLen + MIN_BLOCK else readLen)
+                    frameBase = if (direct) (buf.memoryAddress() + MIN_BLOCK - 1) and (MIN_BLOCK - 1).inv() else buf.memoryAddress()
+                    f.frameBytes = buf.capacity()
+                    f.free = { buf.close() }
+                } else {
+                    val blockOff = allocBlock(order)
+                    if (blockOff < 0) {
+                        frames.remove(key, f)
+                        f.loaded.complete(Unit)
+                        return loadBypass(path, offset, length, fallbackAl)
+                    }
+                    frameBase = baseAddr + blockOff
+                    f.frameBytes = 1L shl order
+                    f.free = { buddyFree(blockOff, order) }
                 }
-                f.blockOff = blockOff; f.order = order; f.dataOff = dataOff
+                f.addr = frameBase + dataOff
 
                 try {
                     withContext(ioDispatcher) {
-                        readInto(channel(path), path, region.asSlice(blockOff, readLen), alignedStart, dataOff + length)
+                        readInto(channel(path), path, MemorySegment.ofAddress(frameBase).reinterpret(readLen), alignedStart, dataOff + length)
                     }
                 } catch (t: Throwable) {
-                    synchronized(lock) { buddyFree(blockOff, order) }
+                    synchronized(lock) { f.free() }
                     throw t
                 }
 
                 synchronized(lock) {
-                    if (ghost.remove(key) != null) {
+                    if (ghost.remove(key) != null && admitToMain()) {
                         f.inMain = true; main.addLast(f); mainBytes += f.frameBytes
                     } else {
                         small.addLast(f); smallBytes += f.frameBytes
