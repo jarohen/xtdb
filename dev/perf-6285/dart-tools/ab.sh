@@ -10,6 +10,8 @@ for v in "$@"; do
     noretainseq) args="-Dxtdb.memoryCache.noRetain=true -Dxtdb.scan.seqPageLoad=true";;
     retained) args="";;
     seq) args="-Dxtdb.scan.seqPageLoad=true";;
+    retbig) args="-Dxtdb.memoryCache.maxBytes=6000000000";;
+    seqbig) args="-Dxtdb.memoryCache.maxBytes=6000000000 -Dxtdb.scan.seqPageLoad=true";;
   esac
   out=$HOME/bench/runs/$v-$tag
   mkdir -p $HOME/bench/runs

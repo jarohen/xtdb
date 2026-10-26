@@ -222,6 +222,9 @@ class MemoryCache @JvmOverloads internal constructor(
     private val entries = LinkedHashMap<PathSlice, Any>(1024, 0.75f, true)
 
     private var residentBytes = 0L
+    private var peakResident = 0L
+    private var misses = 0L
+    private var evictions = 0L
 
     private fun evictIdle(needBytes: Long) {
         if (NO_RETAIN) return
@@ -232,6 +235,7 @@ class MemoryCache @JvmOverloads internal constructor(
             if (e is Ready && e.buf.refCnt() == 1) {
                 it.remove()
                 residentBytes -= e.size
+                evictions++
                 e.buf.referenceManager.release()
             }
         }
@@ -296,6 +300,8 @@ class MemoryCache @JvmOverloads internal constructor(
                     }.also { buf ->
                         entries[pathSlice] = Ready(buf, memSeg.byteSize())
                         if (!NO_RETAIN) residentBytes += memSeg.byteSize()
+                        if (residentBytes > peakResident) peakResident = residentBytes
+                        misses++
                         if (!NO_RETAIN) buf.referenceManager.retain() // one for the cache, one for the caller
                     }
                 }
@@ -342,6 +348,7 @@ class MemoryCache @JvmOverloads internal constructor(
 
     override fun close() {
         synchronized(lock) {
+            LOGGER.warn("dart cache stats: peakResident=$peakResident resident=$residentBytes entries=${entries.size} misses=$misses evictions=$evictions max=$maxSizeBytes")
             if (!NO_RETAIN) entries.values.toList().forEach { if (it is Ready) it.buf.referenceManager.release() }
             entries.clear()
             residentBytes = 0
