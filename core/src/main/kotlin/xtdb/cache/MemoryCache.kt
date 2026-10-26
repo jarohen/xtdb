@@ -220,6 +220,7 @@ class MemoryCache @JvmOverloads internal constructor(
     private val entries = LinkedHashMap<PathSlice, Any>(1024, 0.75f, true)
 
     private fun evictIdle(needBytes: Long) {
+        if (NO_RETAIN) return
         val it = entries.entries.iterator()
         while (cacheAl.allocatedMemory + needBytes > cacheAl.limit && it.hasNext()) {
             val e = it.next().value
@@ -236,9 +237,12 @@ class MemoryCache @JvmOverloads internal constructor(
             var mine: Loading? = null
             val existing = synchronized(lock) {
                 when (val e = entries[pathSlice]) {
-                    is Ready -> return e.buf.also { it.referenceManager.retain() }
+                    // NO_RETAIN: a Ready entry with refCnt 0 is mid-release0
                     is Loading -> e
-                    else -> Loading().also { mine = it; entries[pathSlice] = it }
+                    else -> {
+                        if (e is Ready && e.buf.refCnt() > 0) return e.buf.also { it.referenceManager.retain() }
+                        Loading().also { mine = it; entries[pathSlice] = it }
+                    }
                 }
             }
 
@@ -266,6 +270,9 @@ class MemoryCache @JvmOverloads internal constructor(
                                 override fun release0() {
                                     arena.close()
                                     onEvict?.close()
+                                    if (NO_RETAIN) synchronized(lock) {
+                                        (entries[pathSlice] as? Ready)?.let { if (it.buf.refCnt() == 0) entries.remove(pathSlice) }
+                                    }
                                 }
                             })
                     } catch (t: Throwable) {
@@ -273,7 +280,7 @@ class MemoryCache @JvmOverloads internal constructor(
                         arena.close(); onEvict?.close(); throw t
                     }.also { buf ->
                         entries[pathSlice] = Ready(buf, memSeg.byteSize())
-                        buf.referenceManager.retain() // one for the cache, one for the caller
+                        if (!NO_RETAIN) buf.referenceManager.retain() // one for the cache, one for the caller
                     }
                 }
                 loading.done.complete(Unit)
@@ -319,7 +326,7 @@ class MemoryCache @JvmOverloads internal constructor(
 
     override fun close() {
         synchronized(lock) {
-            entries.values.forEach { if (it is Ready) it.buf.referenceManager.release() }
+            if (!NO_RETAIN) entries.values.toList().forEach { if (it is Ready) it.buf.referenceManager.release() }
             entries.clear()
         }
         fetchCh.close()
@@ -348,6 +355,7 @@ class MemoryCache @JvmOverloads internal constructor(
 
     companion object {
         private val LEGACY = java.lang.Boolean.getBoolean("xtdb.memoryCache.legacy")
+        private val NO_RETAIN = java.lang.Boolean.getBoolean("xtdb.memoryCache.noRetain")
 
         @JvmStatic
         fun factory() = Factory()
