@@ -16,9 +16,9 @@ for pre in sys.argv[1:]:
     rows = []
     for l in open(pre + '.proc.mem'):
         f = l.split()
-        if len(f) < 10: continue
+        if len(f) < 9: continue
         t = tod(float(f[0]))
-        if st <= t <= en: rows.append([int(f[1])*1024, int(f[2])*1024] + [int(x) for x in f[3:9]])
+        if st <= t <= en: u, cache, rss, mapped, inact, act = (int(x) for x in f[3:9]); rows.append([int(f[1])*1024, int(f[2])*1024, u, rss, cache, mapped, act, inact])
     med = [statistics.median(c) for c in zip(*rows)] if rows else [0]*8
     ra, rf, use, crss, ccache, cmap, cact, cinact = med
     stats = []
