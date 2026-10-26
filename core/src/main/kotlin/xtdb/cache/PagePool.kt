@@ -14,7 +14,9 @@ import org.apache.arrow.memory.RootAllocator
 import org.apache.arrow.memory.rounding.RoundingPolicy
 import xtdb.util.info
 import xtdb.util.logger
+import xtdb.util.maxDirectMemory
 import xtdb.util.warn
+import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.nio.channels.FileChannel
 import java.nio.file.Path
@@ -60,12 +62,13 @@ class PagePool(
 
         @JvmStatic
         val INSTANCE: PagePool? by lazy {
-            System.getProperty("xtdb.pagePool.bytes")?.let { sz ->
+            (System.getProperty("xtdb.pagePool.bytes")?.let { parseSize(it) }
+                ?: System.getProperty("xtdb.pagePool.ratio")?.let { (maxDirectMemory * it.toDouble()).toLong() })?.let { sz ->
                 PagePool(
-                    parseSize(sz),
+                    sz,
                     direct = System.getProperty("xtdb.pagePool.direct", "true").toBoolean(),
                     ioParallelism = System.getProperty("xtdb.pagePool.io", "8").toInt()
-                ).also { LOGGER.info("PagePool: capacity=${it.capacityBytes} direct=${it.direct} mode=${System.getProperty("xtdb.pagePool.mode", "region")} admit=${System.getProperty("xtdb.pagePool.admit", "s3")}") }
+                ).also { LOGGER.info("PagePool: capacity=${it.capacityBytes} maxDirectMemory=$maxDirectMemory trim=${it.trim} arena=${it.useArena} direct=${it.direct} mode=${System.getProperty("xtdb.pagePool.mode", "region")} admit=${System.getProperty("xtdb.pagePool.admit", "s3")}") }
             }
         }
 
@@ -89,8 +92,21 @@ class PagePool(
 
     private val regionBytes =
         if (arrowMode) capacityBytes else (capacityBytes / MAX_BLOCK).coerceAtLeast(1) * MAX_BLOCK
-    private val rawAddr = if (arrowMode) 0L else unsafe.allocateMemory(regionBytes + MIN_BLOCK)
-    private val baseAddr = (rawAddr + MIN_BLOCK - 1) and (MIN_BLOCK - 1).inv()
+    // DART: 'trim' = alloc_pages_exact-style - keep only the 4KiB-rounded used length of a buddy block, return the tail
+    val trim = System.getProperty("xtdb.pagePool.trim", "false").toBoolean()
+
+    // DART: the region from an FFM arena counts against MaxDirectMemorySize (JDK 21); Unsafe doesn't
+    val useArena = System.getProperty("xtdb.pagePool.arena", "false").toBoolean()
+
+    private val baseAddr =
+        when {
+            arrowMode -> 0L
+            useArena -> Arena.ofShared().allocate(regionBytes, MIN_BLOCK).address()
+            else -> {
+                val rawAddr = unsafe.allocateMemory(regionBytes + MIN_BLOCK)
+                (rawAddr + MIN_BLOCK - 1) and (MIN_BLOCK - 1).inv()
+            }
+        }
 
     val allocator: BufferAllocator = RootAllocator(Long.MAX_VALUE)
 
@@ -110,12 +126,20 @@ class PagePool(
         }
     }
 
+    private var freeBytes = if (arrowMode) 0L else regionBytes
+
+    private fun largestFree(): Long {
+        for (k in MAX_SHIFT downTo MIN_SHIFT) if (freeLists[k].isNotEmpty()) return 1L shl k
+        return 0
+    }
+
     private fun buddyAlloc(order: Int): Long {
         var k = order
         while (k <= MAX_SHIFT && freeLists[k].isEmpty()) k++
         if (k > MAX_SHIFT) return -1
         val it = freeLists[k].iterator()
         val off = it.next(); it.remove()
+        freeBytes -= 1L shl order
         while (k > order) {
             k--
             freeLists[k].add(off + (1L shl k))
@@ -123,7 +147,23 @@ class PagePool(
         return off
     }
 
+    // frees [off, off + len) as aligned power-of-two pieces, largest-first from the start
+    private fun buddyFreeRange(off0: Long, len0: Long) {
+        var off = off0
+        var len = len0
+        while (len > 0) {
+            var o = 63 - java.lang.Long.numberOfLeadingZeros(len)
+            while ((off and ((1L shl o) - 1)) != 0L) o--
+            buddyFree(off, o)
+            off += 1L shl o; len -= 1L shl o
+        }
+    }
+
+    // each tail piece's buddy overlaps the used range, so nothing coalesces until the frame itself is freed
+    private fun freeTail(off: Long, len: Long) = buddyFreeRange(off, len)
+
     private fun buddyFree(off0: Long, order0: Int) {
+        freeBytes += 1L shl order0
         var off = off0
         var order = order0
         while (order < MAX_SHIFT) {
@@ -194,7 +234,11 @@ class PagePool(
     fun statsLine() =
         "PagePool stats: hits=${hits.get()} misses=${misses.get()} evictions=${evictions.get()} bypasses=${bypasses.get()} " +
                 "resident=${residentBytes} small=$smallBytes main=$mainBytes frames=${frames.size} pinnedFrames=$pinnedFrames " +
-                "readBytes=${readBytes.get()} readMs=${readNanos.get() / 1_000_000} allocFailures=${allocFailures.get()}" +
+                "readBytes=${readBytes.get()} readMs=${readNanos.get() / 1_000_000} allocFailures=${allocFailures.get()} " +
+                "frameBytes=${synchronized(lock) { (small + main).sumOf { it.frameBytes } }} pageBytes=${synchronized(lock) { (small + main).sumOf { it.length } }} " +
+                "freeBytes=${synchronized(lock) { freeBytes }} largestFree=${synchronized(lock) { largestFree() }} " +
+                "evictingAllocs=${evictingAllocs.get()} maxEvictionsPerAlloc=${maxEvictionsPerAlloc.get()} " +
+                "freeBytesAtEvictSum=${freeBytesAtEvictSum.get()} largestFreeAtEvictSum=${largestFreeAtEvictSum.get()}" +
                 (frameAl?.let { " frameAlBytes=${it.allocatedMemory}" } ?: "")
 
     init {
@@ -284,12 +328,27 @@ class PagePool(
         }
     }
 
+    val evictingAllocs = AtomicLong()
+    val maxEvictionsPerAlloc = AtomicLong()
+    val freeBytesAtEvictSum = AtomicLong()
+    val largestFreeAtEvictSum = AtomicLong()
+
     private fun allocBlock(order: Int): Long = synchronized(lock) {
         var evicted = 0
         while (true) {
             val off = buddyAlloc(order)
-            if (off >= 0) return off
+            if (off >= 0) {
+                if (evicted > 0) {
+                    evictingAllocs.incrementAndGet()
+                    if (evicted > maxEvictionsPerAlloc.get()) maxEvictionsPerAlloc.set(evicted.toLong())
+                }
+                return off
+            }
+            if (evicted == 0) {
+                freeBytesAtEvictSum.addAndGet(freeBytes); largestFreeAtEvictSum.addAndGet(largestFree())
+            }
             if (!evictOne()) {
+                LOGGER.warn("PagePool region alloc failure: order=$order evicted=$evicted freeBytes=$freeBytes largestFree=${largestFree()}")
                 allocFailure("region order=$order", evicted); return -1
             }
             evicted++
@@ -404,8 +463,16 @@ class PagePool(
                         return loadBypass(path, offset, length, fallbackAl)
                     }
                     frameBase = baseAddr + blockOff
-                    f.frameBytes = 1L shl order
-                    f.free = { buddyFree(blockOff, order) }
+                    if (trim) {
+                        val used = (readLen + MIN_BLOCK - 1) and (MIN_BLOCK - 1).inv()
+                        val block = 1L shl order
+                        if (used < block) synchronized(lock) { freeTail(blockOff + used, block - used) }
+                        f.frameBytes = used
+                        f.free = { buddyFreeRange(blockOff, used) }
+                    } else {
+                        f.frameBytes = 1L shl order
+                        f.free = { buddyFree(blockOff, order) }
+                    }
                 }
                 f.addr = frameBase + dataOff
 
