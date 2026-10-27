@@ -10,8 +10,12 @@
   (:import (java.time Duration)))
 
 (def ^:dynamic *qs*
-  (-> (into #{} (range 1 (inc (count tpch-ra/queries))))
-      (disj 21)))
+  (if-let [qs (System/getProperty "xtdb.dart.qs")]
+    (into #{} (map parse-long) (clojure.string/split qs #","))
+    (-> (into #{} (range 1 (inc (count tpch-ra/queries))))
+        (disj 21))))
+
+(def hot-reps (parse-long (System/getProperty "xtdb.dart.hot-reps" "1")))
 
 (defn query-tpch [stage-name query-language scale-factor expected i]
   (let [q (nth tpch-ra/queries i)
@@ -80,7 +84,9 @@
 
            (queries-stage :cold-queries query-language scale-factor)
 
-           (queries-stage :hot-queries query-language scale-factor)]})
+           {:t :do, :stage :hot
+            :tasks (vec (for [r (range hot-reps)]
+                          (queries-stage (keyword (str "hot-queries" (when (pos? r) (str "-" (inc r))))) query-language scale-factor)))}]})
 
 (comment
   (binding [*qs* #{1}]

@@ -109,6 +109,16 @@ class MemoryCache @JvmOverloads internal constructor(
 
     private val entries = ConcurrentHashMap<PathSlice, Entry>()
 
+    private val pageCacheRead = System.getProperty("xtdb.dart.pageCacheRead", "true") == "true"
+    private val pageCacheHits = java.util.concurrent.atomic.AtomicLong()
+    private val directReads = java.util.concurrent.atomic.AtomicLong()
+    private val probeNanos = java.util.concurrent.atomic.AtomicLong()
+    private val pcReadNanos = java.util.concurrent.atomic.AtomicLong()
+    private val directReadNanos = java.util.concurrent.atomic.AtomicLong()
+    private val pcBytes = java.util.concurrent.atomic.AtomicLong()
+    private val directBytes = java.util.concurrent.atomic.AtomicLong()
+    internal val readCounts get() = pageCacheHits.get() to directReads.get()
+
     private val prefetchPermits = Semaphore(PREFETCH_PARALLELISM)
 
     private val bounceArena = Arena.ofShared()
@@ -197,9 +207,26 @@ class MemoryCache @JvmOverloads internal constructor(
 
             withContext(ioDispatcher) {
                 try {
-                    openDirect(path)
-                        ?.let { (ch, blockSize) -> ch.use { it.readDirect(path, slice, dest, blockSize) } }
-                        ?: FileChannel.open(path, READ).use { ch -> ch.readFully(path, dest, slice.offset) }
+                    val t0 = System.nanoTime()
+                    val resident = pageCacheRead && PageCacheProbe.isResident(path, slice.offset, slice.length)
+                    val t1 = System.nanoTime()
+                    probeNanos.addAndGet(t1 - t0)
+                    if (resident) {
+                        pageCacheHits.incrementAndGet()
+                        FileChannel.open(path, READ).use { ch ->
+                            if (System.getProperty("xtdb.dart.pcBounce") == "true") ch.readBounced(path, slice, dest)
+                            else ch.readFully(path, dest, slice.offset)
+                        }
+                        pcReadNanos.addAndGet(System.nanoTime() - t1)
+                        pcBytes.addAndGet(slice.length)
+                    } else {
+                        directReads.incrementAndGet()
+                        openDirect(path)
+                            ?.let { (ch, blockSize) -> ch.use { it.readDirect(path, slice, dest, blockSize) } }
+                            ?: FileChannel.open(path, READ).use { ch -> ch.readFully(path, dest, slice.offset) }
+                        directReadNanos.addAndGet(System.nanoTime() - t1)
+                        directBytes.addAndGet(slice.length)
+                    }
                 } catch (e: ClosedByInterruptException) {
                     throw InterruptedException(e.message)
                 }
@@ -217,6 +244,25 @@ class MemoryCache @JvmOverloads internal constructor(
                     throw IOException("short read of $path at $position: ${done + bb.position()} of ${dest.byteSize()} bytes")
             }
             done += bb.limit()
+        }
+    }
+
+    private fun FileChannel.readBounced(path: Path, slice: Slice, dest: MemorySegment) {
+        val bounce = bounces.poll() ?: bounceArena.allocate(BOUNCE_BYTES, BOUNCE_BYTES)
+        try {
+            var copied = 0L
+            while (copied < slice.length) {
+                val n = minOf(BOUNCE_BYTES, slice.length - copied)
+                val bb = bounce.asSlice(0, n).asByteBuffer()
+                while (bb.hasRemaining()) {
+                    if (read(bb, slice.offset + copied + bb.position()) <= 0)
+                        throw IOException("short read of $path at ${slice.offset}: $copied of ${slice.length} bytes")
+                }
+                MemorySegment.copy(bounce, 0, dest, copied, n)
+                copied += n
+            }
+        } finally {
+            bounces.offer(bounce)
         }
     }
 
@@ -321,6 +367,7 @@ class MemoryCache @JvmOverloads internal constructor(
     private val reclaimRegistration = (al.listener as? ReclaimingAllocationListener)?.register(::reclaim)
 
     override fun close() {
+        System.err.println("memory-cache reads: pageCache=${pageCacheHits.get()} direct=${directReads.get()} probeMs=${probeNanos.get() / 1000000} pcReadMs=${pcReadNanos.get() / 1000000} pcMB=${pcBytes.get() shr 20} directReadMs=${directReadNanos.get() / 1000000} directMB=${directBytes.get() shr 20}")
         reclaimRegistration?.close()
 
         synchronized(lock) {
