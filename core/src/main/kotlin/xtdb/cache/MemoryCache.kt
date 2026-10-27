@@ -109,10 +109,23 @@ class MemoryCache @JvmOverloads internal constructor(
     private var smallBytes = 0L
     private var mainBytes = 0L
     private val smallTargetBytes = maxSizeBytes / SMALL_QUEUE_RATIO
-    private val ghost = object : LinkedHashMap<PathSlice, Unit>() {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<PathSlice, Unit>) =
-            size > maxOf(MIN_GHOST_CAPACITY, small.size + main.size)
+    // value: whether the page was evicted from `main`
+    private val ghost = object : LinkedHashMap<PathSlice, Boolean>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<PathSlice, Boolean>) =
+            size > maxOf(MIN_GHOST_CAPACITY, GHOST_FACTOR * (small.size + main.size))
     }
+
+    // set while `main` is held steady for a loop; null otherwise
+    private class Frozen(var misses: Int = 0)
+
+    private var frozen: Frozen? = null
+    private val tracePath = System.getProperty("xtdb.cache.trace")?.let { Path.of(it) }
+    private val traceOut = tracePath?.let { java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(it.toFile()), 1 shl 20)) }
+    private val loopPolicy = System.getProperty("xtdb.cache.loopPolicy", "true").toBoolean()
+    private val missCount = java.util.concurrent.atomic.AtomicLong()
+    private val missNanos = java.util.concurrent.atomic.AtomicLong()
+    private val hitCount = java.util.concurrent.atomic.AtomicLong()
+    private val freezeCount = java.util.concurrent.atomic.AtomicLong()
 
     // by directory; 0 where the filesystem doesn't support O_DIRECT
     private val directBlockSizes = ConcurrentHashMap<Path, Long>()
@@ -124,6 +137,8 @@ class MemoryCache @JvmOverloads internal constructor(
             when (val entry = entries[pathSlice]) {
                 is Page -> entry.retainSlice()?.let { buf ->
                     if (entry.freq < MAX_FREQ) entry.freq++
+                    hitCount.incrementAndGet()
+                    traceOut?.let { synchronized(it) { it.println("${pathSlice.path}|${pathSlice.slice?.offset}|${pathSlice.slice?.length}|${entry.bytes}") } }
                     return buf
                 }
 
@@ -156,13 +171,12 @@ class MemoryCache @JvmOverloads internal constructor(
 
             val buf = page.retainSlice()!!
 
+            traceOut?.let { synchronized(it) { it.println("${pathSlice.path}|${pathSlice.slice?.offset}|${pathSlice.slice?.length}|${page.bytes}") } }
+            val t0 = System.nanoTime()
             synchronized(lock) {
-                if (ghost.remove(pathSlice) != null) {
-                    main.addLast(page); mainBytes += page.bytes
-                } else {
-                    small.addLast(page); smallBytes += page.bytes
-                }
+                admit(pathSlice, page)
             }
+            missCount.incrementAndGet(); missNanos.addAndGet(System.nanoTime() - t0)
 
             entries.replace(pathSlice, loading, page)
             loading.done.complete(Unit)
@@ -172,6 +186,32 @@ class MemoryCache @JvmOverloads internal constructor(
             loading.done.completeExceptionally(t)
             throw t
         }
+
+    private fun admit(pathSlice: PathSlice, page: Page) {
+        val evictedFromMain = ghost.remove(pathSlice)
+
+        if (loopPolicy) {
+            val f = frozen
+            if (f != null) {
+                // a pass's worth of misses: thaw if nothing held steady was read in it
+                if (++f.misses >= main.size) {
+                    if (main.none { it.freq > 0 }) frozen = null else main.forEach { it.freq = 0 }
+                    f.misses = 0
+                }
+            } else if (evictedFromMain == true) {
+                // a page we evicted from `main` is read again: the pages are cycling through faster than `main` can hold them
+                main.forEach { it.freq = 0 }
+                frozen = Frozen()
+                freezeCount.incrementAndGet()
+            }
+        }
+
+        if (evictedFromMain != null && frozen == null) {
+            main.addLast(page); mainBytes += page.bytes
+        } else {
+            small.addLast(page); smallBytes += page.bytes
+        }
+    }
 
     private suspend fun readPage(pathSlice: PathSlice, path: Path, slice: Slice): Page =
         // allocated outside `withContext`, which discards the block's result if we're cancelled meanwhile
@@ -305,10 +345,10 @@ class MemoryCache @JvmOverloads internal constructor(
             val smallLive = small.isNotEmpty() && smallSkips < small.size
             val mainLive = main.isNotEmpty() && mainSkips < main.size
 
-            if (smallLive && (smallBytes >= smallTargetBytes || !mainLive)) {
+            if (smallLive && (smallBytes >= smallTargetBytes || !mainLive || frozen != null)) {
                 val page = small.removeFirst().also { smallBytes -= it.bytes }
                 when {
-                    page.freq > 0 -> {
+                    page.freq > 0 && frozen == null -> {
                         smallSkips = 0
                         page.freq = 0
                         main.addLast(page); mainBytes += page.bytes
@@ -316,7 +356,7 @@ class MemoryCache @JvmOverloads internal constructor(
 
                     !page.isHeld -> {
                         evict(page)
-                        ghost[page.pathSlice] = Unit
+                        ghost[page.pathSlice] = false
                         return page.bytes
                     }
 
@@ -339,6 +379,8 @@ class MemoryCache @JvmOverloads internal constructor(
                     else -> {
                         mainBytes -= page.bytes
                         evict(page)
+                        ghost[page.pathSlice] = true
+                        frozen = null
                         return page.bytes
                     }
                 }
@@ -359,6 +401,8 @@ class MemoryCache @JvmOverloads internal constructor(
 
     override fun close() {
         reclaimRegistration?.close()
+        traceOut?.close()
+        System.err.println("memory-cache: loopPolicy=$loopPolicy hits=${hitCount.get()} misses=${missCount.get()} freezes=${freezeCount.get()} admitMicros/miss=${if (missCount.get() > 0) missNanos.get() / missCount.get() / 1000.0 else 0.0}")
 
         synchronized(lock) {
             entries.clear()
@@ -379,7 +423,7 @@ class MemoryCache @JvmOverloads internal constructor(
         fun maxSizeRatio(maxSizeRatio: Double) = apply { this.maxSizeRatio = maxSizeRatio }
 
         fun open(al: BufferAllocator, meterRegistry: MeterRegistry? = null): MemoryCache {
-            val maxSizeBytes = maxSizeBytes ?: (maxDirectMemory * maxSizeRatio).toLong()
+            val maxSizeBytes = System.getProperty("xtdb.cache.maxSizeBytes")?.toLong() ?: maxSizeBytes ?: (maxDirectMemory * maxSizeRatio).toLong()
             return MemoryCache(al, maxSizeBytes)
                 .also { meterRegistry?.registerMemoryCache(it) }
         }
@@ -399,6 +443,7 @@ class MemoryCache @JvmOverloads internal constructor(
         private const val SMALL_QUEUE_RATIO = 10
         private const val MAX_BUFFERED_READ_BYTES = 1L shl 30
         private const val MIN_GHOST_CAPACITY = 16
+        private const val GHOST_FACTOR = 2
 
         @JvmStatic
         fun factory() = Factory()
