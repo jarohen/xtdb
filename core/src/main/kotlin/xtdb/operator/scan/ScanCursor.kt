@@ -61,7 +61,7 @@ class ScanCursor(
             }
         }
         fill()
-        val t = upcoming.removeFirstOrNull()
+        val t = upcoming.pollFirst()
         fill()
         return t
     }
