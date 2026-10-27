@@ -35,10 +35,14 @@ interface Segment<L> : AutoCloseable {
 
         suspend fun loadDataPage(al: BufferAllocator): RelationReader
 
+        /** Asks for the page to be read ahead of a [loadDataPage]; a no-op where the page isn't read from storage. */
+        fun prefetchDataPage() = Unit
+
         companion object {
             fun <L> page(segment: Segment<L>, leaf: L) = object : Page<L> {
                 override val sameSystemTimeResolved get() = segment.sameSystemTimeResolved
                 override suspend fun loadDataPage(al: BufferAllocator) = segment.loadDataPage(al, leaf)
+                override fun prefetchDataPage() = segment.prefetchDataPage(leaf)
             }
         }
     }
@@ -66,4 +70,6 @@ interface Segment<L> : AutoCloseable {
     }
 
     suspend fun loadDataPage(al: BufferAllocator, leaf: L): RelationReader
+
+    fun prefetchDataPage(leaf: L) = Unit
 }

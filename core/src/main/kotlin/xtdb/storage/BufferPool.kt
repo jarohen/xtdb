@@ -48,6 +48,13 @@ interface BufferPool : AutoCloseable {
     suspend fun getRecordBatch(key: Path, idx: Int): ArrowRecordBatch
 
     /**
+     * Starts loading a record batch into the memory cache without waiting for it or pinning it.
+     *
+     * @return whether a load was started
+     */
+    fun prefetchRecordBatch(key: Path, idx: Int): Boolean = false
+
+    /**
      * Stores an object in the buffer pool.
      *
      * Suspends: for a remote pool this is a network write, and holding a dispatcher thread across it
@@ -152,6 +159,8 @@ class ReadOnlyBufferPool(private val delegate: BufferPool) : BufferPool {
     override fun getFooter(key: Path): ArrowFooter = delegate.getFooter(key)
 
     override suspend fun getRecordBatch(key: Path, idx: Int): ArrowRecordBatch = delegate.getRecordBatch(key, idx)
+
+    override fun prefetchRecordBatch(key: Path, idx: Int) = delegate.prefetchRecordBatch(key, idx)
 
     override suspend fun putObject(key: Path, buffer: ByteBuffer) {
         throw Fault("Attempted write to read-only storage: $key")

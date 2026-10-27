@@ -176,6 +176,22 @@ internal class RemoteBufferPool(
         }
     }
 
+    override fun prefetchRecordBatch(key: Path, idx: Int): Boolean {
+        val footer = getFooter(key)
+        val arrowBlock = footer.recordBatches.getOrNull(idx) ?: return false
+
+        return memoryCache.prefetch(
+            memoryCacheRootPath.resolve(key),
+            MemoryCache.Slice(arrowBlock.offset, arrowBlock.metadataLength + arrowBlock.bodyLength)
+        ) {
+            memCacheMisses?.increment()
+            diskCache.get(cacheRootPath.resolve(key)) { k, tmpFile ->
+                diskCacheMisses?.increment()
+                getObject(cacheRootPath.relativize(k), tmpFile)
+            }.thenApply { entry -> Pair(entry.path, entry) }.await()
+        }
+    }
+
     override fun listAllObjects() = objectStore.listAllObjects()
     override fun listAllObjects(dir: Path) = objectStore.listAllObjects(dir)
     override fun listAfter(dir: Path, afterKey: Path) = objectStore.listAfter(dir, afterKey)

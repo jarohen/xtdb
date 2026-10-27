@@ -8,6 +8,10 @@ import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -31,6 +35,8 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption.READ
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.fileSize
 
 /**
@@ -78,6 +84,9 @@ class MemoryCache @JvmOverloads internal constructor(
         @Volatile
         var freq = 0
 
+        // set while a prefetched page's reservation against the readahead budget is outstanding
+        val unreached = AtomicBoolean(false)
+
         val bytes get() = frame.capacity()
 
         // the cache's own reference is the one the frame was allocated with;
@@ -97,6 +106,18 @@ class MemoryCache @JvmOverloads internal constructor(
     }
 
     private val entries = ConcurrentHashMap<PathSlice, Entry>()
+
+    private val prefetchScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private val prefetchBudgetBytes = (maxSizeBytes * PREFETCH_RATIO).toLong()
+    private val prefetchReservedBytes = AtomicLong()
+
+    internal val hits = AtomicLong()
+    internal val misses = AtomicLong()
+    internal val waits = AtomicLong()
+    internal val prefetchIssued = AtomicLong()
+    internal val prefetchRefused = AtomicLong()
+    internal val prefetchHits = AtomicLong()
+    internal val prefetchWasted = AtomicLong()
 
     private val bounceArena = Arena.ofShared()
     private val bounces = ConcurrentLinkedQueue<MemorySegment>()
@@ -124,10 +145,15 @@ class MemoryCache @JvmOverloads internal constructor(
             when (val entry = entries[pathSlice]) {
                 is Page -> entry.retainSlice()?.let { buf ->
                     if (entry.freq < MAX_FREQ) entry.freq++
+                    if (entry.unreached.compareAndSet(true, false)) {
+                        prefetchReservedBytes.addAndGet(-entry.length)
+                        prefetchHits.incrementAndGet()
+                    } else hits.incrementAndGet()
                     return buf
                 }
 
                 is Loading -> try {
+                    waits.incrementAndGet()
                     entry.done.await()
                 } catch (_: CancellationException) {
                     // either we were cancelled, or whoever was loading it was - in which case we load it ourselves
@@ -136,13 +162,50 @@ class MemoryCache @JvmOverloads internal constructor(
 
                 null -> {
                     val loading = Loading()
-                    if (entries.putIfAbsent(pathSlice, loading) == null) return load(pathSlice, loading, fetch)
+                    if (entries.putIfAbsent(pathSlice, loading) == null) {
+                        misses.incrementAndGet()
+                        return load(pathSlice, loading, fetch, prefetch = false)!!
+                    }
                 }
             }
         }
     }
 
-    private suspend fun load(pathSlice: PathSlice, loading: Loading, fetch: Fetch): ArrowBuf =
+    /**
+     * Starts loading the page if it's neither resident nor already loading, without pinning it.
+     * Refuses once the pages prefetched but not yet read reach the readahead budget.
+     *
+     * @return whether a load was started
+     */
+    fun prefetch(key: Path, slice: Slice? = null, fetch: Fetch): Boolean {
+        val pathSlice = PathSlice(key, slice)
+        if (entries.containsKey(pathSlice)) return false
+
+        val reserve = slice?.length ?: 0L
+        if (prefetchReservedBytes.addAndGet(reserve) > prefetchBudgetBytes) {
+            prefetchReservedBytes.addAndGet(-reserve)
+            prefetchRefused.incrementAndGet()
+            return false
+        }
+
+        val loading = Loading()
+        if (entries.putIfAbsent(pathSlice, loading) != null) {
+            prefetchReservedBytes.addAndGet(-reserve)
+            return false
+        }
+
+        prefetchIssued.incrementAndGet()
+        prefetchScope.launch {
+            try {
+                load(pathSlice, loading, fetch, prefetch = true)
+            } catch (_: Throwable) {
+                prefetchReservedBytes.addAndGet(-reserve)
+            }
+        }
+        return true
+    }
+
+    private suspend fun load(pathSlice: PathSlice, loading: Loading, fetch: Fetch, prefetch: Boolean): ArrowBuf? =
         try {
             val (localPath, onRead) = fetch(pathSlice.path)
 
@@ -154,7 +217,8 @@ class MemoryCache @JvmOverloads internal constructor(
                 throw t
             }
 
-            val buf = page.retainSlice()!!
+            val buf = if (prefetch) null else page.retainSlice()!!
+            if (prefetch) page.unreached.set(true)
 
             synchronized(lock) {
                 if (ghost.remove(pathSlice) != null) {
@@ -350,8 +414,29 @@ class MemoryCache @JvmOverloads internal constructor(
     }
 
     private fun evict(page: Page) {
+        if (page.unreached.compareAndSet(true, false)) {
+            prefetchReservedBytes.addAndGet(-page.length)
+            prefetchWasted.incrementAndGet()
+        }
         entries.remove(page.pathSlice, page)
         page.frame.close()
+    }
+
+    private val statsLogger = System.getProperty("xtdb.cache.statsLog")?.let {
+        Thread {
+            try {
+                while (true) {
+                    Thread.sleep(1000)
+                    System.err.println(
+                        "MEMCACHE-STATS t=${System.currentTimeMillis()} hits=${hits.get()} misses=${misses.get()} waits=${waits.get()} " +
+                            "pfIssued=${prefetchIssued.get()} pfRefused=${prefetchRefused.get()} pfHits=${prefetchHits.get()} " +
+                            "pfWasted=${prefetchWasted.get()} pfReservedMB=${prefetchReservedBytes.get() shr 20} " +
+                            "usedMB=${al.allocatedMemory shr 20}"
+                    )
+                }
+            } catch (_: InterruptedException) {
+            }
+        }.apply { isDaemon = true; name = "memcache-stats"; start() }
     }
 
     // registered last, because another thread's failed allocation can call `reclaim` as soon as it is
@@ -359,6 +444,7 @@ class MemoryCache @JvmOverloads internal constructor(
 
     override fun close() {
         reclaimRegistration?.close()
+        prefetchScope.cancel()
 
         synchronized(lock) {
             entries.clear()
@@ -399,6 +485,7 @@ class MemoryCache @JvmOverloads internal constructor(
         private const val SMALL_QUEUE_RATIO = 10
         private const val MAX_BUFFERED_READ_BYTES = 1L shl 30
         private const val MIN_GHOST_CAPACITY = 16
+        private val PREFETCH_RATIO = System.getProperty("xtdb.cache.prefetchRatio")?.toDouble() ?: 0.25
 
         @JvmStatic
         fun factory() = Factory()

@@ -112,6 +112,20 @@ internal class LocalStorage(
         }
     }
 
+    override fun prefetchRecordBatch(key: Path, idx: Int): Boolean {
+        val path = rootPath.resolve(key).takeIf { it.exists() } ?: return false
+        val footer = arrowFooterCache.get(key) { path.openReadableChannel().readArrowFooter() }
+        val arrowBlock = footer.recordBatches.getOrNull(idx) ?: return false
+
+        return memoryCache.prefetch(
+            cacheRootPath.resolve(key),
+            MemoryCache.Slice(arrowBlock.offset, arrowBlock.metadataLength + arrowBlock.bodyLength)
+        ) { p ->
+            memCacheMisses?.increment()
+            Pair(rootPath.resolve(cacheRootPath.relativize(p)).takeIf { it.exists() } ?: throw objectMissingException(p), null)
+        }
+    }
+
     private fun ByteBuffer.writeToPath(path: Path) {
         newByteChannel(path, WRITE, TRUNCATE_EXISTING, CREATE).use { channel ->
             while (hasRemaining()) channel.write(this)

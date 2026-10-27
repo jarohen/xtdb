@@ -49,6 +49,23 @@ class ScanCursor(
 
     private val bufferedRels: Queue<RelationReader> = LinkedList()
 
+    // tasks pulled from the plan ahead of the scan, whose pages we've asked the cache to read
+    private val upcoming = ArrayDeque<MergeTask>()
+
+    private fun nextTask(): MergeTask? {
+        fun fill() {
+            while (upcoming.size <= PREFETCH_TASKS && mergeTasks.hasNext()) {
+                val t = mergeTasks.next()
+                if (PREFETCH_TASKS > 0) t.pages.forEach { it.prefetchDataPage() }
+                upcoming.addLast(t)
+            }
+        }
+        fill()
+        val t = upcoming.removeFirstOrNull()
+        fill()
+        return t
+    }
+
     override fun tryAdvance(c: Consumer<in RelationReader>): Boolean {
         bufferedRels.poll()?.use {
             c.accept(it)
@@ -56,8 +73,8 @@ class ScanCursor(
         }
 
         val iidPred = colPreds["_iid"]
-        while (mergeTasks.hasNext()) {
-            val task = mergeTasks.next()
+        while (true) {
+            val task = nextTask() ?: break
             val taskPath = task.path
             val resolver = openResolver()
 
@@ -105,6 +122,11 @@ class ScanCursor(
     override fun close() {
         bufferedRels.apply { closeAll(); clear() }
         bufferedRels.clear()
+        upcoming.clear()
         ownedSegments.closeAll()
+    }
+
+    companion object {
+        private val PREFETCH_TASKS = System.getProperty("xtdb.scan.prefetchTasks")?.toInt() ?: 4
     }
 }
