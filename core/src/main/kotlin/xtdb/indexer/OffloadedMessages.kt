@@ -53,7 +53,7 @@ internal class OffloadingLogsDriver(
  * Callers MUST resolve before reading anything but `termId` off the message: an offloaded `BlockUploaded`
  * closes a block, and one left unresolved would be buffered behind the block it was meant to close.
  */
-internal fun BufferPool.resolveOversized(record: Log.Record<ReplicaMessage>): Log.Record<ReplicaMessage> {
+internal suspend fun BufferPool.resolveOversized(record: Log.Record<ReplicaMessage>): Log.Record<ReplicaMessage> {
     val msg = record.message
     if (msg !is ReplicaMessage.OversizedMessage) return record
 

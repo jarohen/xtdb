@@ -324,7 +324,7 @@ class TableCatalog(private val flow: StateFlow<State>) {
             allBlockFiles.lastOrNull()?.key
                 ?.let { blockKey -> Block.parseFrom(getByteArray(blockKey)) }
 
-        fun BufferPool.blockFromLatest(distance: Int): Block? =
+        suspend fun BufferPool.blockFromLatest(distance: Int): Block? =
             allBlockFiles.toList().dropLast(maxOf(0, distance - 1)).lastOrNull()?.key
                 ?.let { blockKey -> Block.parseFrom(getByteArray(blockKey)) }
 

@@ -126,7 +126,7 @@ class TrieGarbageCollector(
         return any
     }
 
-    private fun defaultGarbageAsOf(): Instant? =
+    private suspend fun defaultGarbageAsOf(): Instant? =
         bufferPool.blockFromLatest(blocksToKeep)
             ?.let { it.latestCompletedTx.systemTime.microsAsInstant - garbageLifetime }
 
