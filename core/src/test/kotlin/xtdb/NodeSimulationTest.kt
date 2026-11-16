@@ -115,7 +115,7 @@ class NodeSimulationTest : SimulationTestBase() {
         sharedBufferPool = MemoryStorage(allocator, epoch = 0)
 
         dbs = List(numberOfSystems) {
-            val partitionValue = createPartitionValue(sharedBufferPool.latestBlock)
+            val partitionValue = createPartitionValue(runBlocking { sharedBufferPool.latestBlock() })
             val compactor = Compactor.Impl(
                 compactorDriverFactory, null, jobCalculator, false, 2,
                 dispatcher = dispatcher, ioDispatcher = dispatcher

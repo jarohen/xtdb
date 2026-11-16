@@ -72,7 +72,7 @@ class BlockGarbageCollectorTest {
                 assertBlockCount(bufferPool, table1BlockPath, 10)
                 assertBlockCount(bufferPool, table2BlockPath, 10)
 
-                val blockCat = tableCatalogAt(bufferPool.latestBlock)
+                val blockCat = tableCatalogAt(bufferPool.latestBlock())
 
                 val gc = BlockGarbageCollector(
                     bufferPool, blockCat,
@@ -121,7 +121,7 @@ class BlockGarbageCollectorTest {
                 val kept = payloadAt(9L)
 
                 BlockGarbageCollector(
-                    bufferPool, tableCatalogAt(bufferPool.latestBlock),
+                    bufferPool, tableCatalogAt(bufferPool.latestBlock()),
                     blocksToKeep = 3,
                     enabled = false,
                     dbName = "xtdb",
@@ -150,7 +150,7 @@ class BlockGarbageCollectorTest {
                     }
 
                     val gc = BlockGarbageCollector(
-                        p0, tableCatalogAt(p0.latestBlock),
+                        p0, tableCatalogAt(p0.latestBlock()),
                         blocksToKeep = 3,
                         enabled = false,
                         dbName = "xtdb",

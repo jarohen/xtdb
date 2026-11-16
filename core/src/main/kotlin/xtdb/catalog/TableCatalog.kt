@@ -298,8 +298,7 @@ class TableCatalog(private val flow: StateFlow<State>) {
             }
 
         /** [initialState], with each recorded table's metadata loaded from [bufferPool]. */
-        @JvmStatic
-        fun loadState(bufferPool: BufferPool, block: Block?): State {
+        suspend fun loadState(bufferPool: BufferPool, block: Block?): State {
             val state = initialState(block)
             val blockIndex = state.blockIdx ?: return state
             return state.copy(tables = loadTablesFromStorage(bufferPool, state.recordedEntries, blockIndex))
@@ -321,9 +320,8 @@ class TableCatalog(private val flow: StateFlow<State>) {
         fun BufferPool.tableBlocks(table: TableSlug): Iterable<ObjectStore.StoredObject> =
             listAllObjects(table.tablePath.resolve(blocksPath))
 
-        @JvmStatic
-        val BufferPool.latestBlock: Block?
-            get() = allBlockFiles.lastOrNull()?.key
+        suspend fun BufferPool.latestBlock(): Block? =
+            allBlockFiles.lastOrNull()?.key
                 ?.let { blockKey -> Block.parseFrom(getByteArray(blockKey)) }
 
         fun BufferPool.blockFromLatest(distance: Int): Block? =
@@ -350,7 +348,7 @@ class TableCatalog(private val flow: StateFlow<State>) {
             )
         }
 
-        internal fun loadTablesFromStorage(
+        internal suspend fun loadTablesFromStorage(
             bufferPool: BufferPool, entries: List<TableEntry>, blockIndex: BlockIndex
         ): Map<TableRef, TableMeta> =
             entries.associate { entry ->

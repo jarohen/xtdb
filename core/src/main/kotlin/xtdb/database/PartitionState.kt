@@ -245,14 +245,12 @@ class PartitionState private constructor(
         private val trieCatalogFactory =
             requiringResolve("xtdb.trie-catalog/->factory").invoke() as TrieCatalog.Factory
 
-        @JvmStatic
-        @JvmOverloads
-        fun open(
+        suspend fun open(
             allocator: BufferAllocator,
             bufferPool: BufferPool,
             indexerConfig: IndexerConfig = IndexerConfig(),
         ): PartitionState {
-            val tableCatState = TableCatalog.loadState(bufferPool, bufferPool.latestBlock)
+            val tableCatState = TableCatalog.loadState(bufferPool, bufferPool.latestBlock())
                 // xt.txs and xt.role_membership are data-backed, so they're absent from the catalog
                 // until the first transaction / GRANT. Seed them (as empty CREATE TABLEs) so they're
                 // always resolvable - the columns mirror `OpenTx.writeTxRow` / the GRANT path.

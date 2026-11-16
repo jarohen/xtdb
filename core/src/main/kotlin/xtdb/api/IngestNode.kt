@@ -168,8 +168,10 @@ class IngestNode internal constructor(
                 val openedDbs = LinkedHashMap<DatabaseName, Database>()
                 val healthzServer: Healthz?
                 try {
-                    for ((dbName, dbConfig) in databases)
-                        openedDbs[dbName] = Database.open(base, dbName, dbConfig, base.compactor, rootScope)
+                    runBlocking {
+                        for ((dbName, dbConfig) in databases)
+                            openedDbs[dbName] = Database.open(base, dbName, dbConfig, base.compactor, rootScope)
+                    }
 
                     healthzServer = healthz?.let {
                         openHealthzServer.invoke(base, FixedDbCatalog(openedDbs), it) as Healthz

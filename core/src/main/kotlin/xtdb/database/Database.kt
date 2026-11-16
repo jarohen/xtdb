@@ -263,8 +263,7 @@ class Database(
             }
         }
 
-        @JvmStatic
-        fun open(
+        suspend fun open(
             base: NodeBase,
             dbName: DatabaseName,
             dbConfig: Config,
