@@ -7,6 +7,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import xtdb.NodeBase
 import xtdb.compactor.Compactor
@@ -108,7 +109,7 @@ class DatabaseCatalog @JvmOverloads constructor(
     /**
      * @return null where this call claimed the name; otherwise the entry already holding it.
      */
-    private fun attachOrExisting(dbName: DatabaseName, config: Database.Config): Entry? {
+    private suspend fun attachOrExisting(dbName: DatabaseName, config: Database.Config): Entry? {
         entries[dbName]?.let { return it }
         config.checkValid(dbName)
 
@@ -146,11 +147,11 @@ class DatabaseCatalog @JvmOverloads constructor(
         return existing
     }
 
-    override fun attach(dbName: DatabaseName, config: Database.Config?) {
+    override suspend fun attach(dbName: DatabaseName, config: Database.Config?) {
         attachOrExisting(dbName, config ?: Database.Config())?.let { throw it.attachConflict(dbName) }
     }
 
-    override fun databaseOrAttach(dbName: DatabaseName): Database? =
+    override suspend fun databaseOrAttach(dbName: DatabaseName): Database? =
         databaseOrNull(dbName) ?: run {
             LOG.debug { "attaching database on first use: $dbName" }
 
@@ -232,20 +233,22 @@ class DatabaseCatalog @JvmOverloads constructor(
         ): DatabaseCatalog {
             val catalog = DatabaseCatalog(base, base.compactor, closerDispatcher)
 
-            catalog.closeOnCatch {
-                val conf = base.config
-                val xtdbDbConfig = Database.Config()
-                    .log(conf.log)
-                    .storage(conf.storage)
-                    .let { if (conf.readOnlyDatabases) it.mode(Database.Mode.READ_ONLY) else it }
+            runBlocking {
+                catalog.closeOnCatch {
+                    val conf = base.config
+                    val xtdbDbConfig = Database.Config()
+                        .log(conf.log)
+                        .storage(conf.storage)
+                        .let { if (conf.readOnlyDatabases) it.mode(Database.Mode.READ_ONLY) else it }
 
-                catalog.attach("xtdb", xtdbDbConfig)
+                    catalog.attach("xtdb", xtdbDbConfig)
 
-                val secondaryDbs = catalog.primary.tableCatalog.snap().secondaryDatabases
-                for ((dbName, dbProtoConfig) in secondaryDbs) {
-                    if (dbName == "xtdb") continue
-                    val dbConfig = Database.Config.fromProto(dbProtoConfig)
-                    catalog.attach(dbName, dbConfig)
+                    val secondaryDbs = catalog.primary.tableCatalog.snap().secondaryDatabases
+                    for ((dbName, dbProtoConfig) in secondaryDbs) {
+                        if (dbName == "xtdb") continue
+                        val dbConfig = Database.Config.fromProto(dbProtoConfig)
+                        catalog.attach(dbName, dbConfig)
+                    }
                 }
             }
 

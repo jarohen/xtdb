@@ -4,6 +4,7 @@ import com.google.protobuf.Any as ProtoAny
 import org.apache.arrow.flight.sql.impl.FlightSql.TicketStatementQuery
 import org.apache.arrow.flight.Ticket
 import com.google.protobuf.ByteString
+import kotlinx.coroutines.runBlocking
 import org.apache.arrow.adbc.core.AdbcConnection
 import org.apache.arrow.adbc.core.AdbcConnection.GetObjectsDepth
 import org.apache.arrow.adbc.core.AdbcDatabase
@@ -629,7 +630,7 @@ class FlightSqlAdbcTest {
     @Test
     fun `test FlightSQL set then get catalog round-trips within a session`() {
         val dbCat = (xtdb as XtdbInternal).dbCatalog
-        dbCat.attach("other-db", null)
+        runBlocking { dbCat.attach("other-db", null) }
 
         cookieAwareClient().use { client ->
             assertEquals(
@@ -657,7 +658,7 @@ class FlightSqlAdbcTest {
     @Test
     fun `test FlightSQL catalog session option routes queries to that database`() {
         val dbCat = (xtdb as XtdbInternal).dbCatalog
-        dbCat.attach("other-db", null)
+        runBlocking { dbCat.attach("other-db", null) }
 
         cookieAwareClient().use { client ->
             client.setSessionOptions(
@@ -873,7 +874,7 @@ class FlightSqlAdbcTest {
     @Test
     fun `test FlightSQL empty catalog erases the session option back to default`() {
         val dbCat = (xtdb as XtdbInternal).dbCatalog
-        dbCat.attach("other-db", null)
+        runBlocking { dbCat.attach("other-db", null) }
 
         cookieAwareClient().use { client ->
             client.setSessionOptions(catalogOpt("other-db"), *emptyCallOpts)
@@ -919,7 +920,7 @@ class FlightSqlAdbcTest {
     @Test
     fun `test FlightSQL two sessions keep independent catalog and data`() {
         val dbCat = (xtdb as XtdbInternal).dbCatalog
-        dbCat.attach("other-db", null)
+        runBlocking { dbCat.attach("other-db", null) }
 
         cookieAwareClient().use { sessionA ->
             cookieAwareClient().use { sessionB ->
@@ -955,7 +956,7 @@ class FlightSqlAdbcTest {
     @Test
     fun `test FlightSQL x-xtdb-database header beats the session catalog option`() {
         val dbCat = (xtdb as XtdbInternal).dbCatalog
-        dbCat.attach("other-db", null)
+        runBlocking { dbCat.attach("other-db", null) }
 
         cookieAwareClient().use { client ->
             client.setSessionOptions(catalogOpt("other-db"), *emptyCallOpts)

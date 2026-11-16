@@ -105,7 +105,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
                     error("oversized message reached the staleness check unresolved")
             }
 
-    private fun processRecord(record: Log.Record<ReplicaMessage>) {
+    private suspend fun processRecord(record: Log.Record<ReplicaMessage>) {
         when (val msg = record.message) {
             is ReplicaMessage.ResolvedTx -> resolvedTxTimer.timed {
                 val systemTime = msg.systemTime
@@ -183,7 +183,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
     private fun ReplicaMessage.BlockUploaded.closes(pending: PendingBlock) =
         blockIndex == pending.blockIdx && storageVersion == Storage.VERSION && storageEpoch == bufferPool.epoch
 
-    fun handleRecord(record: Log.Record<ReplicaMessage>) {
+    suspend fun handleRecord(record: Log.Record<ReplicaMessage>) {
         val msg = record.message
         LOG.trace { "[$dbName] follower: message ${record.msgId} (${msg::class.simpleName})" }
 
@@ -200,7 +200,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
         if (!msg.stale) processRecord(record)
     }
 
-    private fun closeBlock(
+    private suspend fun closeBlock(
         pending: PendingBlock, record: Log.Record<ReplicaMessage>, msg: ReplicaMessage.BlockUploaded,
     ) {
         LOG.debug("[$dbName] block uploaded b${msg.blockIndex.asLexHex}: source=${msg.latestProcessedMsgId}, replica=${record.msgId} (${pending.bufferedRecords.size} buffered)")

@@ -1,5 +1,6 @@
 package xtdb.flight_sql
 
+import kotlinx.coroutines.runBlocking
 import xtdb.api.Xtdb
 import xtdb.database.Database
 import xtdb.database.DatabaseName
@@ -21,10 +22,10 @@ sealed interface UnknownDatabases {
 
     /** The first call naming it attaches it to this node alone, with the default config — as the playground does. */
     class AttachOnFirstUse(private val dbCatalog: Database.Catalog) : UnknownDatabases {
-        override fun admitCatalog(dbName: DatabaseName) = dbCatalog.databaseOrAttach(dbName) != null
+        override fun admitCatalog(dbName: DatabaseName) = runBlocking { dbCatalog.databaseOrAttach(dbName) } != null
 
         override fun beforeConnect(dbName: DatabaseName) {
-            dbCatalog.databaseOrAttach(dbName)
+            runBlocking { dbCatalog.databaseOrAttach(dbName) }
         }
     }
 }

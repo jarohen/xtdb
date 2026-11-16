@@ -11,7 +11,8 @@
            org.apache.arrow.vector.types.pojo.Schema
            xtdb.api.Xtdb
            xtdb.XtdbInternal
-           xtdb.arrow.Relation))
+           xtdb.arrow.Relation
+           xtdb.database.DatabaseCatalogSync))
 
 (def ^:private ^:dynamic ^FlightSqlClient *client* nil)
 (def ^:private ^:dynamic ^AdbcConnection *adbc-conn* nil)
@@ -223,7 +224,7 @@
 
 (t/deftest test-adbc-multi-db
   (let [db-cat (.getDbCatalog ^XtdbInternal tu/*node*)]
-    (.attach db-cat "other-db" nil)
+    (DatabaseCatalogSync/attach db-cat "other-db" nil)
 
     (with-open [conn (.connect ^Xtdb tu/*node*)]
       (t/testing "setCurrentCatalog / getCurrentCatalog"
@@ -260,7 +261,7 @@
 (t/deftest test-flightsql-multi-db
   (let [db-cat (.getDbCatalog ^XtdbInternal tu/*node*)
         other-db-opts (db-call-opts "other-db")]
-    (.attach db-cat "other-db" nil)
+    (DatabaseCatalogSync/attach db-cat "other-db" nil)
     (.executeUpdate *client* "CREATE TABLE users (_id, name)" empty-call-opts)
 
     (t/testing "insert and query on non-default database via header"

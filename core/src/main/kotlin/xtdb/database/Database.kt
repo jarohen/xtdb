@@ -571,7 +571,7 @@ class Database(
                 override fun checkCanDetach(dbName: DatabaseName): Unit =
                     error("can't detach database from empty db-cat")
 
-                override fun attach(dbName: DatabaseName, config: Config?): Unit =
+                override suspend fun attach(dbName: DatabaseName, config: Config?): Unit =
                     error("can't attach database to empty db-cat")
 
                 override fun detach(dbName: DatabaseName) =
@@ -592,12 +592,14 @@ class Database(
          *
          * @return the database, or null where it's attached dormant under `XTDB_SKIP_DBS`.
          */
-        fun databaseOrAttach(dbName: DatabaseName): Database? =
+        suspend fun databaseOrAttach(dbName: DatabaseName): Database? =
             databaseOrNull(dbName) ?: run {
                 LOG.debug { "attaching database on first use: $dbName" }
                 attach(dbName, null)
                 databaseOrNull(dbName)
             }
+
+        fun databaseOrAttachSync(dbName: DatabaseName): Database? = runBlocking { databaseOrAttach(dbName) }
 
         operator fun get(dbName: DatabaseName) = databaseOrNull(dbName)
 
@@ -640,7 +642,7 @@ class Database(
         /** [checkCanAttach]'s mirror. */
         fun checkCanDetach(dbName: DatabaseName)
 
-        fun attach(dbName: DatabaseName, config: Config?)
+        suspend fun attach(dbName: DatabaseName, config: Config?)
         fun detach(dbName: DatabaseName)
 
         override fun valAt(key: Any?) = valAt(key, null)

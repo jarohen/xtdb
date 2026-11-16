@@ -109,7 +109,7 @@ internal abstract class LeaderTermTest {
         override fun checkCanAttach(dbName: DatabaseName, config: Database.Config) {}
         override fun checkCanDetach(dbName: DatabaseName) {}
 
-        override fun attach(dbName: DatabaseName, config: Database.Config?) {
+        override suspend fun attach(dbName: DatabaseName, config: Database.Config?) {
             attached += dbName
         }
 

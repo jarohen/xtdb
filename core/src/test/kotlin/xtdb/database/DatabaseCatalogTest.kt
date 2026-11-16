@@ -2,6 +2,7 @@ package xtdb.database
 
 import clojure.lang.Keyword
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
@@ -30,7 +31,7 @@ class DatabaseCatalogTest {
                         .map {
                             executor.submit<Result<Unit>> {
                                 start.await()
-                                runCatching { catalog.attach("test_db", Database.Config()) }
+                                runCatching { runBlocking { catalog.attach("test_db", Database.Config()) } }
                             }
                         }
                         .also { start.countDown() }
@@ -60,7 +61,7 @@ class DatabaseCatalogTest {
                         .map {
                             executor.submit<Database?> {
                                 start.await()
-                                catalog.databaseOrAttach("test_db")
+                                runBlocking { catalog.databaseOrAttach("test_db") }
                             }
                         }
                         .also { start.countDown() }
@@ -91,14 +92,14 @@ class DatabaseCatalogTest {
                 }
 
                 DatabaseCatalog.open(base, closerExecutor.asCoroutineDispatcher()).use { catalog ->
-                    catalog.attach("test_db", Database.Config())
+                    runBlocking { catalog.attach("test_db", Database.Config()) }
                     try {
                         // The teardown coroutine is queued behind the gate, so the entry stays Detaching
                         // and the re-attach sees the transient conflict.
                         catalog.detach("test_db")
 
                         val ex = assertThrows<Conflict> {
-                            catalog.attach("test_db", Database.Config())
+                            runBlocking { catalog.attach("test_db", Database.Config()) }
                         }
                         assertEquals("xtdb/db-being-detached", ex.errCode())
                     } finally {
@@ -110,7 +111,7 @@ class DatabaseCatalogTest {
                     val deadline = System.nanoTime() + SECONDS.toNanos(10)
                     while (true) {
                         try {
-                            catalog.attach("test_db", Database.Config()); break
+                            runBlocking { catalog.attach("test_db", Database.Config()) }; break
                         } catch (e: Conflict) {
                             check(System.nanoTime() < deadline) { "detach did not complete within 10s" }
                             Thread.sleep(10)

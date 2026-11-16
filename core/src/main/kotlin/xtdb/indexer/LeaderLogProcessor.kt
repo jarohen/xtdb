@@ -138,7 +138,7 @@ internal class LeaderLogProcessor(
         }
     }
 
-    private fun applyDbOp(dbOp: DbOp?) {
+    private suspend fun applyDbOp(dbOp: DbOp?) {
         // Only the primary carries a catalog, and a secondary's log can hold dbOps all the same: it was
         // some other cluster's primary before it was attached here, and those are that cluster's to apply.
         val dbCatalog = dbCatalog ?: return

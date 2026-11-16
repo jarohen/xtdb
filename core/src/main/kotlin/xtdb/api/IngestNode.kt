@@ -79,7 +79,7 @@ class IngestNode internal constructor(
         override fun checkCanDetach(dbName: DatabaseName): Unit =
             error("can't detach a database from an ingest node")
 
-        override fun attach(dbName: DatabaseName, config: Database.Config?): Unit =
+        override suspend fun attach(dbName: DatabaseName, config: Database.Config?): Unit =
             error("can't attach a database to an ingest node")
 
         override fun detach(dbName: DatabaseName): Unit =

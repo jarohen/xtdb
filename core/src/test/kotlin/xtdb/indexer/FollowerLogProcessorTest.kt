@@ -25,7 +25,7 @@ import xtdb.util.closeAll
 import java.nio.ByteBuffer
 import java.time.Instant
 
-private fun FollowerLogProcessor.processRecords(records: List<Log.Record<ReplicaMessage>>) =
+private suspend fun FollowerLogProcessor.processRecords(records: List<Log.Record<ReplicaMessage>>) =
     records.forEach { handleRecord(it) }
 
 // The term most of these records carry. The fence starts at 0, so it admits them all, and only the

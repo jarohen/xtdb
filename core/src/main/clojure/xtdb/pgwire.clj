@@ -383,7 +383,7 @@
         ^String db-name (get startup-opts "database")
         db-cat (db/<-node node)
         db (or (if playground?
-                 (.databaseOrAttach db-cat db-name)
+                 (.databaseOrAttachSync db-cat db-name)
                  (.databaseOrNull db-cat db-name))
                (throw (err-invalid-catalog db-name)))
         user (get startup-opts "user")

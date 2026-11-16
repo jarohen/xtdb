@@ -7,7 +7,7 @@
             [xtdb.node :as xtn]
             [xtdb.test-util :as tu]
             [xtdb.util :as util])
-  (:import [xtdb.database Database Database$Catalog Database$Config]
+  (:import [xtdb.database Database Database$Catalog Database$Config DatabaseCatalogSync]
            xtdb.storage.BufferPoolKt))
 
 (defn ->healthz-url [port endpoint]
@@ -183,12 +183,12 @@
     (with-open [node (tu/->local-node {:node-dir local-path})]
       (let [port (.getHealthzPort node)
             ^Database$Catalog db-cat (db/<-node node)]
-        (.attach db-cat "critical-db"
-                 (-> (Database$Config.)
-                     (.critical true)))
+        (DatabaseCatalogSync/attach db-cat "critical-db"
+                                    (-> (Database$Config.)
+                                        (.critical true)))
 
-        (.attach db-cat "non-critical-db"
-                 (Database$Config.))
+        (DatabaseCatalogSync/attach db-cat "non-critical-db"
+                                    (Database$Config.))
 
         (t/testing "all healthy"
           (let [resp (clj-http/get (->healthz-url port "alive") {:throw-exceptions false})]
@@ -226,8 +226,8 @@
   (util/with-tmp-dirs #{local-path}
     (with-open [node (tu/->local-node {:node-dir local-path})]
       (let [^Database$Catalog db-cat (db/<-node node)]
-        (.attach db-cat "critical-db" (-> (Database$Config.) (.critical true)))
-        (.attach db-cat "non-critical-db" (Database$Config.))
+        (DatabaseCatalogSync/attach db-cat "critical-db" (-> (Database$Config.) (.critical true)))
+        (DatabaseCatalogSync/attach db-cat "non-critical-db" (Database$Config.))
 
         (let [h (healthz/handler {:db-cat db-cat})
               still-catching-up [Long/MAX_VALUE]]
