@@ -51,8 +51,8 @@
     (t/testing "finish block"
       (tu/flush-block! tu/*node*)
 
-      (let [trie-ba (.getByteArray buffer-pool (util/->path "tables/public$docs/meta/l00-rc-b00.arrow"))
-            leaf-ba (.getByteArray buffer-pool (util/->path "tables/public$docs/data/l00-rc-b00.arrow"))]
+      (let [trie-ba (.getByteArraySync buffer-pool (util/->path "tables/public$docs/meta/l00-rc-b00.arrow"))
+            leaf-ba (.getByteArraySync buffer-pool (util/->path "tables/public$docs/data/l00-rc-b00.arrow"))]
         (util/with-open [trie-loader (Relation/loader allocator trie-ba)
                          trie-rel (Relation. allocator (.getSchema trie-loader))
                          leaf-loader (Relation/loader allocator leaf-ba)

@@ -128,7 +128,7 @@ internal class RemoteBufferPool(
                 .also { path -> networkRead?.increment(path.fileSize().toDouble()) }
         }
 
-    override fun getByteArray(key: Path): ByteArray = runBlocking {
+    override suspend fun getByteArray(key: Path): ByteArray =
         memoryCache.get(cacheRootPath.resolve(key)) { path ->
             memCacheMisses?.increment()
             diskCache.get(path) { k, tmpFile ->
@@ -136,7 +136,6 @@ internal class RemoteBufferPool(
                 getObject(cacheRootPath.relativize(k), tmpFile)
             }.thenApply { entry -> Pair(entry.path, entry) }.await()
         }.use { it.toByteArray() }
-    }
 
     override suspend fun getFooter(key: Path): ArrowFooter = arrowFooterCache.get(key) {
         diskCache

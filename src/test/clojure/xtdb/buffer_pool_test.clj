@@ -69,7 +69,7 @@
         root-path (.getRootPath disk-cache)]
 
     (t/testing "immediate get from buffers map produces correct buffer"
-      (t/is (= 0 (util/compare-nio-buffers-unsigned expected (ByteBuffer/wrap (.getByteArray bp k))))))
+      (t/is (= 0 (util/compare-nio-buffers-unsigned expected (ByteBuffer/wrap (.getByteArraySync bp k))))))
 
     (when root-path
       (t/testing "expect a file to exist under our :disk-store"
@@ -84,7 +84,7 @@
             (.remove k))
         (util/delete-file (.resolve root-path k))
         ;; Will fetch from object store again
-        (t/is (= 0 (util/compare-nio-buffers-unsigned expected (ByteBuffer/wrap (.getByteArray bp k)))))))))
+        (t/is (= 0 (util/compare-nio-buffers-unsigned expected (ByteBuffer/wrap (.getByteArraySync bp k)))))))))
 
 (defn prefixing-obj-store-factory [^InMemoryBucket bucket]
   (reify ObjectStore$Factory
@@ -113,7 +113,7 @@
 (defn insert-utf8-to-local-cache [^BufferPool bp k len]
   (.putObjectSync bp k (utf8-buf (apply str (repeat len "a"))))
   ;; Add to local disk cache
-  (.getByteArray bp k))
+  (.getByteArraySync bp k))
 
 (t/deftest local-disk-cache-max-size
   (with-caches {:mem-bytes 12, :disk-bytes 10}
@@ -153,8 +153,8 @@
       ;; passing a no-op object store to ensure objects are not loaded from object store and instead only the cache is under test.
       (with-open [bp (-> (Storage/remote UnusedObjectStore$Factory/INSTANCE)
                          (.open tu/*allocator* *mem-cache* *disk-cache* "xtdb" 0 1 nil Storage/VERSION {}))]
-        (t/is (= 0 (util/compare-nio-buffers-unsigned (utf8-buf "aaaa") (ByteBuffer/wrap (.getByteArray bp path-a)))))
-        (t/is (= 0 (util/compare-nio-buffers-unsigned (utf8-buf "aaaa") (ByteBuffer/wrap (.getByteArray bp path-b)))))))))
+        (t/is (= 0 (util/compare-nio-buffers-unsigned (utf8-buf "aaaa") (ByteBuffer/wrap (.getByteArraySync bp path-a)))))
+        (t/is (= 0 (util/compare-nio-buffers-unsigned (utf8-buf "aaaa") (ByteBuffer/wrap (.getByteArraySync bp path-b)))))))))
 
 (t/deftest local-buffer-pool
   (tu/with-tmp-dirs #{tmp-dir}
@@ -297,11 +297,11 @@
 
             (t/is (= 0.0 (.count ^Counter (.counter (.find registry "buffer-pool.network.read")))))
 
-            (t/is (java.util.Arrays/equals (byte-buffer->byte-array v1) (.getByteArray bp k1)))
+            (t/is (java.util.Arrays/equals (byte-buffer->byte-array v1) (.getByteArraySync bp k1)))
 
             (t/is (= (double (.capacity v1)) (.count ^Counter (.counter (.find registry "buffer-pool.network.read")))))
 
-            (t/is (java.util.Arrays/equals (byte-buffer->byte-array v1) (.getByteArray bp k1)))
+            (t/is (java.util.Arrays/equals (byte-buffer->byte-array v1) (.getByteArraySync bp k1)))
 
             (t/is (= (double (.capacity v1)) (.count ^Counter (.counter (.find registry "buffer-pool.network.read")))) "counter should have not gone up"))
 

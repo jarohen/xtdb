@@ -130,7 +130,7 @@ class RemoteStorageTest : PartitionedStorageTest() {
      * cache key. Verified by reverting `cacheRootPath` to `dbName/0`: this fails, the local sibling didn't.
      */
     @Test
-    fun `partitions get their own entries in the node-shared caches`() {
+    fun `partitions get their own entries in the node-shared caches`() = runTest {
         openPartitionedStorage(0, 2).use { p0 ->
             openPartitionedStorage(1, 2).use { p1 ->
                 val key = "blocks/b00.binpb".asPath

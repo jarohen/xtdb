@@ -37,7 +37,7 @@ internal class MemoryStorage(
         private fun <K, V> Map<K, V>.lockAndGet(key: K): V? = synchronized(this) { get(key) }
     }
 
-    override fun getByteArray(key: Path): ByteArray =
+    override suspend fun getByteArray(key: Path): ByteArray =
         (memoryStore.lockAndGet(key) ?: throw objectMissingException(key)).toByteArray()
 
     override suspend fun getFooter(key: Path): ArrowFooter =

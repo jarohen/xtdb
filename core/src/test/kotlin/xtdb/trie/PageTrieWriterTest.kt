@@ -219,11 +219,11 @@ internal class PageTrieWriterTest {
     }
 
     private fun readTrie(bp: MemoryStorage, trieKey: String): Shape? =
-        Relation.loader(allocator, bp.getByteArray(slug.metaFilePath(trieKey))).use { metaLoader ->
+        Relation.loader(allocator, runBlocking { bp.getByteArray(slug.metaFilePath(trieKey)) }).use { metaLoader ->
             Relation(allocator, metaLoader.schema).use { metaRel ->
                 metaLoader.loadNextPage(metaRel)
 
-                Relation.loader(allocator, bp.getByteArray(slug.dataFilePath(trieKey))).use { dataLoader ->
+                Relation.loader(allocator, runBlocking { bp.getByteArray(slug.dataFilePath(trieKey)) }).use { dataLoader ->
                     Relation(allocator, dataLoader.schema).use { dataRel ->
                         val ptr = ArrowBufPointer()
 

@@ -82,7 +82,7 @@
       (->> (for [^TableEntry entry entries
                  :let [table-block-path (->table-block-metadata-obj-key (.getTablePath (.getSlug entry)) block-idx)]]
              (MapEntry/create (.getTable entry)
-                              {:partitions (-> (.getByteArray buffer-pool table-block-path)
+                              {:partitions (-> (.getByteArraySync buffer-pool table-block-path)
                                                (TableBlock/parseFrom)
                                                (table-block->partitions))}))
            (into {})))))

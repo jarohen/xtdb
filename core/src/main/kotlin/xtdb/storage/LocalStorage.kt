@@ -3,7 +3,6 @@ package xtdb.storage
 import com.github.benmanes.caffeine.cache.Cache
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.runBlocking
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.ipc.message.ArrowFooter
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch
@@ -61,17 +60,15 @@ internal class LocalStorage(
         private fun Path.orThrowIfMissing(key: Path) = takeIf { it.exists() } ?: throw objectMissingException(key)
     }
 
-    override fun getByteArray(key: Path): ByteArray =
-        runBlocking {
-            memoryCache.get(cacheRootPath.resolve(key)) { path ->
-                memCacheMisses?.increment()
-                val bufferCachePath = this@LocalStorage.rootPath
-                    .resolve(cacheRootPath.relativize(path))
-                    .orThrowIfMissing(key)
+    override suspend fun getByteArray(key: Path): ByteArray =
+        memoryCache.get(cacheRootPath.resolve(key)) { path ->
+            memCacheMisses?.increment()
+            val bufferCachePath = this@LocalStorage.rootPath
+                .resolve(cacheRootPath.relativize(path))
+                .orThrowIfMissing(key)
 
-                Pair(bufferCachePath, null)
-            }.use { it.toByteArray() }
-        }
+            Pair(bufferCachePath, null)
+        }.use { it.toByteArray() }
 
     override suspend fun getFooter(key: Path): ArrowFooter =
         arrowFooterCache.get(key) {

@@ -251,7 +251,7 @@ class SegmentMergeTest {
                     }
 
                 fun pagesOf(trieKey: String) =
-                    Relation.loader(al, bp.getByteArray(slug.dataFilePath(trieKey))).use { loader ->
+                    Relation.loader(al, runBlocking { bp.getByteArray(slug.dataFilePath(trieKey)) }).use { loader ->
                         Relation(al, loader.schema).use { rel ->
                             buildList {
                                 while (loader.loadNextPage(rel))
@@ -261,7 +261,7 @@ class SegmentMergeTest {
                     }
 
                 fun iidRunCountsOf(trieKey: String) =
-                    Relation.loader(al, bp.getByteArray(slug.dataFilePath(trieKey))).use { loader ->
+                    Relation.loader(al, runBlocking { bp.getByteArray(slug.dataFilePath(trieKey)) }).use { loader ->
                         Relation(al, loader.schema).use { rel ->
                             buildList { while (loader.loadNextPage(rel)) add((rel["_iid"] as RunEndEncodedVector).runCount) }
                         }
@@ -272,8 +272,8 @@ class SegmentMergeTest {
                     writeTrie(true, "l01-r20230102-b01", pageSize)
 
                     assertArrayEquals(
-                        bp.getByteArray(slug.metaFilePath("l01-r20230102-b00")),
-                        bp.getByteArray(slug.metaFilePath("l01-r20230102-b01")),
+                        runBlocking { bp.getByteArray(slug.metaFilePath("l01-r20230102-b00")) },
+                        runBlocking { bp.getByteArray(slug.metaFilePath("l01-r20230102-b01")) },
                         "meta files, page size $pageSize"
                     )
 

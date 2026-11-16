@@ -29,7 +29,9 @@ interface BufferPool : AutoCloseable {
      *
      * This should only be used for small files (metadata) or testing purposes.
      */
-    fun getByteArray(key: Path): ByteArray
+    suspend fun getByteArray(key: Path): ByteArray
+
+    fun getByteArraySync(key: Path): ByteArray = runBlocking { getByteArray(key) }
 
     /**
      * Returns the footer of the given arrow file.
@@ -93,7 +95,7 @@ interface BufferPool : AutoCloseable {
 
         object UnusedBufferPool : BufferPool {
             override val epoch: StorageEpoch get() = unsupported("epoch")
-            override fun getByteArray(key: Path) = unsupported("getByteArray")
+            override suspend fun getByteArray(key: Path) = unsupported("getByteArray")
             override suspend fun getFooter(key: Path) = unsupported("getFooter")
             override suspend fun getRecordBatch(key: Path, idx: Int) = unsupported("getRecordBatch")
             override suspend fun putObject(key: Path, buffer: ByteBuffer) = unsupported("putObject")
@@ -147,7 +149,7 @@ private fun BufferPool.computeLatestAvailableBlockIndex(afterBlockIndex: Long?):
 class ReadOnlyBufferPool(private val delegate: BufferPool) : BufferPool {
     override val epoch: StorageEpoch get() = delegate.epoch
 
-    override fun getByteArray(key: Path): ByteArray = delegate.getByteArray(key)
+    override suspend fun getByteArray(key: Path): ByteArray = delegate.getByteArray(key)
 
     override suspend fun getFooter(key: Path): ArrowFooter = delegate.getFooter(key)
 

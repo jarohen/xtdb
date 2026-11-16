@@ -52,21 +52,21 @@
 
           (t/is (= {:table #xt/table foo, :foo "bar", :ex "test crash log"}
                    (let [path (util/->path (format "crashes/%s/1970-01-01T00:00:00Z/crash.edn" node-id))]
-                     (-> (.getByteArray bp path)
+                     (-> (.getByteArraySync bp path)
                          String.
                          read-string))))
 
           (t/is (= {:tree [:leaf [0]], :page-limit 1024, :log-limit 64}
                    (let [path (util/->path (format "crashes/%s/1970-01-01T00:00:00Z/live-trie.binpb" node-id))]
-                     (trie/<-MemoryHashTrie (MemoryHashTrie/fromProto (.getByteArray bp path) (NullVector. "_iid" true 0))))))
+                     (trie/<-MemoryHashTrie (MemoryHashTrie/fromProto (.getByteArraySync bp path) (NullVector. "_iid" true 0))))))
 
           (t/is (= {:tree [:leaf [1 0]], :page-limit 1024, :log-limit 64}
                    (let [path (util/->path (format "crashes/%s/1970-01-01T00:00:00Z/open-tx-trie.binpb" node-id))]
-                     (trie/<-MemoryHashTrie (MemoryHashTrie/fromProto (.getByteArray bp path) (NullVector. "_iid" true 0))))))
+                     (trie/<-MemoryHashTrie (MemoryHashTrie/fromProto (.getByteArraySync bp path) (NullVector. "_iid" true 0))))))
 
           ;; Committed live-table data
           (let [live-table-path (util/->path (format "crashes/%s/1970-01-01T00:00:00Z/live-table.arrow" node-id))]
-            (with-open [ldr (Relation/loader al (.getByteArray bp live-table-path))
+            (with-open [ldr (Relation/loader al (.getByteArraySync bp live-table-path))
                         rel (.loadPage ldr 0 al)]
               (t/is (= [{:xt/system-from (time/->zdt #inst "2020"),
                          :xt/valid-from (time/->zdt #inst "2020"),
@@ -77,7 +77,7 @@
 
           ;; The table as the open tx sees it — the committed rows it resolved behind, then its own
           (let [open-tx-table-path (util/->path (format "crashes/%s/1970-01-01T00:00:00Z/open-tx-table.arrow" node-id))]
-            (with-open [ldr (Relation/loader al (.getByteArray bp open-tx-table-path))
+            (with-open [ldr (Relation/loader al (.getByteArraySync bp open-tx-table-path))
                         rel (.loadPage ldr 0 al)]
               (t/is (= [{:xt/system-from (time/->zdt #inst "2020"),
                          :xt/valid-from (time/->zdt #inst "2020"),
@@ -91,14 +91,14 @@
                             (mapv #(dissoc % :xt/iid)))))))
 
           (let [query-rel-path (util/->path (format "crashes/%s/1970-01-01T00:00:00Z/query-rel.arrow" node-id))]
-            (with-open [ldr (Relation/loader al (.getByteArray bp query-rel-path))
+            (with-open [ldr (Relation/loader al (.getByteArraySync bp query-rel-path))
                         rel (.loadPage ldr 0 al)]
               (t/is (= [{:foo "bar", :baz 32}, {:foo "baz", :baz 64}]
                        (->> (.getAsMaps rel)
                             (mapv #(dissoc % :xt/iid)))))))
 
           (let [tx-ops-path (util/->path (format "crashes/%s/1970-01-01T00:00:00Z/tx-ops.arrow" node-id))]
-            (with-open [ldr (Relation/loader al (.getByteArray bp tx-ops-path))
+            (with-open [ldr (Relation/loader al (.getByteArraySync bp tx-ops-path))
                         rel (.loadPage ldr 0 al)]
               (t/is (= [[{"_id" 3, "version" 0}] [{"_id" 4, "version" 0}]]
                        (-> (.vectorFor rel "$data$")

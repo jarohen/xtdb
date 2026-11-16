@@ -460,7 +460,7 @@
         (cpb/check-pbuf (.toPath (io/as-file (io/resource "xtdb/compactor-test/compactor-metadata-test")))
                         (.resolve node-dir "objects"))
 
-        (let [tries (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b02.binpb"))
+        (let [tries (->> (.getByteArraySync bp (util/->path "tables/public$foo/blocks/b02.binpb"))
                          TableBlock/parseFrom
                          table-cat/<-table-block
                          :partitions

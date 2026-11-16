@@ -52,10 +52,10 @@
                  (->> (.listAllObjects bp (table-cat/->table-block-dir (TableSlug/of #xt/table foo)))
                       (mapv (comp :key os/<-StoredObject)))))
 
-        (let [{hlls1 :hlls :as _table-block1} (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b00.binpb"))
+        (let [{hlls1 :hlls :as _table-block1} (->> (.getByteArraySync bp (util/->path "tables/public$foo/blocks/b00.binpb"))
                                                    TableBlock/parseFrom
                                                    table-cat/<-table-block)
-              {hlls2 :hlls :as table-block2} (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b01.binpb"))
+              {hlls2 :hlls :as table-block2} (->> (.getByteArraySync bp (util/->path "tables/public$foo/blocks/b01.binpb"))
                                                   TableBlock/parseFrom
                                                   table-cat/<-table-block)
 
@@ -108,7 +108,7 @@
           (t/is (= #{"l00-rc-b03"
                      "l01-rc-b00" "l01-rc-b01" "l01-rc-b02"
                      "l02-rc-p0-b01" "l02-rc-p1-b01" "l02-rc-p2-b01" "l02-rc-p3-b01"}
-                   (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b02.binpb"))
+                   (->> (.getByteArraySync bp (util/->path "tables/public$foo/blocks/b02.binpb"))
                         TableBlock/parseFrom
                         table-cat/<-table-block
                         :partitions
@@ -150,7 +150,7 @@
                    "l01-rc-b02"
                    "l02-rc-p0-b01"
                    "l02-rc-p2-b01"}
-                 (->> (.getByteArray bp (util/->path "tables/public$foo/blocks/b00.binpb"))
+                 (->> (.getByteArraySync bp (util/->path "tables/public$foo/blocks/b00.binpb"))
                       TableBlock/parseFrom
                       table-cat/<-table-block
                       :partitions

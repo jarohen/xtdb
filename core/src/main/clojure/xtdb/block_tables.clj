@@ -122,7 +122,7 @@
   [^BufferPool buffer-pool ^long block-idx]
   (try
     (let [path (TableCatalog/blockFilePath block-idx)
-          ^bytes ba (.getByteArray buffer-pool path)
+          ^bytes ba (.getByteArraySync buffer-pool path)
           block (Block/parseFrom ba)]
       (block->row block (alength ba)))
     (catch Exception _e
@@ -180,7 +180,7 @@
         table-path (.getTablePath (.slug (.snap table-cat) table-ref))
         obj-key (table-cat/->table-block-metadata-obj-key table-path block-idx)]
     (try
-      (-> (.getByteArray buffer-pool obj-key)
+      (-> (.getByteArraySync buffer-pool obj-key)
           (TableBlock/parseFrom)
           (table-cat/<-table-block))
       (catch Exception _e

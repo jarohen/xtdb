@@ -1,5 +1,6 @@
 package xtdb.storage
 
+import kotlinx.coroutines.runBlocking
 import org.apache.arrow.memory.RootAllocator
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
@@ -35,12 +36,12 @@ abstract class StorageTest {
             val storage = storage()
             val key = "missing-object".asPath
             repeat(2) {
-                assertThrows(Exception::class.java) { storage.getByteArray(key) }
+                assertThrows(Exception::class.java) { runBlocking { storage.getByteArray(key) } }
             }
 
             val bytes = byteArrayOf(1, 2, 3)
             storage.putObjectSync(key, ByteBuffer.wrap(bytes))
-            assertArrayEquals(bytes, storage.getByteArray(key))
+            assertArrayEquals(bytes, runBlocking { storage.getByteArray(key) })
         }
     }
 
