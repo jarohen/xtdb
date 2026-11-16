@@ -150,7 +150,7 @@ inline fun <K, V, R : AutoCloseable?> Map<K, V>.safeMapValues(block: (K, V) -> R
 class SafelyOpeningScope : AutoCloseable {
     val openedResources = mutableListOf<AutoCloseable>()
 
-    fun <C : AutoCloseable?> open(block: () -> C): C =
+    inline fun <C : AutoCloseable?> open(block: () -> C): C =
         block().also { if (it != null) openedResources.add(it) }
 
     fun <C : AutoCloseable> openAll(block: () -> Iterable<C>): Iterable<C> =
