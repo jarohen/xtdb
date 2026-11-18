@@ -25,6 +25,7 @@ class DateDayVector private constructor(
             : this(al, name, 0, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al))
 
     override val byteWidth = Int.SIZE_BYTES
+    override val rawRead get() = RawRead.INT
     override val arrowType = ArrowType.Date(DAY)
 
     override fun getInt(idx: Int) = getInt0(idx)
@@ -60,6 +61,7 @@ class DateMilliVector internal constructor(
             : this(al, name, 0, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al))
 
     override val byteWidth = Long.SIZE_BYTES
+    override val rawRead get() = RawRead.LONG
     override val arrowType = ArrowType.Date(MILLISECOND)
 
     override fun getLong(idx: Int) = getLong0(idx)

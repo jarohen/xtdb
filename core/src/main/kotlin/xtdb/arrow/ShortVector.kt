@@ -17,6 +17,7 @@ class ShortVector private constructor(
 
     override val arrowType: ArrowType = I16_TYPE
     override val byteWidth = Short.SIZE_BYTES
+    override val rawRead get() = RawRead.SHORT
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(al, name, 0, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al))

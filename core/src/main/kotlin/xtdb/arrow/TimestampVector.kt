@@ -33,6 +33,7 @@ class TimestampLocalVector private constructor(
 
     override val arrowType = ArrowType.Timestamp(unit, null)
     override val byteWidth = Long.SIZE_BYTES
+    override val rawRead get() = RawRead.LONG
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean, unit: TimeUnit) :
             this(al, name, unit, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al), 0)
@@ -79,6 +80,7 @@ class TimestampTzVector private constructor(
 
     override val arrowType = ArrowType.Timestamp(unit, zone.toString())
     override val byteWidth = Long.SIZE_BYTES
+    override val rawRead get() = RawRead.LONG
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean, unit: TimeUnit, zone: ZoneId)
             : this(al, name, unit, zone, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al), 0)

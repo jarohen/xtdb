@@ -20,6 +20,7 @@ class LongVector private constructor(
 
     override val arrowType: ArrowType = MinorType.BIGINT.type
     override val byteWidth = Long.SIZE_BYTES
+    override val rawRead get() = RawRead.LONG
 
     override fun getLong(idx: Int) = getLong0(idx)
     override fun writeLong(v: Long) = writeLong0(v)

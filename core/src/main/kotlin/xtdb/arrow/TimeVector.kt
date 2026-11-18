@@ -39,6 +39,7 @@ class Time32Vector private constructor(
 
     override val arrowType = ArrowType.Time(unit, Int.SIZE_BITS)
     override val byteWidth = Int.SIZE_BYTES
+    override val rawRead get() = RawRead.INT
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean, unit: TimeUnit)
             : this(al, name, unit, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al), 0)
@@ -78,6 +79,7 @@ class Time64Vector private constructor(
 
     override val arrowType = ArrowType.Time(unit, Long.SIZE_BITS)
     override val byteWidth = Long.SIZE_BYTES
+    override val rawRead get() = RawRead.LONG
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean, unit: TimeUnit)
             : this(al, name, unit, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al), 0)

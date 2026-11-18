@@ -38,6 +38,7 @@ class DecimalVector private constructor(
             : this(al, name, 0, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al), decimalType)
 
     override val byteWidth = (bitWidth / 8)
+    override val rawRead get() = null
 
     override val arrowType: ArrowType = Decimal(precision, scale, bitWidth)
 

@@ -18,6 +18,7 @@ class IntVector private constructor(
 
     override val arrowType: ArrowType = I32_TYPE
     override val byteWidth = Int.SIZE_BYTES
+    override val rawRead get() = RawRead.INT
 
     companion object {
         private fun openValidityBuffer(al: BufferAllocator, valueCount: Int) =

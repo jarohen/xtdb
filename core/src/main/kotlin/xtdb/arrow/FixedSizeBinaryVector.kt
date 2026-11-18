@@ -17,6 +17,7 @@ class FixedSizeBinaryVector private constructor(
 ) : FixedWidthVector(), LongLongVectorReader, MetadataFlavour.Bytes {
 
     override val arrowType = ArrowType.FixedSizeBinary(byteWidth)
+    override val rawRead get() = null
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean, byteWidth: Int)
             : this(al, name, 0, byteWidth, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al))

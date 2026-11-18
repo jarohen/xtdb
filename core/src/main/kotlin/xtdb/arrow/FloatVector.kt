@@ -16,6 +16,7 @@ class FloatVector private constructor(
 ) : NumericVector(), MetadataFlavour.Number {
 
     override val byteWidth = Float.SIZE_BYTES
+    override val rawRead get() = RawRead.FLOAT
     override val arrowType: ArrowType = F32_TYPE
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)

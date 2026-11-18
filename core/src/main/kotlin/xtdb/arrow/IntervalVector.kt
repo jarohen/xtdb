@@ -32,6 +32,7 @@ class IntervalYearMonthVector private constructor(
 
     override val arrowType: ArrowType = MinorType.INTERVALYEAR.type
     override val byteWidth = Int.SIZE_BYTES
+    override val rawRead get() = null
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(al, name, 0, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al))
@@ -74,6 +75,7 @@ class IntervalDayTimeVector private constructor(
 
     override val arrowType: ArrowType = MinorType.INTERVALDAY.type
     override val byteWidth = Long.SIZE_BYTES
+    override val rawRead get() = null
 
     constructor(
         al: BufferAllocator, name: String, nullable: Boolean
@@ -132,6 +134,7 @@ class IntervalMonthDayNanoVector private constructor(
 
     override val arrowType: ArrowType = MinorType.INTERVALMONTHDAYNANO.type
     override val byteWidth = 16
+    override val rawRead get() = null
 
     constructor(al: BufferAllocator, name: String, nullable: Boolean)
             : this(al, name, 0, if (nullable) BitBuffer(al) else null, ExtensibleBuffer(al))

@@ -7,6 +7,7 @@ import org.apache.arrow.vector.BaseFixedWidthVector
 import org.apache.arrow.vector.ValueVector
 import org.apache.arrow.vector.ipc.message.ArrowFieldNode
 import xtdb.InternalApi
+import xtdb.api.query.IKeyFn
 import org.apache.arrow.vector.types.TimeUnit
 import xtdb.arrow.VectorIndirection.Companion.Selection
 import xtdb.arrow.VectorIndirection.Companion.Slice
@@ -22,10 +23,19 @@ internal fun TimeUnit.toLong(seconds: Long, nanos: Int): Long = when (this) {
     TimeUnit.NANOSECOND -> seconds * 1_000_000_000 + nanos
 }
 
+internal enum class RawRead { BYTE, SHORT, INT, LONG, FLOAT, DOUBLE }
+
 sealed class FixedWidthVector : MonoVector() {
 
     protected abstract val al: BufferAllocator
     internal abstract val byteWidth: Int
+
+    /**
+     * The read whose `getX(idx)` and `valueReader()` both return the data buffer's value at `idx` unchanged,
+     * which [rowIterator] then reads straight off the buffer; `null` if none does.
+     */
+    internal abstract val rawRead: RawRead?
+
     override val vectors: Iterable<Vector> = emptyList()
     override val monoType get() = Scalar(arrowType)
 
@@ -40,6 +50,8 @@ sealed class FixedWidthVector : MonoVector() {
         }
 
     final override fun isNull(idx: Int) = validityBuffer?.getBoolean(idx) == false
+
+    final override fun rowIterator(): RowValueReader = FixedWidthRows(this)
 
     final override fun writeUndefined() {
         validityBuffer?.writeBit(valueCount, 0)
@@ -257,4 +269,75 @@ sealed class FixedWidthVector : MonoVector() {
         validityBuffer?.close()
         dataBuffer.close()
     }
+}
+
+private class FixedWidthRows(private val vec: FixedWidthVector) : RowValueReader {
+    private val valueCount = vec.valueCount
+    private val validity = vec.validityBuffer
+    private val data = vec.dataBuffer
+    private val rawRead = vec.rawRead
+    private val rdr = vec.valueReader()
+
+    private var wordIdx = -1
+    private var word = 0L
+
+    private fun loadWord(wordIdx: Int) {
+        val buf = validity!!.buf
+        val offset = wordIdx.toLong() * Long.SIZE_BYTES
+        val capacity = buf.capacity()
+
+        word = if (offset + Long.SIZE_BYTES <= capacity) buf.getLong(offset) else {
+            var acc = 0L
+            var byteIdx = 0
+            while (offset + byteIdx < capacity) {
+                acc = acc or ((buf.getByte(offset + byteIdx).toLong() and 0xff) shl (byteIdx * Byte.SIZE_BITS))
+                byteIdx++
+            }
+            acc
+        }
+
+        this.wordIdx = wordIdx
+    }
+
+    override var pos: Int = -1
+        set(value) {
+            field = value
+            if (validity != null) {
+                val wordIdx = value shr 6
+                if (wordIdx != this.wordIdx) loadWord(wordIdx)
+            }
+        }
+
+    override fun hasNext() = pos + 1 < valueCount
+
+    override fun next(): RowValueReader {
+        if (!hasNext()) throw NoSuchElementException()
+        pos++
+        return this
+    }
+
+    override val isNull get() = validity != null && (word ushr (pos and 63)) and 1L == 0L
+
+    private fun rawPos(): Int {
+        if (NULL_CHECKS && isNull) throw NullPointerException("null at index $pos")
+        return pos
+    }
+
+    private fun positioned() = rdr.also { it.pos = pos }
+
+    override val leg get() = positioned().leg
+
+    override fun readBoolean() = positioned().readBoolean()
+    override fun readByte() = if (rawRead == RawRead.BYTE) data.getByte(rawPos()) else positioned().readByte()
+    override fun readShort() = if (rawRead == RawRead.SHORT) data.getShort(rawPos()) else positioned().readShort()
+    override fun readInt() = if (rawRead == RawRead.INT) data.getInt(rawPos()) else positioned().readInt()
+    override fun readLong() = if (rawRead == RawRead.LONG) data.getLong(rawPos()) else positioned().readLong()
+    override fun readFloat() = if (rawRead == RawRead.FLOAT) data.getFloat(rawPos()) else positioned().readFloat()
+    override fun readDouble() = if (rawRead == RawRead.DOUBLE) data.getDouble(rawPos()) else positioned().readDouble()
+    override fun readAsLong() = positioned().readAsLong()
+    override fun readAsDouble() = positioned().readAsDouble()
+    override fun readBytes() = positioned().readBytes()
+    override fun readObject() = positioned().readObject()
+
+    override fun readValue(keyFn: IKeyFn<*>) = vec.getObject(pos, keyFn)
 }
