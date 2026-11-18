@@ -98,25 +98,23 @@ interface RelationReader : ILookup, Seqable, Counted, AutoCloseable {
     @Suppress("unused") // was used in XT flight-sql last I checked
     fun toTuples() = toTuples(KEBAB_CASE_KEYWORD)
 
-    fun toTuples(keyFn: IKeyFn<*> = KEBAB_CASE_KEYWORD) =
-        List(rowCount) { idx -> vectors.map { it.getObject(idx, keyFn) } }
+    fun toTuples(keyFn: IKeyFn<*> = KEBAB_CASE_KEYWORD): List<List<Any?>> {
+        val cols = vectors.map { it.rowIterator() }
+        return List(rowCount) { cols.map { rows -> rows.next().readValue(keyFn) } }
+    }
 
     val asMaps get() = toMaps(KEBAB_CASE_KEYWORD)
 
-    fun <K> toMaps(keyFn: IKeyFn<K>): List<Map<K, *>> =
-        List(rowCount) { idx ->
+    fun <K> toMaps(keyFn: IKeyFn<K>): List<Map<K, *>> {
+        val cols = vectors.map { keyFn.denormalize(it.name) to it.rowIterator() }
+        return List(rowCount) {
             @Suppress("UNCHECKED_CAST")
             PersistentHashMap.create(
-                vectors
-                    .associate {
-                        Pair(
-                            keyFn.denormalize(it.name),
-                            it.getObject(idx, keyFn)
-                        )
-                    }
+                cols.associate { (k, rows) -> k to rows.next().readValue(keyFn) }
                     .filterValues { it != null }
             ) as Map<K, *>
         }
+    }
 
     private class FromCols(
         private val cols: SequencedMap<String, VectorReader>, override val rowCount: Int

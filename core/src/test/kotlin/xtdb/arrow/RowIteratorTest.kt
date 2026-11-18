@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.extension.ExtendWith
+import xtdb.api.query.IKeyFn
+import xtdb.api.query.IKeyFn.KeyFn.KEBAB_CASE_KEYWORD
 import xtdb.api.query.IKeyFn.KeyFn.SNAKE_CASE_STRING
 import xtdb.arrow.VectorType.Companion.I64
 import xtdb.arrow.VectorType.Companion.UTF8
@@ -206,6 +208,38 @@ class RowIteratorTest {
 
             assertFalse(rows.hasNext())
             assertThrows<NoSuchElementException> { rows.next() }
+        }
+    }
+
+    private fun checkRelAgainstGetObject(rel: RelationReader, keyFn: IKeyFn<*>, what: String) {
+        assertEquals(
+            List(rel.rowCount) { idx -> rel.vectors.map { it.getObject(idx, keyFn) } },
+            rel.toTuples(keyFn), "$what, toTuples"
+        )
+        assertEquals(
+            List(rel.rowCount) { idx ->
+                rel.vectors.associate { keyFn.denormalize(it.name) to it.getObject(idx, keyFn) }.filterValues { it != null }
+            },
+            rel.toMaps(keyFn), "$what, toMaps"
+        )
+    }
+
+    @Test
+    fun `a relation's toMaps and toTuples agree with getObject, directly and through selections`(al: BufferAllocator) {
+        val cols = listOf(
+            Vector.fromList(al, "foo_bar", listOf(1L, null, 3L, null, 5L)),
+            Vector.fromList(al, "doc", listOf(mapOf("fooBar" to 0, "baz" to "s0"), null, mapOf("fooBar" to 2, "baz" to "s2"), mapOf("fooBar" to 3, "baz" to "s3"), mapOf("fooBar" to 4, "baz" to "s4"))),
+            Vector.fromList(al, "tags", List(5) { listOf(it, it + 1) }),
+            Vector.fromList(al, "mixed", listOf(1L, "two", 3.0, null, listOf(5L))),
+            RelationAsStructReader("nested", Relation.openFromRows(al, List(5) { mapOf("fooBar" to it.toLong()) })),
+        )
+
+        RelationReader.from(cols).use { rel ->
+            listOf(KEBAB_CASE_KEYWORD, SNAKE_CASE_STRING).forEach { keyFn ->
+                checkRelAgainstGetObject(rel, keyFn, "$keyFn, direct")
+                checkRelAgainstGetObject(rel.select(intArrayOf(4, 0, 2, 2)), keyFn, "$keyFn, select(IntArray)")
+                checkRelAgainstGetObject(rel.select(1, 3), keyFn, "$keyFn, select(start, len)")
+            }
         }
     }
 }
