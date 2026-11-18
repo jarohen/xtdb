@@ -2458,7 +2458,7 @@
            batch-binding)
          (sequence (comp (distinct) cat)))))
 
-(defn- row-iterator-bindings
+(defn row-iterator-bindings
   [batch-bindings]
   (-> (reduce (fn [{:keys [iters] :as acc} [sym init]]
                 (if-not (::row-iterator? (meta sym))
