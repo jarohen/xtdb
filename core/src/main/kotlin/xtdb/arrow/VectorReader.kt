@@ -140,8 +140,11 @@ interface VectorReader : ILookup, AutoCloseable {
     fun select(idxs: IntArray): VectorReader = IndirectVector(this, selection(idxs))
     fun select(startIdx: Int, len: Int): VectorReader = IndirectVector(this, slice(startIdx, len))
 
-    val asList get() = List(valueCount) { getObject(it) }
-    fun toList(keyFn: IKeyFn<*>) = List(valueCount) { getObject(it, keyFn) }
+    /** Walks this vector's rows in order; every `next()` moves and returns the same [RowValueReader]. */
+    fun rowIterator(): RowValueReader = RowValueReader.ForVector(this)
+
+    val asList get() = toList { it }
+    fun toList(keyFn: IKeyFn<*>): List<Any?> = rowIterator().asSequence().map { it.readValue(keyFn) }.toList()
 
     val metadataFlavours: Collection<MetadataFlavour> get() = unsupported("metadataFlavours")
 

@@ -4,6 +4,7 @@ import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.memory.util.ByteFunctionHelpers
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
+import xtdb.api.query.IKeyFn.KeyFn.KEBAB_CASE_KEYWORD
 import xtdb.arrow.VectorType.Companion.structOf
 import xtdb.util.Hasher
 import xtdb.util.closeOnCatch
@@ -30,12 +31,28 @@ class RelationAsStructReader(
 
     override fun getObject(idx: Int, keyFn: IKeyFn<*>): Any = rel[idx, keyFn]
 
+    override val asList get() = toList(KEBAB_CASE_KEYWORD)
+
     override fun rowCopier(dest: VectorWriter): RowCopier {
         val copiers = rel.vectors.map { it.rowCopier(dest.vectorFor(it.name, it.arrowType, it.nullable)) }
         return RowCopier { idx ->
             copiers.forEach { it.copyRow(idx) }
             dest.endStruct()
             dest.valueCount - 1
+        }
+    }
+
+    override fun rowIterator(): RowValueReader = object : RowValueReader {
+        override var pos = -1
+
+        override fun readValue(keyFn: IKeyFn<*>) = getObject(pos, keyFn)
+
+        override fun hasNext() = pos + 1 < valueCount
+
+        override fun next(): RowValueReader {
+            if (!hasNext()) throw NoSuchElementException()
+            pos++
+            return this
         }
     }
 

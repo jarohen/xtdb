@@ -97,6 +97,28 @@ class IndirectVector(private val inner: VectorReader, private val sel: VectorInd
         }
     }
 
+    override fun rowIterator(): RowValueReader {
+        val inner = inner.rowIterator()
+        return object : RowValueReader by inner {
+            val sel = this@IndirectVector.sel
+            val valueCount = sel.valueCount()
+
+            override var pos: Int = -1
+                set(value) {
+                    field = value
+                    inner.pos = sel[value]
+                }
+
+            override fun hasNext() = pos + 1 < valueCount
+
+            override fun next(): RowValueReader {
+                if (!hasNext()) throw NoSuchElementException()
+                pos++
+                return this
+            }
+        }
+    }
+
     override fun valueReader(): ValueReader {
         val inner = inner.valueReader()
         return object : ValueReader by inner {
