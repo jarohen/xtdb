@@ -95,4 +95,12 @@ class IntVector private constructor(
         }
 
     override fun doublesTo(out: DoubleArrayList, sel: IntArray?) = out.addDoubles(valueCount, sel) { dataBuffer.getInt(it).toDouble() }
+
+    override fun compare(op: CmpOp, rhs: Long, mask: RowBits, sel: IntArray?) =
+        cmpLongs(op, rhs, mask, sel) { dataBuffer.getInt(it).toLong() }
+
+    override fun compare(op: CmpOp, rhs: Double, mask: RowBits, sel: IntArray?) =
+        cmpDoubles(op, rhs, mask, sel) { (dataBuffer.getInt(it).toLong()).toDouble() }
+
+    override fun notNull(mask: RowBits, sel: IntArray?) = notNullBits(mask, sel)
 }

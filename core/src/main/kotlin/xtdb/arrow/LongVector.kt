@@ -2,6 +2,7 @@ package xtdb.arrow
 
 import com.carrotsearch.hppc.DoubleArrayList
 import org.apache.arrow.memory.BufferAllocator
+import org.apache.arrow.memory.util.MemoryUtil
 import org.apache.arrow.vector.types.Types.MinorType
 import org.apache.arrow.vector.types.pojo.ArrowType
 import xtdb.api.query.IKeyFn
@@ -59,4 +60,15 @@ class LongVector private constructor(
         LongVector(al, name, valueCount, validityBuffer?.openSlice(al), dataBuffer.openSlice(al))
 
     override fun doublesTo(out: DoubleArrayList, sel: IntArray?) = out.addDoubles(valueCount, sel) { dataBuffer.getLong(it).toDouble() }
+
+    override fun compare(op: CmpOp, rhs: Long, mask: RowBits, sel: IntArray?): RowBits {
+        requireRowsInBounds(mask, sel)
+        val base = dataBuffer.address
+        return cmpLongs(op, rhs, mask, sel) { MemoryUtil.getLong(base + (it.toLong() shl 3)) }
+    }
+
+    override fun compare(op: CmpOp, rhs: Double, mask: RowBits, sel: IntArray?) =
+        cmpDoubles(op, rhs, mask, sel) { (dataBuffer.getLong(it)).toDouble() }
+
+    override fun notNull(mask: RowBits, sel: IntArray?) = notNullBits(mask, sel)
 }

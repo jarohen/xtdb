@@ -68,6 +68,9 @@ internal class ExtensibleBuffer private constructor(private val allocator: Buffe
         buf.writerIndex(writerIndex + elWidth)
     }
 
+    val address: Long get() = buf.memoryAddress()
+    val capacity: Long get() = buf.capacity()
+
     fun getByte(idx: Int) = buf.getByte((idx * Byte.SIZE_BYTES).toLong())
 
     fun writeByte(value: Byte) {

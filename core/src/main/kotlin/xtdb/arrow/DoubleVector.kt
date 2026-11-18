@@ -93,4 +93,12 @@ class DoubleVector private constructor(
         DoubleVector(al, name, valueCount, validityBuffer?.openSlice(al), dataBuffer.openSlice(al))
 
     override fun doublesTo(out: DoubleArrayList, sel: IntArray?) = out.addDoubles(valueCount, sel) { dataBuffer.getDouble(it) }
+
+    override fun compare(op: CmpOp, rhs: Long, mask: RowBits, sel: IntArray?) =
+        compare(op, rhs.toDouble(), mask, sel)
+
+    override fun compare(op: CmpOp, rhs: Double, mask: RowBits, sel: IntArray?) =
+        cmpDoubles(op, rhs, mask, sel) { dataBuffer.getDouble(it) }
+
+    override fun notNull(mask: RowBits, sel: IntArray?) = notNullBits(mask, sel)
 }

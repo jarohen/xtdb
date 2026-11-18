@@ -48,6 +48,11 @@ class DateDayVector private constructor(
 
     override fun hashTo(out: IntVector, hasher: Hasher, sel: IntArray?) =
         doubleHashes(this, out, sel, hasher) { it.addDoubles(valueCount, sel) { idx -> if (isNull(idx)) 0.0 else getMetaDouble(idx) } }
+
+    override fun compare(op: CmpOp, rhs: LocalDate, mask: RowBits, sel: IntArray?) =
+        cmpLongs(op, rhs.toEpochDay(), mask, sel) { dataBuffer.getInt(it).toLong() }
+
+    override fun notNull(mask: RowBits, sel: IntArray?) = notNullBits(mask, sel)
 }
 
 class DateMilliVector internal constructor(

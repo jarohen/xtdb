@@ -12,6 +12,7 @@ import xtdb.arrow.VectorIndirection.Companion.selection
 import xtdb.arrow.agg.VectorSummer
 import xtdb.util.Hasher
 import java.nio.ByteBuffer
+import java.time.LocalDate
 
 class IndirectVector(private val inner: VectorReader, private val sel: VectorIndirection) : VectorReader, LongLongVectorReader {
     override val name: String get() = inner.name
@@ -62,6 +63,23 @@ class IndirectVector(private val inner: VectorReader, private val sel: VectorInd
                 else -> this.sel.select(0, valueCount)
             }
         )
+
+    private fun innerSel(sel: IntArray?, n: Int) = when {
+        sel != null -> this.sel.select(sel)
+        this.sel is Selection -> this.sel.idxs
+        else -> this.sel.select(0, n)
+    }
+
+    override fun compare(op: CmpOp, rhs: Long, mask: RowBits, sel: IntArray?) =
+        inner.compare(op, rhs, mask, innerSel(sel, mask.size))
+
+    override fun compare(op: CmpOp, rhs: Double, mask: RowBits, sel: IntArray?) =
+        inner.compare(op, rhs, mask, innerSel(sel, mask.size))
+
+    override fun compare(op: CmpOp, rhs: LocalDate, mask: RowBits, sel: IntArray?) =
+        inner.compare(op, rhs, mask, innerSel(sel, mask.size))
+
+    override fun notNull(mask: RowBits, sel: IntArray?) = inner.notNull(mask, innerSel(sel, mask.size))
 
     @InternalApi
     override fun write(out: PageOutput, startIdx: Int, len: Int) {

@@ -17,6 +17,7 @@ import xtdb.hash.perRowHashes
 import xtdb.util.Hasher
 import xtdb.util.closeOnCatch
 import java.nio.ByteBuffer
+import java.time.LocalDate
 
 interface VectorReader : ILookup, AutoCloseable {
     val name: String
@@ -69,6 +70,39 @@ interface VectorReader : ILookup, AutoCloseable {
      * [out] must be non-nullable.
      */
     fun hashTo(out: IntVector, hasher: Hasher, sel: IntArray? = null) = perRowHashes(this, out, sel, hasher)
+
+    /**
+     * Comparisons of each row against a scalar, evaluated only for the rows of [mask]; the answer has the rows that are non-null and compare true.
+     * Bit `i` of [mask] is row `sel[i]` of this vector, or row `i` if [sel] is null.
+     * A null answer means this vector doesn't cover the comparison with that scalar's domain.
+     */
+    fun lt(rhs: Long, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.LT, rhs, mask, sel)
+    fun le(rhs: Long, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.LE, rhs, mask, sel)
+    fun gt(rhs: Long, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.GT, rhs, mask, sel)
+    fun ge(rhs: Long, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.GE, rhs, mask, sel)
+    fun eq(rhs: Long, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.EQ, rhs, mask, sel)
+    fun ne(rhs: Long, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.NE, rhs, mask, sel)
+
+    fun lt(rhs: Double, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.LT, rhs, mask, sel)
+    fun le(rhs: Double, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.LE, rhs, mask, sel)
+    fun gt(rhs: Double, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.GT, rhs, mask, sel)
+    fun ge(rhs: Double, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.GE, rhs, mask, sel)
+    fun eq(rhs: Double, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.EQ, rhs, mask, sel)
+    fun ne(rhs: Double, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.NE, rhs, mask, sel)
+
+    fun lt(rhs: LocalDate, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.LT, rhs, mask, sel)
+    fun le(rhs: LocalDate, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.LE, rhs, mask, sel)
+    fun gt(rhs: LocalDate, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.GT, rhs, mask, sel)
+    fun ge(rhs: LocalDate, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.GE, rhs, mask, sel)
+    fun eq(rhs: LocalDate, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.EQ, rhs, mask, sel)
+    fun ne(rhs: LocalDate, mask: RowBits, sel: IntArray? = null): RowBits? = compare(CmpOp.NE, rhs, mask, sel)
+
+    fun compare(op: CmpOp, rhs: Long, mask: RowBits, sel: IntArray?): RowBits? = null
+    fun compare(op: CmpOp, rhs: Double, mask: RowBits, sel: IntArray?): RowBits? = null
+    fun compare(op: CmpOp, rhs: LocalDate, mask: RowBits, sel: IntArray?): RowBits? = null
+
+    /** the rows of [mask] that are non-null */
+    fun notNull(mask: RowBits, sel: IntArray? = null): RowBits? = null
 
     val listElements: VectorReader get() = unsupported("listElements")
     fun getListStartIndex(idx: Int): Int = unsupported("getListStartIndex")

@@ -57,6 +57,25 @@ internal class BitBuffer private constructor(
 
     fun getBoolean(idx: Int) = BitVectorHelper.get(buf, idx) == 1
 
+    /** Bits `[64w, 64w+64)` as one word, reading only the bytes the buffer has. */
+    fun wordAt(w: Int): Long {
+        val off = w.toLong() * 8
+        if (off + 8 <= buf.capacity()) return buf.getLong(off)
+        var word = 0L
+        var b = 0
+        while (off + b < buf.capacity()) {
+            word = word or ((buf.getByte(off + b).toLong() and 0xff) shl (8 * b)); b++
+        }
+        return word
+    }
+
+    /** Sets the first [bitCount] bits from [words]. */
+    fun setWords(words: LongArray, bitCount: Int) {
+        val bytes = bufferSize(bitCount).toInt()
+        for (j in 0 until bytes)
+            buf.setByte(j.toLong(), (words[j ushr 3] ushr (8 * (j and 7))).toInt() and 0xff)
+    }
+
     fun setBit(bitIdx: Int, bit: Int) = BitVectorHelper.setValidityBit(buf, bitIdx, bit)
 
     fun writeBit(bitIdx: Int, bit: Int) {
