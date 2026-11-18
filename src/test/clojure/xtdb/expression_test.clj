@@ -15,7 +15,7 @@
            (java.time Duration Instant InstantSource LocalDate LocalDateTime LocalTime Period ZoneId ZonedDateTime)
            (java.time.temporal ChronoUnit)
            org.apache.arrow.vector.types.TimeUnit
-           (xtdb.arrow NullVector RelationReader Vector VectorReader)
+           (xtdb.arrow DenseUnionVector NullVector RelationReader Vector VectorReader)
            (xtdb.operator ProjectionSpec$Star)
            (xtdb.time Interval)
            (xtdb.util StringUtil)))
@@ -1282,6 +1282,22 @@
               :res-type #xt/type [:? :utf8]}
              (run-test '(cond (> x 100) "big", (> x 10) "small")
                        [500 50 5 nil])))))
+
+(t/deftest test-projection-reads-the-current-row-of-columns-read-on-only-some-rows
+  (t/is (= {:res [11 20 33 40 55]
+            :res-type #xt/type :i64}
+           (with-open [rel (tu/open-rel {:p [true false true false true], :x [1 2 3 4 5], :y [10 20 30 40 50]})]
+             (run-projection rel '(if p (+ x y) y))))))
+
+(t/deftest test-projection-reads-a-union-column-absent-on-the-rows-that-dont-read-it
+  (with-open [p (Vector/fromList tu/*allocator* "p" [true false true false])
+              x (doto (DenseUnionVector. tu/*allocator* "x" [] 0)
+                  (.writeObject 12)
+                  (.writeUndefined)
+                  (.writeObject "hello")
+                  (.writeUndefined))]
+    (t/is (= [12 0 "hello" 0]
+             (:res (run-projection (vr/rel-reader [p x] 4) '(if p x 0)))))))
 
 (t/deftest test-let
   (t/is (= {:res [6 9 12 nil]
