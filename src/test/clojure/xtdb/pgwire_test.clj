@@ -2960,6 +2960,18 @@ ORDER BY 1,2;")
           (t/is (= (if binary? binary-val text-val)
                    (.getObject rs 1 type))))))))
 
+(t/deftest test-binary-timestamp-sends-the-micro-text-shows
+  (doseq [input ["'1901-12-13T20:45:52.888842999'::TIMESTAMP(9)"
+                 "CASE WHEN true THEN TIMESTAMP '2020-01-01 00:00:01.123456' ELSE '1901-12-13T20:45:52.888842999'::TIMESTAMP(9) END"
+                 "CASE WHEN false THEN TIMESTAMP '2020-01-01 00:00:01.123456' ELSE '1901-12-13T20:45:52.888842999'::TIMESTAMP(9) END"]
+          :let [read-val (fn [binary?]
+                           (with-open [conn (pgjdbc-conn {"prepareThreshold" -1 "binaryTransfer" binary?})
+                                       stmt (.prepareStatement conn (str "SELECT " input " v"))
+                                       rs (.executeQuery stmt)]
+                             (.next rs)
+                             (.getObject rs 1 LocalDateTime)))]]
+    (t/is (= (read-val false) (read-val true)) input)))
+
 (t/deftest test-filtered-batch-serialises-each-column-in-step
   (with-open [conn (pgjdbc-conn)
               stmt (.createStatement conn)]
