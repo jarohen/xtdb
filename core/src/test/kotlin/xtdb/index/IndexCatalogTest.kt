@@ -19,24 +19,28 @@ class IndexCatalogTest {
     private fun Fault.errorCode() = data.valAt(errorCodeKey)
 
     @Test
-    fun `a catalog round-trips through its block entries, tries and dropped indices included`() {
+    fun `a catalog round-trips through its block entries, in every state, tries included`() {
         val dropAt = Instant.parse("2026-01-02T03:04:05.123456Z")
         val byEmail = def("by_email")
         val bySku = def("by_sku", table = "orders", column = "sku")
+        val byName = def("by_name", column = "name")
         val byEmailL0s = listOf(IndexTrie(Trie.l0Key(3), 1024), IndexTrie(Trie.l0Key(4), 2048))
         val bySkuL0 = IndexTrie(Trie.l0Key(5), 512)
 
         val catalog = IndexCatalog.EMPTY
-            .withIndex(byEmail, 3)
-            .withIndex(bySku, 5)
+            .withIndex(byEmail, 3, setOf(2L, 0L, 1L))
+            .withIndex(bySku, 5, emptySet())
+            .withIndex(byName, 5, emptySet())
+            .ready(byName.id)
             .withL0s(mapOf(byEmail.id to byEmailL0s[0]))
             .withL0s(mapOf(byEmail.id to byEmailL0s[1], bySku.id to bySkuL0))
             .dropped(bySku.id, dropAt)
 
         assertEquals(
             setOf(
-                SecondaryIndex(byEmail, 3, IndexState.Building, byEmailL0s),
+                SecondaryIndex(byEmail, 3, IndexState.Building(setOf(0L, 1L, 2L)), byEmailL0s),
                 SecondaryIndex(bySku, 5, IndexState.Dropped(dropAt), listOf(bySkuL0)),
+                SecondaryIndex(byName, 5, IndexState.Ready, emptyList()),
             ),
             IndexCatalog.fromProto(catalog.toProto()).indices.toSet(),
         )
@@ -52,18 +56,18 @@ class IndexCatalogTest {
 
     @Test
     fun `declaring a name already declared faults`() {
-        val catalog = IndexCatalog.EMPTY.withIndex(def("by_email"), 0)
+        val catalog = IndexCatalog.EMPTY.withIndex(def("by_email"), 0, emptySet())
 
-        val fault = assertThrows<Fault> { catalog.withIndex(def("by_email"), 0) }
+        val fault = assertThrows<Fault> { catalog.withIndex(def("by_email"), 0, emptySet()) }
         assertEquals(Keyword.intern("xtdb.index", "index-name-declared"), fault.errorCode())
     }
 
     @Test
     fun `declaring an id already in the catalog faults, even once dropped`() {
         val byEmail = def("by_email")
-        val catalog = IndexCatalog.EMPTY.withIndex(byEmail, 0).dropped(byEmail.id, Instant.EPOCH)
+        val catalog = IndexCatalog.EMPTY.withIndex(byEmail, 0, emptySet()).dropped(byEmail.id, Instant.EPOCH)
 
-        val fault = assertThrows<Fault> { catalog.withIndex(byEmail, 1) }
+        val fault = assertThrows<Fault> { catalog.withIndex(byEmail, 1, emptySet()) }
         assertEquals(Keyword.intern("xtdb.index", "index-id-exists"), fault.errorCode())
     }
 
@@ -76,9 +80,41 @@ class IndexCatalogTest {
     @Test
     fun `dropping an index twice faults`() {
         val byEmail = def("by_email")
-        val catalog = IndexCatalog.EMPTY.withIndex(byEmail, 0).dropped(byEmail.id, Instant.EPOCH)
+        val catalog = IndexCatalog.EMPTY.withIndex(byEmail, 0, emptySet()).dropped(byEmail.id, Instant.EPOCH)
 
         val fault = assertThrows<Fault> { catalog.dropped(byEmail.id, Instant.EPOCH) }
         assertEquals(Keyword.intern("xtdb.index", "index-already-dropped"), fault.errorCode())
+    }
+
+    @Test
+    fun `a complete Building index becomes Ready, and applying Ready again changes nothing`() {
+        val byEmail = def("by_email")
+        val ready = IndexCatalog.EMPTY.withIndex(byEmail, 3, emptySet()).ready(byEmail.id)
+
+        assertEquals(IndexState.Ready, ready[byEmail.id]?.state)
+        assertEquals(ready.indices.toList(), ready.ready(byEmail.id).indices.toList())
+    }
+
+    @Test
+    fun `Ready on an index dropped since changes nothing`() {
+        val byEmail = def("by_email")
+        val dropped = IndexCatalog.EMPTY.withIndex(byEmail, 0, emptySet()).dropped(byEmail.id, Instant.EPOCH)
+
+        assertEquals(dropped.indices.toList(), dropped.ready(byEmail.id).indices.toList())
+    }
+
+    @Test
+    fun `Ready on an index still owing blocks faults`() {
+        val byEmail = def("by_email")
+        val catalog = IndexCatalog.EMPTY.withIndex(byEmail, 2, setOf(0L, 1L))
+
+        val fault = assertThrows<Fault> { catalog.ready(byEmail.id) }
+        assertEquals(Keyword.intern("xtdb.index", "index-not-complete"), fault.errorCode())
+    }
+
+    @Test
+    fun `Ready on an index the catalog does not hold faults`() {
+        val fault = assertThrows<Fault> { IndexCatalog.EMPTY.ready(UUID.randomUUID()) }
+        assertEquals(Keyword.intern("xtdb.index", "unknown-index"), fault.errorCode())
     }
 }
