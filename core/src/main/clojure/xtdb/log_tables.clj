@@ -13,7 +13,7 @@
            (xtdb.api.log Log Log$Record SourceMessage SourceMessage$Tx
                          SourceMessage$FlushBlock SourceMessage$TriesAdded
                          SourceMessage$AttachDatabase SourceMessage$DetachDatabase
-                         SourceMessage$CreateIndex SourceMessage$DropIndex
+                         SourceMessage$CreateIndex SourceMessage$DropIndex SourceMessage$IndexBackfilled
                          SourceMessage$LegacyTx
                          ReplicaMessage ReplicaMessage$ResolvedTx
                          ReplicaMessage$TriesAdded ReplicaMessage$BlockBoundary
@@ -53,6 +53,7 @@
     SourceMessage$DetachDatabase "detach-database"
     SourceMessage$CreateIndex "create-index"
     SourceMessage$DropIndex "drop-index"
+    SourceMessage$IndexBackfilled "index-backfilled"
     SourceMessage$LegacyTx "legacy-tx"
     "unknown"))
 
@@ -105,6 +106,13 @@
      SourceMessage$DropIndex
      {:type :drop-index
       :index-name (.getIndexName ^SourceMessage$DropIndex msg)}
+
+     SourceMessage$IndexBackfilled
+     (let [^SourceMessage$IndexBackfilled m msg]
+       {:type :index-backfilled
+        :index-id (str (.getIndexId m))
+        :block-index (.getBlockIndex m)
+        :l0-data-file-size (.getL0DataFileSize m)})
 
      SourceMessage$LegacyTx
      {:type :legacy-tx}
