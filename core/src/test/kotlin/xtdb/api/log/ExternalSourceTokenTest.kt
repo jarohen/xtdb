@@ -63,7 +63,8 @@ class ExternalSourceTokenTest {
             secondaryDatabases = null,
             externalSourceToken = testToken,
             termId = term,
-            boundaryTermSeq = null
+            boundaryTermSeq = null,
+            secondaryIndices = emptyList(),
         )
 
         val parsed = Block.parseFrom(block.toByteArray())
@@ -87,7 +88,8 @@ class ExternalSourceTokenTest {
             secondaryDatabases = null,
             externalSourceToken = testToken,
             termId = term,
-            boundaryTermSeq = null
+            boundaryTermSeq = null,
+            secondaryIndices = emptyList(),
         )
         partitionState.adoptBlock(block, emptyList(), Instant.now())
 
@@ -107,7 +109,8 @@ class ExternalSourceTokenTest {
             tables = emptySet(),
             secondaryDatabases = null,
             termId = term,
-            boundaryTermSeq = null
+            boundaryTermSeq = null,
+            secondaryIndices = emptyList(),
         )
         partitionState.adoptBlock(block, emptyList(), Instant.now())
 

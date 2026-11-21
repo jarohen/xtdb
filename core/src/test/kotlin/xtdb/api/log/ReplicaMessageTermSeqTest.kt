@@ -50,6 +50,7 @@ class ReplicaMessageTermSeqTest {
                         secondaryDatabases = null,
                         termId = 3,
                         boundaryTermSeq = boundaryTermSeq,
+                        secondaryIndices = emptyList(),
                     ),
                     emptyList(), Instant.now(),
                 )

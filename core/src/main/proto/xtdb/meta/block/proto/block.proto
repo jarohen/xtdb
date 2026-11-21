@@ -49,6 +49,21 @@ message TableEntry {
     string slug = 4;
 }
 
+message BuildingIndex {}
+
+message DroppedIndex {
+    int64 as_of_micros = 1;
+}
+
+message SecondaryIndexEntry {
+    xtdb.log.proto.CreateIndex definition = 1;
+    int64 first_flushed_block = 6;
+    oneof state {
+        BuildingIndex building = 2;
+        DroppedIndex dropped = 3;
+    }
+}
+
 message Block {
     int64 block_index = 1;
     TxKey latest_completed_tx = 2;
@@ -75,4 +90,7 @@ message Block {
     // boundary knows the next position its term expects. Absent for blocks written before
     // this field, or whose boundary carried none. See #6105.
     int64 boundary_term_seq = 10;
+
+    // the partition's secondary indices as of this block, sorted by id
+    repeated SecondaryIndexEntry secondary_indices = 11;
 }

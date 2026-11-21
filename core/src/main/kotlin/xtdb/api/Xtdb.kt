@@ -396,12 +396,16 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
         private fun ResultCursor.metered(): ResultCursor =
             metrics?.let { MeteredCursor(this, it) } ?: this
 
-        private fun doSubmit(ops: List<TxOp>, opts: TxOpts): SubmittedTx {
+        private fun requireNoOpenTx() {
             if (isTxOpen)
                 throw Incorrect(
                     "Cannot submit a transaction while another is in progress on this connection - commit or roll back first",
                     "xtdb/tx-already-in-progress"
                 )
+        }
+
+        private fun doSubmit(ops: List<TxOp>, opts: TxOpts): SubmittedTx {
+            requireNoOpenTx()
 
             return try {
                 try {
@@ -434,6 +438,28 @@ interface Xtdb : DataSource, AdbcDatabase, AutoCloseable {
 
         fun detachDb(dbName: DatabaseName): ExecutedTx =
             dbCat.primary.let { awaitTx(it.sendDetachDbMessage(dbName).msgId, it.name).record(it.name) }
+
+        /**
+         * Declares a secondary index named [indexName] on [table]'s [column] in this connection's database.
+         *
+         * The transaction aborts if the database already holds an index of that name.
+         * Neither the table nor the column has to exist yet.
+         * Throws `xtdb/index-on-system-column` for `_iid`, `_valid_from`, `_valid_to`, `_system_from` or `_system_to`, which no document holds.
+         * Throws `xtdb/tx-already-in-progress` while a transaction is open on this connection.
+         */
+        fun createIndex(indexName: String, table: TableRef, column: String): ExecutedTx {
+            requireNoOpenTx()
+            return awaitTx(db(dbName).sendCreateIndexMessage(indexName, table, column).msgId).record(dbName)
+        }
+
+        /**
+         * Drops the secondary index named [indexName] from this connection's database; the transaction aborts if there is none.
+         * Throws `xtdb/tx-already-in-progress` while a transaction is open on this connection.
+         */
+        fun dropIndex(indexName: String): ExecutedTx {
+            requireNoOpenTx()
+            return awaitTx(db(dbName).sendDropIndexMessage(indexName).msgId).record(dbName)
+        }
 
         private fun TransactionResult.toExecutedTx() =
             ExecutedTx(

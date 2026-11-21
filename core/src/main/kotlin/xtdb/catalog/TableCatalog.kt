@@ -17,6 +17,7 @@ import xtdb.arrow.VectorType.Companion.asType
 import xtdb.arrow.VectorType.Companion.field
 import xtdb.block.proto.Block
 import xtdb.block.proto.Partition
+import xtdb.block.proto.SecondaryIndexEntry
 import xtdb.block.proto.TableBlock
 import xtdb.block.proto.block
 import xtdb.block.proto.txKey
@@ -262,6 +263,7 @@ class TableCatalog(private val flow: StateFlow<State>) {
         externalSourceToken: ExternalSourceToken? = null,
         termId: Long,
         boundaryTermSeq: Long?,
+        secondaryIndices: List<SecondaryIndexEntry>,
     ): Block {
         val currentBlockIndex = snap().blockIdx
         check(currentBlockIndex == null || currentBlockIndex < blockIndex) {
@@ -286,6 +288,7 @@ class TableCatalog(private val flow: StateFlow<State>) {
             externalSourceToken?.let { this.externalSourceToken = ByteString.copyFrom(it) }
             this.termId = termId
             boundaryTermSeq?.let { this.boundaryTermSeq = it }
+            this.secondaryIndices.addAll(secondaryIndices)
         }
     }
 

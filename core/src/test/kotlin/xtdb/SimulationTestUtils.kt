@@ -3,6 +3,7 @@ package xtdb
 import xtdb.catalog.TableCatalog
 import xtdb.block.proto.Block
 import xtdb.database.PartitionValue
+import xtdb.index.IndexCatalog
 import clojure.lang.PersistentArrayMap
 import xtdb.compactor.Compactor
 import xtdb.log.proto.TrieDetails
@@ -44,6 +45,7 @@ class SimulationTestUtils {
             PartitionValue.loaded(
                 createTrieCatalogStateFn.invoke(PersistentArrayMap.EMPTY, 100 * 1024 * 1024) as TrieCatalog.State,
                 TableCatalog.initialState(block),
+                IndexCatalog.fromProto(block?.secondaryIndicesList.orEmpty()),
             )
 
         val L0TrieKeys = sequence {

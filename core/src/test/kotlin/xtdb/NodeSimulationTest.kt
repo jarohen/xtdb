@@ -189,7 +189,8 @@ class NodeSimulationTest : SimulationTestBase() {
                 tables = tableCatalog.resolveTables(listOf(table)),
                 secondaryDatabases = null,
                 termId = 0,
-                boundaryTermSeq = null
+                boundaryTermSeq = null,
+                secondaryIndices = emptyList(),
             )
             sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
             db.partitionState.adoptBlock(block, emptyList(), Instant.now())
@@ -249,7 +250,8 @@ class NodeSimulationTest : SimulationTestBase() {
                 tables = tableCatalog.resolveTables(listOf(table)),
                 secondaryDatabases = null,
                 termId = 0,
-                boundaryTermSeq = null
+                boundaryTermSeq = null,
+                secondaryIndices = emptyList(),
             )
             sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
             db.partitionState.adoptBlock(block, emptyList(), Instant.now())
@@ -328,7 +330,8 @@ class NodeSimulationTest : SimulationTestBase() {
                 tables = tableCatalog.resolveTables(listOf(table)),
                 secondaryDatabases = null,
                 termId = 0,
-                boundaryTermSeq = null
+                boundaryTermSeq = null,
+                secondaryIndices = emptyList(),
             )
             sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
             db.partitionState.adoptBlock(block, emptyList(), Instant.now())
@@ -401,7 +404,8 @@ class NodeSimulationTest : SimulationTestBase() {
                     tables = db.tableCatalog.resolveTables(listOf(table)),
                     secondaryDatabases = null,
                     termId = 0,
-                    boundaryTermSeq = null
+                    boundaryTermSeq = null,
+                    secondaryIndices = emptyList(),
                 )
                 sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
                 db.partitionState.adoptBlock(block, emptyList(), Instant.now())
@@ -475,7 +479,8 @@ class NodeSimulationTest : SimulationTestBase() {
                     tables = db.tableCatalog.resolveTables(listOf(table)),
                     secondaryDatabases = null,
                     termId = 0,
-                    boundaryTermSeq = null
+                    boundaryTermSeq = null,
+                    secondaryIndices = emptyList(),
                 )
                 sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
                 db.partitionState.adoptBlock(block, emptyList(), Instant.now())
@@ -572,7 +577,8 @@ class NodeSimulationTest : SimulationTestBase() {
                 tables = tableCatalog.resolveTables(listOf(table)),
                 secondaryDatabases = null,
                 termId = 0,
-                boundaryTermSeq = null
+                boundaryTermSeq = null,
+                secondaryIndices = emptyList(),
             )
             sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
             db.partitionState.adoptBlock(block, emptyList(), Instant.now())
@@ -625,7 +631,8 @@ class NodeSimulationTest : SimulationTestBase() {
                     tables = db.tableCatalog.resolveTables(listOf(table)),
                     secondaryDatabases = null,
                     termId = 0,
-                    boundaryTermSeq = null
+                    boundaryTermSeq = null,
+                    secondaryIndices = emptyList(),
                 )
                 sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
                 db.partitionState.adoptBlock(block, emptyList(), Instant.now())
@@ -717,7 +724,8 @@ class NodeSimulationTest : SimulationTestBase() {
                     tables = db.tableCatalog.resolveTables(listOf(table)),
                     secondaryDatabases = null,
                     termId = 0,
-                    boundaryTermSeq = null
+                    boundaryTermSeq = null,
+                    secondaryIndices = emptyList(),
                 )
                 sharedBufferPool.putObjectSync(TableCatalog.blockFilePath(blockIndex), ByteBuffer.wrap(block.toByteArray()))
                 db.partitionState.adoptBlock(block, emptyList(), Instant.now())

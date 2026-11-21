@@ -236,6 +236,7 @@ internal class BlockCutter(
             externalSourceToken,
             boundary.termId, // not leaderTerm - #6059
             boundary.termSeq,
+            partitionState.indexCatalog.toProto(),
         )
 
         bufferPool.putObject(TableCatalog.blockFilePath(blockIdx), ByteBuffer.wrap(block.toByteArray()))
