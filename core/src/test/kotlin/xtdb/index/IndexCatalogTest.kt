@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import xtdb.api.TableRef
 import xtdb.api.error.Fault
+import xtdb.trie.Trie
 import java.time.Instant
 import java.util.UUID
 
@@ -18,23 +19,35 @@ class IndexCatalogTest {
     private fun Fault.errorCode() = data.valAt(errorCodeKey)
 
     @Test
-    fun `a catalog round-trips through its block entries, dropped indices included`() {
+    fun `a catalog round-trips through its block entries, tries and dropped indices included`() {
         val dropAt = Instant.parse("2026-01-02T03:04:05.123456Z")
         val byEmail = def("by_email")
         val bySku = def("by_sku", table = "orders", column = "sku")
+        val byEmailL0s = listOf(IndexTrie(Trie.l0Key(3), 1024), IndexTrie(Trie.l0Key(4), 2048))
+        val bySkuL0 = IndexTrie(Trie.l0Key(5), 512)
 
         val catalog = IndexCatalog.EMPTY
             .withIndex(byEmail, 3)
             .withIndex(bySku, 5)
+            .withL0s(mapOf(byEmail.id to byEmailL0s[0]))
+            .withL0s(mapOf(byEmail.id to byEmailL0s[1], bySku.id to bySkuL0))
             .dropped(bySku.id, dropAt)
 
         assertEquals(
             setOf(
-                SecondaryIndex(byEmail, 3, IndexState.Building),
-                SecondaryIndex(bySku, 5, IndexState.Dropped(dropAt)),
+                SecondaryIndex(byEmail, 3, IndexState.Building, byEmailL0s),
+                SecondaryIndex(bySku, 5, IndexState.Dropped(dropAt), listOf(bySkuL0)),
             ),
             IndexCatalog.fromProto(catalog.toProto()).indices.toSet(),
         )
+    }
+
+    @Test
+    fun `adding an L0 for an index the catalog does not hold faults`() {
+        val fault = assertThrows<Fault> {
+            IndexCatalog.EMPTY.withL0s(mapOf(UUID.randomUUID() to IndexTrie(Trie.l0Key(0), 1)))
+        }
+        assertEquals(Keyword.intern("xtdb.index", "unknown-index"), fault.errorCode())
     }
 
     @Test

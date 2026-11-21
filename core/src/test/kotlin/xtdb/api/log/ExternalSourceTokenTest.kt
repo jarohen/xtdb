@@ -40,7 +40,7 @@ class ExternalSourceTokenTest {
 
     @Test
     fun `ReplicaMessage BlockUploaded round-trips external source token`() {
-        val uploaded = ReplicaMessage.BlockUploaded(1, 0, 1, 100, emptyList(), testToken, termId = term)
+        val uploaded = ReplicaMessage.BlockUploaded(1, 0, 1, 100, emptyList(), emptyMap(), testToken, termId = term)
         val encoded = uploaded.encode()
         val decoded = ReplicaMessage.decode(encoded)
 
@@ -91,7 +91,7 @@ class ExternalSourceTokenTest {
             boundaryTermSeq = null,
             secondaryIndices = emptyList(),
         )
-        partitionState.adoptBlock(block, emptyList(), Instant.now())
+        partitionState.adoptBlock(block, emptyList(), emptyMap(), Instant.now())
 
         assertArrayEquals(testToken, tableCatalog.snap().externalSourceToken)
     }
@@ -112,7 +112,7 @@ class ExternalSourceTokenTest {
             boundaryTermSeq = null,
             secondaryIndices = emptyList(),
         )
-        partitionState.adoptBlock(block, emptyList(), Instant.now())
+        partitionState.adoptBlock(block, emptyList(), emptyMap(), Instant.now())
 
         assertNull(tableCatalog.snap().externalSourceToken)
     }

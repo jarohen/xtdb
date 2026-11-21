@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import xtdb.api.DatabaseName
+import xtdb.api.TableRef
 import xtdb.api.log.ReplicaMessage.BlockBoundary
 import xtdb.api.log.ReplicaMessage.BlockUploaded
 import xtdb.api.log.SourceMessage
@@ -21,7 +22,13 @@ import xtdb.compactor.Compactor
 import xtdb.database.Database
 import xtdb.database.PartitionState
 import xtdb.database.PartitionStorage
+import xtdb.index.IndexState
+import xtdb.index.IndexTrie
+import xtdb.index.IndexTrieWriter
 import xtdb.log.proto.TrieDetails
+import xtdb.table.IndexFiles
+import xtdb.table.TableSlug
+import xtdb.trie.BlockIndex
 import xtdb.types.LogTimestamp
 import xtdb.types.MessageId
 import xtdb.util.StringUtil.asLexHex
@@ -29,6 +36,7 @@ import xtdb.util.debug
 import xtdb.util.logger
 import java.nio.ByteBuffer
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
 private val LOG = BlockCutter::class.logger
@@ -227,6 +235,8 @@ internal class BlockCutter(
             }
         }
 
+        val addedIndexTries = writeIndexL0s(blockIdx) { entries.getValue(it).slug }
+
         val secondaryDatabasesForBlock = dbCatalog?.serialisedSecondaryDatabases
         val externalSourceToken = boundary.externalSourceToken
 
@@ -236,7 +246,8 @@ internal class BlockCutter(
             externalSourceToken,
             boundary.termId, // not leaderTerm - #6059
             boundary.termSeq,
-            partitionState.indexCatalog.toProto(),
+            // As the adopt will leave it: a node starting from this block takes it as its catalog.
+            partitionState.indexCatalog.withL0s(addedIndexTries).toProto(),
         )
 
         bufferPool.putObject(TableCatalog.blockFilePath(blockIdx), ByteBuffer.wrap(block.toByteArray()))
@@ -251,7 +262,7 @@ internal class BlockCutter(
             BlockUploaded(
                 Storage.VERSION, bufferPool.epoch,
                 blockIdx, latestProcessedMsgId,
-                addedTries, externalSourceToken,
+                addedTries, addedIndexTries, externalSourceToken,
                 // This term's, not the boundary's: a promotion finishes the block the previous leader
                 // cut, and a leader confirms a write only on reading it back at its own term.
                 termId = leaderTerm,
@@ -265,6 +276,21 @@ internal class BlockCutter(
         blockState = Uploading(pendingBlock, block)
     }
 
+    private suspend fun writeIndexL0s(blockIdx: BlockIndex, slug: (TableRef) -> TableSlug): Map<UUID, IndexTrie> {
+        val liveTables = liveIndex.state.tables
+        val writer = IndexTrieWriter(liveIndex.allocator, bufferPool)
+
+        return partitionState.indexCatalog.indices
+            .filter { it.state !is IndexState.Dropped }
+            .mapNotNull { index ->
+                val def = index.def
+                val liveTable = liveTables[def.table] ?: return@mapNotNull null
+                writer.writeL0(IndexFiles(slug(def.table), def.id), blockIdx, liveTable.relation, def.column)
+                    ?.let { def.id to it }
+            }
+            .toMap()
+    }
+
     /**
      * Adopt the block [msg] confirms, re-open the one behind it, and hand back what was held meanwhile.
      *
@@ -276,7 +302,7 @@ internal class BlockCutter(
         val uploading = blockState as? Uploading
             ?: error("[$dbName] BlockUploaded b${msg.blockIndex.asLexHex} arrived with no block in flight")
 
-        partitionState.adoptBlock(uploading.block, msg.tries, logTimestamp)
+        partitionState.adoptBlock(uploading.block, msg.tries, msg.indexTries, logTimestamp)
 
         // Publish L0 tries to the source log so that all nodes — including multi-writer nodes running
         // concurrently with a single-writer leader — see the L0 before any compaction L1C on the source
