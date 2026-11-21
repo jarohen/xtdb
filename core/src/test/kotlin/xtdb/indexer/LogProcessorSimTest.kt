@@ -525,7 +525,7 @@ class LogProcessorSimTest : SimulationTestBase() {
 
             MemoryStorage(allocator, epoch = 0).use { bp ->
                 SimNode("test-db", bp, IndexerConfig(rowsPerBlock = rowsPerBlock), simExtSource).use { node ->
-                    launch(dispatcher) {
+                    simulate {
 
                         val logProc = node.openLogProcessor(this)
 
@@ -550,7 +550,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                             replicaLog.awaitAllDelivered()
                             awaitIdle()
                         }.invokeOnCompletion { cancel() }
-                    }.join()
+                    }
 
                     assertInvariants(listOf(node))
 
@@ -579,7 +579,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                         SimNode("test-db", bp, indexerConfig, simExtSource).use { followerB ->
                             val nodes = listOf(leader, followerA, followerB)
 
-                            launch(dispatcher) {
+                            simulate {
                                 nodes.forEach { it.openLogProcessor(this) }
 
                                 launch {
@@ -595,7 +595,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                                     nodes.awaitTx(lastAppliedTxId())
                                     awaitIdle()
                                 }.invokeOnCompletion { cancel() }
-                            }.join()
+                            }
 
                             assertInvariants(nodes)
 
@@ -630,7 +630,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                     SimNode("test-db", bp, indexerConfig, simExtSource).use { nodeB ->
                         val nodes = listOf(nodeA, nodeB)
 
-                        launch(dispatcher) {
+                        simulate {
                             nodes.forEach { it.openLogProcessor(this) }
 
                             launch {
@@ -649,7 +649,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                                 nodes.awaitTx(lastAppliedTxId())
                                 awaitIdle()
                             }.invokeOnCompletion { cancel() }
-                        }.join()
+                        }
 
                         assertInvariants(nodes)
 
@@ -677,7 +677,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                             val nodes = listOf(nodeA, nodeB, nodeC)
                             var leadersAtQuiescence = -1
 
-                            launch(dispatcher) {
+                            simulate {
                                 nodes.forEach { it.openLogProcessor(this) }
 
                                 launch {
@@ -699,7 +699,7 @@ class LogProcessorSimTest : SimulationTestBase() {
 
                                     leadersAtQuiescence = nodes.leaderCount()
                                 }.invokeOnCompletion { cancel() }
-                            }.join()
+                            }
 
                             assertInvariants(nodes)
 
@@ -732,7 +732,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                             val nodes = listOf(nodeA, nodeB, readOnly)
                             var readOnlyLed = false
 
-                            launch(dispatcher) {
+                            simulate {
                                 nodes.forEach { it.openLogProcessor(this) }
 
                                 launch {
@@ -753,7 +753,7 @@ class LogProcessorSimTest : SimulationTestBase() {
 
                                     readOnlyLed = readOnlyLed || readOnly.isLeader
                                 }.invokeOnCompletion { cancel() }
-                            }.join()
+                            }
 
                             assertInvariants(nodes)
 
@@ -812,7 +812,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                         val nodes = listOf(nodeA, nodeB)
                         var leadersAtQuiescence = -1
 
-                        launch(dispatcher) {
+                        simulate {
                             nodes.forEach { it.openLogProcessor(this) { inner -> LosingDriver(inner) } }
 
                             launch {
@@ -839,7 +839,7 @@ class LogProcessorSimTest : SimulationTestBase() {
 
                                 leadersAtQuiescence = nodes.leaderCount()
                             }.invokeOnCompletion { cancel() }
-                        }.join()
+                        }
 
                         assertInvariants(nodes)
 
@@ -870,7 +870,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                             var leadersAtQuiescence = -1
                             var refusedLed = false
 
-                            launch(dispatcher) {
+                            simulate {
                                 incumbent.openLogProcessor(this)
                                 refused.forEach { it.openLogProcessor(this) { inner -> ClaimRefusingDriver(inner) } }
 
@@ -892,7 +892,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                                     refusedLed = refusedLed || refused.any { it.isLeader }
                                     leadersAtQuiescence = nodes.leaderCount()
                                 }.invokeOnCompletion { cancel() }
-                            }.join()
+                            }
 
                             // `assertNoNodeFailed` is the point of the whole case: a node that treated the
                             // refusal as its own fault would stop answering queries over a write it never
@@ -929,7 +929,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                         var leadersAtQuiescence = -1
                         var joinerLed = false
 
-                        launch(dispatcher) {
+                        simulate {
                             val nodeScope = this
                             incumbent.openLogProcessor(nodeScope)
 
@@ -952,7 +952,7 @@ class LogProcessorSimTest : SimulationTestBase() {
                                 leadersAtQuiescence = nodes.leaderCount()
                                 joinerLed = joiner.isLeader
                             }.invokeOnCompletion { cancel() }
-                        }.join()
+                        }
 
                         assertInvariants(nodes)
 

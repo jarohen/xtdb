@@ -1,5 +1,8 @@
 package xtdb
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.extension.BeforeEachCallback
 import org.junit.jupiter.api.extension.ExtendWith
@@ -94,12 +97,29 @@ abstract class SimulationTestBase {
      *
      * Deliberately not time-based: the dispatcher implements no [kotlinx.coroutines.Delay], so there is
      * no virtual clock to advance, and a wall-clock wait would make a seeded run machine-dependent.
-     * `runTest`'s own timeout bounds this, so a simulation that never settles fails there.
+     * Inside [simulate], `runTest`'s own timeout bounds this, so a simulation that never settles fails there.
      *
      * MUST be called from a coroutine running on [dispatcher].
      */
     protected suspend fun awaitIdle() {
         while (dispatcher.hasRunnableJobs) yield()
+    }
+
+    /**
+     * Runs [block] on [dispatcher], returning once it completes or cancels itself, and rethrowing its failure.
+     *
+     * Not a child of the caller's job: `runTest` joins its children after its timeout cancels them, so a
+     * simulation stuck in a cancellation that never completes would hang the run instead of failing it.
+     * Detached, only the caller's join is cancelled, and the stuck coroutines are abandoned.
+     */
+    protected suspend fun simulate(block: suspend CoroutineScope.() -> Unit) {
+        val sim = CoroutineScope(dispatcher).async(block = block)
+        try {
+            sim.join()
+        } finally {
+            sim.cancel()
+        }
+        sim.getCompletionExceptionOrNull()?.takeUnless { it is CancellationException }?.let { throw it }
     }
 
     protected fun assertInterleaved() {
