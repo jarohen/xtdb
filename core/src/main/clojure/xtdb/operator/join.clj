@@ -182,12 +182,11 @@
         (let [build-col-name (nth build-key-col-names col-idx)
               build-col (.vectorForOrNull build-rel (str build-col-name))
               ^MutableRoaringBitmap pushdown-bloom (nth pushdown-blooms col-idx)
-              ^SortedSet col-pushdown-iids (nth pushdown-iids col-idx)
-              iid-col? (= "_iid" (name build-col-name))]
+              ^SortedSet col-pushdown-iids (nth pushdown-iids col-idx)]
           (dotimes [build-idx (.getRowCount build-rel)]
             (when (and col-pushdown-iids (not (.isNull build-col build-idx)))
               (let [v (.getObject build-col build-idx)]
-                (.add col-pushdown-iids (if iid-col? v (util/->iid v)))))
+                (.add col-pushdown-iids (if (bytes? v) v (util/->iid v)))))
             (.add pushdown-bloom ^ints (BloomUtils/bloomHashes build-col build-idx))))))))
 
 (defn- ->child-cursors [build-plan-side build-cursor probe-cursors]

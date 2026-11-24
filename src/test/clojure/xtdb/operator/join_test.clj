@@ -1507,3 +1507,15 @@
           (t/is (= 3 (:row-count scan-op))
                 (format "scan should only read 3 rows with IID pushdown for %s _id, not full table scan (got %d)"
                         (name id-type) (:row-count scan-op))))))))
+
+(t/deftest test-iid-join-on-non-iid-column
+  (util/with-open [node (xtn/start-node)]
+    (let [u #uuid "a0000000-0000-0000-0000-000000000001"]
+      (xt/execute-tx node [[:put-docs :foo {:xt/id u}]
+                           [:put-docs :bar {:xt/id 1, :u u, :s "x"}]])
+
+      (t/is (= [{:xt/id u}] (xt/q node "SELECT foo._id FROM foo JOIN bar ON foo._iid = bar.u")))
+      (t/is (= [{:xt/id u}] (xt/q node "SELECT foo._id FROM bar JOIN foo ON foo._iid = bar.u")))
+      (t/is (= [{:xt/id u}] (xt/q node "SELECT foo._id FROM foo WHERE foo._iid IN (SELECT u FROM bar)")))
+      (t/is (= [] (xt/q node "SELECT foo._id FROM foo JOIN bar ON foo._iid = bar.s")))
+      (t/is (= [] (xt/q node "SELECT foo._id FROM bar JOIN foo ON foo._iid = bar.s"))))))

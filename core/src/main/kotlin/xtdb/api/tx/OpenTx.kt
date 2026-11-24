@@ -524,6 +524,8 @@ class OpenTx
             val iidRdr = rel.vectorForOrNull("_iid")
 
             if (iidRdr != null) {
+                if ((0 until rowCount).any(iidRdr::isNull))
+                    throw Incorrect("missing _id", "xtdb.tx/missing-id", emptyMap<String, Any?>())
                 iidVec.append(iidRdr)
             } else {
                 val idRdr = rel["_id"]

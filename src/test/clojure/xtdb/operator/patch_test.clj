@@ -130,6 +130,23 @@
                 [{:xt/id 2, :a 6, :b 8} (time/->zdt #inst "2020-01-08") nil]]
                (q "SELECT *, _valid_from, _valid_to FROM bar FOR ALL VALID_TIME ORDER BY _id, _valid_from"))))))
 
+(t/deftest test-patch-sql-computed-id
+  (xt/execute-tx tu/*node* ["INSERT INTO foo RECORDS {_id: 2, a: 1}"])
+  (xt/execute-tx tu/*node* ["PATCH INTO foo RECORDS {_id: 1 + 1, b: 2}"])
+
+  (t/is (= [{:xt/id 2, :a 1, :b 2}]
+           (xt/q tu/*node* "SELECT * FROM foo"))))
+
+(t/deftest test-patch-sql-record-without-id-is-missing-id
+  (xt/execute-tx tu/*node* ["INSERT INTO foo RECORDS {_id: 2, a: 1}"])
+
+  (t/is (anomalous? [:incorrect :xtdb.tx/missing-id]
+                    (xt/execute-tx tu/*node* ["PATCH INTO foo RECORDS {_id: 1 + 1, b: 2}, {b: 3}"])))
+
+  (t/is (= [{:xt/id 2, :a 1}]
+           (xt/q tu/*node* "SELECT * FROM foo"))
+        "the transaction writes nothing"))
+
 (t/deftest patch-with-forbidden-columns-fails-4120
   (xt/submit-tx tu/*node* [[:sql "INSERT INTO docs RECORDS {_id: 1}"]])
 
