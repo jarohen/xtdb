@@ -59,6 +59,8 @@ class ScanCursor(
 
     private val bufferedRels: Queue<RelationReader> = LinkedList()
 
+    private val consumer = BitemporalConsumer(al, colNames)
+
     private fun bufferTask(task: MergeTask) {
         task.use {
             val iidPred = colPreds["_iid"]
@@ -74,26 +76,28 @@ class ScanCursor(
 
             val leafReaders = loadedPages.map { it.maybeSelect(iidPred, taskPath) }
 
-            val pointers = leafReaders.mapIndexedNotNull { idx, leafReader ->
-                EventRowPointer(leafReader, if (task.wholePages) null else taskPath).takeIf { it.isValid() }?.let { LeafPointer(it, idx) }
+            var base = 0
+            val pointers = task.sources.mapNotNull { src ->
+                val chain = src.indices.map { i ->
+                    EventRowPointer(leafReaders[base + i], if (task.wholePages) null else taskPath)
+                }
+                LeafPointer(chain, base).also { base += src.size }.takeIf { it.isValid() }
             }
 
-            BitemporalConsumer.open(al, leafReaders, colNames).use { bitemporalConsumer ->
-                val merge = EntityMerge(pointers)
+            consumer.reset(leafReaders)
+            val merge = EntityMerge(pointers)
 
-                while (merge.nextEntity())
-                    resolver.resolveEntity(merge, bitemporalConsumer)
+            while (merge.nextEntity())
+                resolver.resolveEntity(merge, consumer)
 
-                val colPreds = colPreds.entries
-                    .filterNot { it.key == "_iid" }
-                    .map { it.value }
+            val colPreds = colPreds.entries
+                .filterNot { it.key == "_iid" }
+                .map { it.value }
 
-                bitemporalConsumer.build()
-                    .map { childRel -> childRel.selectMatching(colPreds) }
-                    .filter { it.rowCount > 0 }
-                    .safeMap { it.openSlice(al) }
-                    .also { bufferedRels.addAll(it) }
-            }
+            consumer.build()
+                ?.selectMatching(colPreds)
+                ?.takeIf { it.rowCount > 0 }
+                ?.let { bufferedRels.add(it.openSlice(al)) }
         }
     }
 
@@ -116,6 +120,7 @@ class ScanCursor(
     }
 
     override fun close() {
+        consumer.close()
         (bufferedRels + ownedSegments + colPreds.values).closeAll()
         bufferedRels.clear()
     }
