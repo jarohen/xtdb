@@ -24,48 +24,51 @@ internal class LeafPointer(private val chain: List<EventRowPointer>, private val
 }
 
 /**
- * A binary min-heap of page pointers in [EventRowPointer.compare] order, so its top is the next event to serve.
- * A caller advances the top pointer in place, then calls [reseatTop].
+ * A loser (tournament) tree of page pointers in [EventRowPointer.compare] order: [top] is the next event to serve.
+ * A caller advances the top pointer in place, then calls [reseatTop], which replays only the winner's leaf-to-root path:
+ * one compare per level.
  *
- * Each pointer is one page's cursor, sitting on that page's next unserved event.
- * A page's rows are already in [EventRowPointer.compare] order, so the least of the pointers is the least unserved event across every page.
+ * `losers[1 until k]` hold the loser of the match at each internal node, `losers[0]` the overall winner;
+ * source `s` plays at leaf `k + s`, and node `i`'s parent is `i / 2`.
+ * An exhausted source loses every match, so it sinks without being removed.
  */
 internal class LeafHeap(pointers: List<LeafPointer>) {
-    // The array-backed binary heap (CLRS, ch. 6): `heap[0 until size]` is the tree, `heap[i]`'s children sit at `2i + 1` and `2i + 2`, and no pointer precedes its parent.
-    // A page that runs out is dropped: the last pointer takes its slot, and `size` shrinks by one.
-    private val heap = pointers.filter { it.isValid() }.toTypedArray()
-    private var size = heap.size
+    private val ptrs = pointers.filter { it.isValid() }.toTypedArray()
+    private val k = ptrs.size
+    private val losers = IntArray(maxOf(k, 1))
 
-    // Floyd's bottom-up heap construction: sift down every parent, deepest first.
     init {
-        for (i in size / 2 - 1 downTo 0) siftDown(i)
-    }
-
-    fun top(): LeafPointer? = if (size == 0) null else heap[0]
-
-    // Advancing a page's pointer only ever moves it later in the order, so sifting the root down restores the heap without a sift up.
-    fun reseatTop() {
-        if (!heap[0].settle()) heap[0] = heap[--size]
-        if (size > 0) siftDown(0)
-    }
-
-    // Carries `node` down as a hole, moving each preceding child up a level, and writes it once where neither child precedes it.
-    private fun siftDown(from: Int) {
-        val node = heap[from]
-        var i = from
-
-        while (true) {
-            var child = 2 * i + 1
-            if (child >= size) break
-            if (child + 1 < size && precedes(heap[child + 1], heap[child])) child++
-            if (!precedes(heap[child], node)) break
-
-            heap[i] = heap[child]
-            i = child
+        if (k > 0) {
+            val winners = IntArray(2 * k)
+            for (s in 0 until k) winners[k + s] = s
+            for (i in k - 1 downTo 1) {
+                val a = winners[2 * i]
+                val b = winners[2 * i + 1]
+                if (beats(a, b)) { winners[i] = a; losers[i] = b } else { winners[i] = b; losers[i] = a }
+            }
+            losers[0] = winners[1]
         }
-
-        heap[i] = node
     }
 
-    private fun precedes(l: LeafPointer, r: LeafPointer) = EventRowPointer.compare(l.evPtr, r.evPtr) < 0
+    fun top(): LeafPointer? = if (k == 0) null else ptrs[losers[0]].takeIf { it.isValid() }
+
+    fun reseatTop() {
+        var cand = losers[0]
+        ptrs[cand].settle()
+        var p = (cand + k) shr 1
+        while (p >= 1) {
+            val other = losers[p]
+            if (beats(other, cand)) { losers[p] = cand; cand = other }
+            p = p shr 1
+        }
+        losers[0] = cand
+    }
+
+    private fun beats(a: Int, b: Int): Boolean {
+        val l = ptrs[a].evPtr
+        val r = ptrs[b].evPtr
+        if (!l.isValid()) return false
+        if (!r.isValid()) return true
+        return EventRowPointer.compare(l, r) < 0
+    }
 }
