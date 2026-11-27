@@ -1,6 +1,27 @@
 package xtdb.trie
 
-internal class LeafPointer(val evPtr: EventRowPointer, val relIdx: Int)
+/**
+ * A cursor over a chain of pages whose rows are already, taken together, in [EventRowPointer.compare] order.
+ * [evPtr] is the pointer of the page it is on; [relIdx] is that page's index, consecutive along the chain.
+ */
+internal class LeafPointer(private val chain: List<EventRowPointer>, private val firstRelIdx: Int) {
+    constructor(evPtr: EventRowPointer, relIdx: Int) : this(listOf(evPtr), relIdx)
+
+    private var pos = 0
+    var evPtr: EventRowPointer = chain[0]
+        private set
+    val relIdx get() = firstRelIdx + pos
+
+    init { settle() }
+
+    /** Moves past exhausted pages; returns whether the chain still has a row. */
+    fun settle(): Boolean {
+        while (!evPtr.isValid() && pos + 1 < chain.size) evPtr = chain[++pos]
+        return evPtr.isValid()
+    }
+
+    fun isValid() = evPtr.isValid()
+}
 
 /**
  * A binary min-heap of page pointers in [EventRowPointer.compare] order, so its top is the next event to serve.
@@ -12,7 +33,7 @@ internal class LeafPointer(val evPtr: EventRowPointer, val relIdx: Int)
 internal class LeafHeap(pointers: List<LeafPointer>) {
     // The array-backed binary heap (CLRS, ch. 6): `heap[0 until size]` is the tree, `heap[i]`'s children sit at `2i + 1` and `2i + 2`, and no pointer precedes its parent.
     // A page that runs out is dropped: the last pointer takes its slot, and `size` shrinks by one.
-    private val heap = pointers.filter { it.evPtr.isValid() }.toTypedArray()
+    private val heap = pointers.filter { it.isValid() }.toTypedArray()
     private var size = heap.size
 
     // Floyd's bottom-up heap construction: sift down every parent, deepest first.
@@ -24,7 +45,7 @@ internal class LeafHeap(pointers: List<LeafPointer>) {
 
     // Advancing a page's pointer only ever moves it later in the order, so sifting the root down restores the heap without a sift up.
     fun reseatTop() {
-        if (!heap[0].evPtr.isValid()) heap[0] = heap[--size]
+        if (!heap[0].settle()) heap[0] = heap[--size]
         if (size > 0) siftDown(0)
     }
 

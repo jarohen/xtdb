@@ -13,6 +13,8 @@ import java.util.IdentityHashMap
 import java.util.function.Predicate
 
 object MergePlanner {
+    private val CHAIN = System.getenv("DART_NOCHAIN") == null
+
     private sealed interface SegmentNode<L> {
         val segMeta: Segment.Metadata<L>
 
@@ -26,10 +28,18 @@ object MergePlanner {
             val page get() = segMeta.page(node as L)
         }
 
+        fun hasRecencyUnder(): Boolean = hasRecency(when (this) { is Leaf -> node; is Branch -> node })
+
         fun leavesUnder(): List<Leaf<*>> = when (this) {
             is Leaf -> listOf(this)
             is Branch -> children.flatMap { c -> c.flatMap { it.leavesUnder() } }
         }
+    }
+
+    private fun <L> hasRecency(node: HashTrie.Node<L>): Boolean = when (node) {
+        is HashTrie.RecencyBranch -> true
+        is HashTrie.Leaf -> false
+        is HashTrie.IidBranch -> node.hashChildren.any { it != null && hasRecency(it) }
     }
 
     private fun <L> segNodes(segMeta: Segment.Metadata<L>, node: HashTrie.Node<L>): List<SegmentNode<L>> =
@@ -69,7 +79,7 @@ object MergePlanner {
                 else pathPred.test(part)
             }
             .safeMap { it.openMetadata() }.useAll { segMetas ->
-                val result = mutableListOf<Pair<List<Segment.Page<*>>, ByteArray>>()
+                val result = mutableListOf<Pair<List<List<Segment.Page<*>>>, ByteArray>>()
 
                 val initialSegNodes = segMetas.flatMap { it.toSegmentNodes() }
                 if (initialSegNodes.isEmpty()) return emptyList()
@@ -85,11 +95,17 @@ object MergePlanner {
 
                     val leaves = segNodes.filterIsInstance<SegmentNode.Leaf<*>>()
                     if (coarse && leaves.isNotEmpty()) {
-                        val allLeaves = segNodes.flatMap { it.leavesUnder() }
-                            .filter { pathPred == null || pathPred.test(it.node.path) }
-                        filterPages.filterPages(allLeaves.map { it.page })
-                            ?.takeIf { it.isNotEmpty() }
-                            ?.let { filteredPages -> result += filteredPages.map { it.page } to workTask.path }
+                        val chains = segNodes.groupBy { it.segMeta }.values.flatMap { nodes ->
+                            val leavesPerChain =
+                                if (CHAIN && nodes.size == 1 && !nodes.single().hasRecencyUnder()) listOf(nodes.single().leavesUnder())
+                                else nodes.flatMap { n -> n.leavesUnder().map { listOf(it) } }
+                            leavesPerChain.map { ls -> ls.filter { pathPred == null || pathPred.test(it.node.path) } }
+                        }
+                        val survivors = Collections.newSetFromMap(IdentityHashMap<PageMeta<*>, Boolean>())
+                        val metaChains = chains.map { c -> c.map { it.page } }
+                        filterPages.filterPages(metaChains.flatten())?.let { survivors.addAll(it) }
+                        val kept = metaChains.map { c -> c.filter { it in survivors }.map { it.page } }.filter { it.isNotEmpty() }
+                        if (kept.isNotEmpty()) result += kept to workTask.path
                     } else if (leaves.size < segNodes.size) {
                         val nodeChildren = segNodes.map { segNode ->
                             when (segNode) {
@@ -110,17 +126,17 @@ object MergePlanner {
                     } else {
                         filterPages.filterPages(leaves.map { it.page })
                             ?.takeIf { it.isNotEmpty() }
-                            ?.let { filteredPages -> result += filteredPages.map { it.page } to workTask.path }
+                            ?.let { filteredPages -> result += filteredPages.map { listOf(it.page) } to workTask.path }
                     }
                 }
 
                 val laterPages = Collections.newSetFromMap(IdentityHashMap<Segment.Page<*>, Boolean>())
 
                 if (System.getenv("PLAN_STATS") != null)
-                    System.err.println("PLAN_STATS coarse=$coarse tasks=${result.size} pageRefs=${result.sumOf { it.first.size }} distinctPages=${result.flatMap { it.first }.toSet().size} paths=${result.map { it.second.size }.groupingBy { it }.eachCount().toSortedMap()}")
+                    System.err.println("PLAN_STATS coarse=$coarse tasks=${result.size} pageRefs=${result.sumOf { it.first.sumOf { c -> c.size } }} distinctPages=${result.flatMap { it.first.flatten() }.toSet().size} sources=${result.sumOf { it.first.size }} paths=${result.map { it.second.size }.groupingBy { it }.eachCount().toSortedMap()}")
 
                 return result.asReversed()
-                    .map { (pages, path) -> MergeTask(pages, path, lastUsedPages = pages.filter { laterPages.add(it) }, wholePages = coarse) }
+                    .map { (sources, path) -> MergeTask(sources, path, lastUsedPages = sources.flatten().filter { laterPages.add(it) }, wholePages = coarse) }
                     .asReversed()
             }
     }
