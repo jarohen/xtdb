@@ -73,7 +73,7 @@ class ScanCursor(
             val leafReaders = loadedPages.map { it.maybeSelect(iidPred, taskPath) }
 
             val pointers = leafReaders.mapIndexedNotNull { idx, leafReader ->
-                EventRowPointer(leafReader, taskPath).takeIf { it.isValid() }?.let { LeafPointer(it, idx) }
+                EventRowPointer(leafReader, if (task.wholePages) null else taskPath).takeIf { it.isValid() }?.let { LeafPointer(it, idx) }
             }
 
             BitemporalConsumer.open(al, leafReaders, colNames).use { bitemporalConsumer ->
