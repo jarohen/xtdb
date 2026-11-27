@@ -61,52 +61,59 @@ class BitemporalConsumer(private val al: BufferAllocator, private val colNames: 
 
     private fun openOut(type: VectorType) = al.openVector(type).also { outVecs.add(it) }
 
-    /** The task's rows, page by page, as one relation owned by this consumer; null if there are none. */
-    fun build(): RelationReader? {
-        val pages = rels.indices.filter { pageRows[it].sel.size() > 0 }
-        val rowCount = pages.sumOf { pageRows[it].sel.size() }
-        if (rowCount == 0) return null
+    /**
+     * The task's rows as one relation owned by this consumer; null if none survive.
+     * [select] narrows each page's resolved rows (the column predicates) before they are copied together.
+     */
+    fun build(select: (RelationReader) -> RelationReader): RelationReader? {
+        val parts = ArrayList<RelationReader>()
 
-        val selArrays = pages.map { pageRows[it].sel.toArray() }
+        for (p in rels.indices) {
+            val rows = pageRows[p]
+            val n = rows.sel.size()
+            if (n == 0) continue
+            val sel = rows.sel.toArray()
+            val rel = rels[p]
 
-        // an erase-only leaf writes `put` as an empty struct (see #4577) — treat that as
-        // "no puts here" rather than merging its absent columns in.
-        val putReaders = pages.mapIndexed { i, p ->
-            rels[p]["op"].vectorForOrNull("put")
+            // an erase-only leaf writes `put` as an empty struct (see #4577) — treat that as
+            // "no puts here" rather than merging its absent columns in.
+            val putReader = rel["op"].vectorForOrNull("put")
                 ?.takeIf { putVec -> !putVec.keyNames.isNullOrEmpty() }
-                ?.select(selArrays[i])
-        }
+                ?.select(sel)
 
-        val cols = linkedMapOf<String, VectorReader>()
+            val cols = linkedMapOf<String, VectorReader>()
+            for (colName in contentColNames)
+                cols[colName] =
+                    if (colName == "_iid") rel["_iid"].select(sel)
+                    else putReader?.vectorForOrNull(colName) ?: NullVector(true, n)
 
-        for (colName in contentColNames) {
-            val srcs = pages.mapIndexed { i, p ->
-                if (colName == "_iid") rels[p]["_iid"].select(selArrays[i])
-                else putReaders[i]?.vectorForOrNull(colName) ?: NullVector(true, selArrays[i].size)
-            }
-            val out = openOut(mergeTypes(srcs.map { it.type }))
-            for (src in srcs) out.append(src)
-            cols[colName] = out
-        }
-
-        fun temporal(name: String, nullable: Boolean, get: (PageRows) -> LongArrayList) {
-            val out = openOut(maybe(VectorType.INSTANT, nullable))
-            for (p in pages) {
-                val vals = get(pageRows[p])
-                for (j in 0 until vals.size()) {
+            fun temporal(name: String, nullable: Boolean, vals: LongArrayList) {
+                val out = openOut(maybe(VectorType.INSTANT, nullable))
+                for (j in 0 until n) {
                     val v = vals[j]
                     if (nullable && v == MAX_LONG) out.writeNull() else out.writeLong(v)
                 }
+                cols[name] = out
             }
-            cols[name] = out
+
+            if (hasValidFrom) temporal("_valid_from", false, rows.validFrom)
+            if (hasValidTo) temporal("_valid_to", true, rows.validTo)
+            if (hasSystemFrom) temporal("_system_from", false, rows.systemFrom)
+            if (hasSystemTo) temporal("_system_to", true, rows.systemTo)
+
+            select(RelationReader.from(cols, n)).takeIf { it.rowCount > 0 }?.let { parts.add(it) }
         }
 
-        if (hasValidFrom) temporal("_valid_from", false) { it.validFrom }
-        if (hasValidTo) temporal("_valid_to", true) { it.validTo }
-        if (hasSystemFrom) temporal("_system_from", false) { it.systemFrom }
-        if (hasSystemTo) temporal("_system_to", true) { it.systemTo }
+        if (parts.isEmpty()) return null
 
-        return RelationReader.from(cols, rowCount)
+        val cols = linkedMapOf<String, VectorReader>()
+        for (colName in colNames) {
+            val out = openOut(mergeTypes(parts.map { it[colName].type }))
+            for (part in parts) out.append(part[colName])
+            cols[colName] = out
+        }
+
+        return RelationReader.from(cols, parts.sumOf { it.rowCount })
     }
 
     override fun close() {

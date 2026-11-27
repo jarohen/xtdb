@@ -76,6 +76,18 @@ class ScanCursor(
 
             val leafReaders = loadedPages.map { it.maybeSelect(iidPred, taskPath) }
 
+            if (PREFETCH) {
+                var acc = 0L
+                for (r in leafReaders) {
+                    val n = r.rowCount
+                    val iid = r["_iid"] as xtdb.arrow.LongLongVectorReader
+                    val sf = r["_system_from"]; val vf = r["_valid_from"]; val vt = r["_valid_to"]
+                    var i = 0
+                    while (i < n) { acc += iid.getLongLongHigh(i) + sf.getLong(i) + vf.getLong(i) + vt.getLong(i); i += 4 }
+                }
+                sink = acc
+            }
+
             var base = 0
             val pointers = task.sources.mapNotNull { src ->
                 val chain = src.indices.map { i ->
@@ -94,9 +106,7 @@ class ScanCursor(
                 .filterNot { it.key == "_iid" }
                 .map { it.value }
 
-            consumer.build()
-                ?.selectMatching(colPreds)
-                ?.takeIf { it.rowCount > 0 }
+            consumer.build { it.selectMatching(colPreds) }
                 ?.let { bufferedRels.add(it.openSlice(al)) }
         }
     }
@@ -123,5 +133,11 @@ class ScanCursor(
         consumer.close()
         (bufferedRels + ownedSegments + colPreds.values).closeAll()
         bufferedRels.clear()
+    }
+
+    private var sink = 0L
+
+    companion object {
+        private val PREFETCH = System.getenv("DART_PREFETCH") != null
     }
 }
