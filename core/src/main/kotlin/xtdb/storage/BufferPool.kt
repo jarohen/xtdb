@@ -47,6 +47,9 @@ interface BufferPool : AutoCloseable {
 
     suspend fun getRecordBatch(key: Path, idx: Int): ArrowRecordBatch
 
+    suspend fun getRecordBatch(key: Path, idx: Int, projection: xtdb.arrow.PageProjection): ArrowRecordBatch =
+        projection.filter(getRecordBatch(key, idx))
+
     /**
      * Stores an object in the buffer pool.
      *
@@ -152,6 +155,9 @@ class ReadOnlyBufferPool(private val delegate: BufferPool) : BufferPool {
     override suspend fun getFooter(key: Path): ArrowFooter = delegate.getFooter(key)
 
     override suspend fun getRecordBatch(key: Path, idx: Int): ArrowRecordBatch = delegate.getRecordBatch(key, idx)
+
+    override suspend fun getRecordBatch(key: Path, idx: Int, projection: xtdb.arrow.PageProjection): ArrowRecordBatch =
+        delegate.getRecordBatch(key, idx, projection)
 
     override suspend fun putObject(key: Path, buffer: ByteBuffer) {
         throw Fault("Attempted write to read-only storage: $key")

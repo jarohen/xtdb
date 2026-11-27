@@ -35,6 +35,9 @@ interface Segment<L> : AutoCloseable {
 
         suspend fun loadDataPage(al: BufferAllocator): RelationReader
 
+        /** Loads only the doc columns in [cols] (plus system columns) where the page can; callers mustn't read others. */
+        suspend fun loadDataPage(al: BufferAllocator, cols: Set<String>): RelationReader = loadDataPage(al)
+
         /**
          * Called once the last [MergeTask] that includes this page has finished with it;
          * the relation [loadDataPage] returned mustn't be used afterwards.

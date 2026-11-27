@@ -29,6 +29,7 @@ object ArrowUtil {
         metadataLength: Int,
         bodyLength: Long,
         errorString: String? = null,
+        projection: PageProjection? = null,
     ): ArrowRecordBatch {
         val prefixSize = if (getInt(offset) == IPC_CONTINUATION_TOKEN) 8L else 4L
 
@@ -40,10 +41,8 @@ object ArrowUtil {
             val msg = Message.getRootAsMessage(metadataBuf.asReadOnlyBuffer())
             val recordBatchFB = RecordBatch().also { msg.header(it) }
 
-            return deserializeRecordBatch(
-                recordBatchFB,
-                bodyBuf ?: error(errorString ?: "Failed to deserialize record batch at offset $offset")
-            )
+            val body = bodyBuf ?: error(errorString ?: "Failed to deserialize record batch at offset $offset")
+            return projection?.deserialize(recordBatchFB, body) ?: deserializeRecordBatch(recordBatchFB, body)
 
         } catch (t: Throwable) {
             bodyBuf.referenceManager.release()

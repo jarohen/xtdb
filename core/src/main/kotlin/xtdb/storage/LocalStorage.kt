@@ -70,7 +70,13 @@ internal class LocalStorage(
             completedFuture(path.openReadableChannel().readArrowFooter())
         }.asDeferred().await()
 
-    override suspend fun getRecordBatch(key: Path, idx: Int): ArrowRecordBatch {
+    override suspend fun getRecordBatch(key: Path, idx: Int): ArrowRecordBatch = getRecordBatch0(key, idx, null)
+
+    override suspend fun getRecordBatch(key: Path, idx: Int, projection: xtdb.arrow.PageProjection): ArrowRecordBatch =
+        if (System.getProperty("xtdb.spike.postfilter") != null) projection.filter(getRecordBatch0(key, idx, null))
+        else getRecordBatch0(key, idx, projection)
+
+    private suspend fun getRecordBatch0(key: Path, idx: Int, projection: xtdb.arrow.PageProjection?): ArrowRecordBatch {
         recordBatchRequests?.increment()
         val path = rootPath.resolve(key).orThrowIfMissing(key)
 
@@ -92,7 +98,8 @@ internal class LocalStorage(
                 0,
                 arrowBlock.metadataLength,
                 arrowBlock.bodyLength,
-                "Failed opening record batch '$path' at block-idx $idx"
+                "Failed opening record batch '$path' at block-idx $idx",
+                projection
             )
         }
     }
