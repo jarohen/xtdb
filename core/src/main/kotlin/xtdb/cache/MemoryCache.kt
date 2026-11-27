@@ -35,6 +35,7 @@ object DartStats {
     val actorNanos = java.util.concurrent.atomic.AtomicLong()
     val unmaps = java.util.concurrent.atomic.AtomicLong()
     val unmapBytes = java.util.concurrent.atomic.AtomicLong()
+    val callerServed = java.util.concurrent.atomic.AtomicLong()
     val maps = java.util.concurrent.atomic.AtomicLong()
     val serveMapped = java.util.concurrent.atomic.AtomicLong()
     @Volatile var info = ""
@@ -43,7 +44,7 @@ object DartStats {
             var last = ""
             while (true) {
                 Thread.sleep(1000)
-                val cur = "fast=${fastHits.get()} actor=${actorGets.get()} actorMs=${actorNanos.get() / 1_000_000} maps=${maps.get()} unmaps=${unmaps.get()} unmapMB=${unmapBytes.get() shr 20} servedMapped=${serveMapped.get()} $info"
+                val cur = "caller=${callerServed.get()} fast=${fastHits.get()} actor=${actorGets.get()} actorMs=${actorNanos.get() / 1_000_000} maps=${maps.get()} unmaps=${unmaps.get()} unmapMB=${unmapBytes.get() shr 20} servedMapped=${serveMapped.get()} $info"
                 if (cur != last) System.err.println("DARTSTATS $cur")
                 last = cur
             }
@@ -113,7 +114,18 @@ class MemoryCache @JvmOverloads internal constructor(
     private class MappedFile(val path: Path, val arena: Arena, val segment: MemorySegment, val onEvict: AutoCloseable?) {
         // incremented only on the fetch actor, decremented by `release0` on any thread:
         // so the actor, reading zero, knows no slice can come back to life, and may unmap.
+        // -1 once closed: the actor CASes 0 -> -1 before unmapping, and a caller-thread acquire fails on a negative count.
         val liveSlices = AtomicInteger()
+
+        fun tryAcquire(): Boolean {
+            while (true) {
+                val v = liveSlices.get()
+                if (v < 0) return false
+                if (liveSlices.compareAndSet(v, v + 1)) return true
+            }
+        }
+
+        fun tryClose() = liveSlices.compareAndSet(0, -1)
 
         val isIdle get() = liveSlices.get() == 0
 
@@ -133,7 +145,16 @@ class MemoryCache @JvmOverloads internal constructor(
     // owned by the fetch actor, and by close() once the actor is joined; iterates least-recently-used first
     private val mappedFiles = LinkedHashMap<Path, MappedFile>(16, 0.75f, true)
 
-    private fun wrapSlice(file: MappedFile, pathSlice: PathSlice): ArrowBuf {
+    // read-only mirror of mappedFiles for the caller-thread fast path; written only by the actor
+    private val mappedView = ConcurrentHashMap<Path, MappedFile>()
+
+    private fun wrapSlice(file: MappedFile, pathSlice: PathSlice, register: Boolean = true): ArrowBuf {
+        check(file.tryAcquire()) { "acquire on closed file" }
+        return wrapAcquired(file, pathSlice, register)
+    }
+
+    private fun wrapAcquired(file: MappedFile, pathSlice: PathSlice, register: Boolean): ArrowBuf {
+      try {
         val fileSize = file.segment.byteSize()
         val slice = pathSlice.slice ?: Slice(0, fileSize)
         if (slice.offset < 0 || slice.length < 0 || slice.offset > fileSize || slice.length > fileSize - slice.offset)
@@ -156,13 +177,16 @@ class MemoryCache @JvmOverloads internal constructor(
             }
         }
 
-        file.liveSlices.incrementAndGet()
         return try {
             cacheAl.wrapForeignAllocation(allocation)
         } catch (t: Throwable) {
             allocation.release0()
             throw t
         }
+      } catch (t: Throwable) {
+        if (t is Fault) file.liveSlices.decrementAndGet()
+        throw t
+      }
     }
 
     private suspend fun serve(file: MappedFile, pathSlice: PathSlice, reqs: List<CompletableDeferred<ArrowBuf>>) {
@@ -195,6 +219,8 @@ class MemoryCache @JvmOverloads internal constructor(
 
         for (file in idleFiles) {
             if (idleBytes <= byteBudget && idleCount <= MAX_IDLE_FILES) break
+            if (!file.tryClose()) { idleBytes -= file.segment.byteSize(); idleCount--; continue }
+            mappedView.remove(file.path)
             LOGGER.trace("evicting idle file ${file.path}")
             System.err.println("DARTEVICT idleBytesMB=${idleBytes shr 20} budgetMB=${byteBudget shr 20} alloc=${cacheAl.allocatedMemory shr 20} idleCount=$idleCount mapped=${mappedFiles.size} mappedMB=${mappedFiles.values.sumOf { it.segment.byteSize() } shr 20} file=${file.path.fileName} sizeMB=${file.segment.byteSize() shr 20}")
             DartStats.unmaps.incrementAndGet(); DartStats.unmapBytes.addAndGet(file.segment.byteSize())
@@ -308,6 +334,7 @@ class MemoryCache @JvmOverloads internal constructor(
 
                 DartStats.maps.incrementAndGet()
                 mappedFiles[path] = file
+                mappedView[path] = file
 
                 awaiters.groupBy({ it.pathSlice }, { it.res })
                     .forEach { (pathSlice, reqs) -> serve(file, pathSlice, reqs) }
@@ -385,6 +412,13 @@ class MemoryCache @JvmOverloads internal constructor(
             return it
         }
 
+        mappedView[key]?.let { file ->
+            if (file.tryAcquire()) {
+                DartStats.callerServed.incrementAndGet()
+                return wrapAcquired(file, pathSlice, false)
+            }
+        }
+
         yieldIfSimulation() // interleave between cache check and fetch request
 
         val res = CompletableDeferred<ArrowBuf>()
@@ -408,8 +442,9 @@ class MemoryCache @JvmOverloads internal constructor(
         fetchCh.close()
         runBlocking { fetchParentJob.cancelAndJoin() }
 
+        mappedView.clear()
         for (file in mappedFiles.values) {
-            if (file.isIdle) file.unmap() else LOGGER.warn("closing with live slices over ${file.path}")
+            if (file.tryClose()) file.unmap() else LOGGER.warn("closing with live slices over ${file.path}")
         }
         mappedFiles.clear()
 
