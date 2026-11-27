@@ -25,6 +25,11 @@ object MergePlanner {
             @Suppress("UNCHECKED_CAST")
             val page get() = segMeta.page(node as L)
         }
+
+        fun leavesUnder(): List<Leaf<*>> = when (this) {
+            is Leaf -> listOf(this)
+            is Branch -> children.flatMap { c -> c.flatMap { it.leavesUnder() } }
+        }
     }
 
     private fun <L> segNodes(segMeta: Segment.Metadata<L>, node: HashTrie.Node<L>): List<SegmentNode<L>> =
@@ -47,13 +52,15 @@ object MergePlanner {
     fun planSync(
         segments: List<Segment<*>>,
         pathPred: Predicate<ByteArray>?,
-        filterPages: PagesFilter = PagesFilter { it }
-    ) = runBlocking { plan(segments, pathPred, filterPages) }
+        filterPages: PagesFilter = PagesFilter { it },
+        coarse: Boolean = false
+    ) = runBlocking { plan(segments, pathPred, filterPages, coarse) }
 
     suspend fun plan(
         segments: List<Segment<*>>,
         pathPred: Predicate<ByteArray>?,
-        filterPages: PagesFilter = PagesFilter { it }
+        filterPages: PagesFilter = PagesFilter { it },
+        coarse: Boolean = false
     ): List<MergeTask> {
         segments
             .filter {
@@ -77,7 +84,13 @@ object MergePlanner {
                     if (pathPred != null && !pathPred.test(workTask.path)) continue
 
                     val leaves = segNodes.filterIsInstance<SegmentNode.Leaf<*>>()
-                    if (leaves.size < segNodes.size) {
+                    if (coarse && leaves.isNotEmpty()) {
+                        val allLeaves = segNodes.flatMap { it.leavesUnder() }
+                            .filter { pathPred == null || pathPred.test(it.node.path) }
+                        filterPages.filterPages(allLeaves.map { it.page })
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { filteredPages -> result += filteredPages.map { it.page } to workTask.path }
+                    } else if (leaves.size < segNodes.size) {
                         val nodeChildren = segNodes.map { segNode ->
                             when (segNode) {
                                 is SegmentNode.Branch -> segNode.children
@@ -103,8 +116,11 @@ object MergePlanner {
 
                 val laterPages = Collections.newSetFromMap(IdentityHashMap<Segment.Page<*>, Boolean>())
 
+                if (System.getenv("PLAN_STATS") != null)
+                    System.err.println("PLAN_STATS coarse=$coarse tasks=${result.size} pageRefs=${result.sumOf { it.first.size }} distinctPages=${result.flatMap { it.first }.toSet().size} paths=${result.map { it.second.size }.groupingBy { it }.eachCount().toSortedMap()}")
+
                 return result.asReversed()
-                    .map { (pages, path) -> MergeTask(pages, path, lastUsedPages = pages.filter { laterPages.add(it) }) }
+                    .map { (pages, path) -> MergeTask(pages, path, lastUsedPages = pages.filter { laterPages.add(it) }, wholePages = coarse) }
                     .asReversed()
             }
     }

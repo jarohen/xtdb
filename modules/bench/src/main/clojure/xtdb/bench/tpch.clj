@@ -25,7 +25,7 @@
     (cond-> {:t :call, :stage stage-name, :summary-key summary-key
              :f (fn [{:keys [node]}]
                   (try
-                    (run-query node)
+                    (doto (run-query node) (-> pr-str (->> (println "Q6RESULT"))))
                     (catch Exception e
                       (.printStackTrace e)
                       (throw e))))}

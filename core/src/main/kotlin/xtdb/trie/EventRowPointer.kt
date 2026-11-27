@@ -6,7 +6,7 @@ import xtdb.arrow.LongLongVectorReader
 import xtdb.arrow.RelationReader
 import java.lang.Long.compareUnsigned
 
-class EventRowPointer(private val relReader: RelationReader, path: ByteArray) {
+class EventRowPointer(private val relReader: RelationReader, path: ByteArray?) {
     private val iidReader = relReader["_iid"] as LongLongVectorReader
 
     private val sysFromReader = relReader["_system_from"]
@@ -57,10 +57,10 @@ class EventRowPointer(private val relReader: RelationReader, path: ByteArray) {
 
     init {
         // done separately s.t. the setter is called
-        index = indexOf(path)
+        index = if (path == null) 0 else indexOf(path)
     }
 
-    val maxIndex: Int = Bucketer.DEFAULT.incrementPath(path)?.let { indexOf(it) } ?: relReader.rowCount
+    val maxIndex: Int = path?.let { Bucketer.DEFAULT.incrementPath(it)?.let { p -> indexOf(p) } } ?: relReader.rowCount
 
     fun nextIndex() = ++index
 
