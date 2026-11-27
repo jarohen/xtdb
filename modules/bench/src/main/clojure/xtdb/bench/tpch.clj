@@ -25,7 +25,7 @@
     (cond-> {:t :call, :stage stage-name, :summary-key summary-key
              :f (fn [{:keys [node]}]
                   (try
-                    (run-query node)
+                    (let [r (run-query node)] (when (= 5 i) (binding [*out* *err*] (println "DARTRESULT" (pr-str r)))) r)
                     (catch Exception e
                       (.printStackTrace e)
                       (throw e))))}
