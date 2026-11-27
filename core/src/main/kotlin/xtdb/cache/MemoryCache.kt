@@ -29,29 +29,6 @@ private typealias FetchReqs = MutableMap<Path, MutableList<Awaiter>>
 
 private val LOGGER = MemoryCache::class.logger
 
-object DartStats {
-    val fastHits = java.util.concurrent.atomic.AtomicLong()
-    val actorGets = java.util.concurrent.atomic.AtomicLong()
-    val actorNanos = java.util.concurrent.atomic.AtomicLong()
-    val unmaps = java.util.concurrent.atomic.AtomicLong()
-    val unmapBytes = java.util.concurrent.atomic.AtomicLong()
-    val callerServed = java.util.concurrent.atomic.AtomicLong()
-    val maps = java.util.concurrent.atomic.AtomicLong()
-    val serveMapped = java.util.concurrent.atomic.AtomicLong()
-    @Volatile var info = ""
-    init {
-        Thread {
-            var last = ""
-            while (true) {
-                Thread.sleep(1000)
-                val cur = "caller=${callerServed.get()} fast=${fastHits.get()} actor=${actorGets.get()} actorMs=${actorNanos.get() / 1_000_000} maps=${maps.get()} unmaps=${unmaps.get()} unmapMB=${unmapBytes.get() shr 20} servedMapped=${serveMapped.get()} $info"
-                if (cur != last) System.err.println("DARTSTATS $cur")
-                last = cur
-            }
-        }.also { it.isDaemon = true }.start()
-    }
-}
-
 // each mapped file is a VMA, and vm.max_map_count defaults to 65530
 internal const val MAX_IDLE_FILES = 4096
 
@@ -212,7 +189,6 @@ class MemoryCache @JvmOverloads internal constructor(
 
     private fun evictIdleFiles() {
         val idleFiles = mappedFiles.values.filter { it.isIdle }
-        DartStats.info = "mapped=${mappedFiles.size} idle=${idleFiles.size} idleMB=${idleFiles.sumOf { it.segment.byteSize() } shr 20} alloc=${cacheAl.allocatedMemory shr 20}MB limit=${cacheAl.limit shr 20}MB"
         var idleBytes = idleFiles.sumOf { it.segment.byteSize() }
         var idleCount = idleFiles.size
         val byteBudget = cacheAl.limit - cacheAl.allocatedMemory
@@ -222,8 +198,6 @@ class MemoryCache @JvmOverloads internal constructor(
             if (!file.tryClose()) { idleBytes -= file.segment.byteSize(); idleCount--; continue }
             mappedView.remove(file.path)
             LOGGER.trace("evicting idle file ${file.path}")
-            System.err.println("DARTEVICT idleBytesMB=${idleBytes shr 20} budgetMB=${byteBudget shr 20} alloc=${cacheAl.allocatedMemory shr 20} idleCount=$idleCount mapped=${mappedFiles.size} mappedMB=${mappedFiles.values.sumOf { it.segment.byteSize() } shr 20} file=${file.path.fileName} sizeMB=${file.segment.byteSize() shr 20}")
-            DartStats.unmaps.incrementAndGet(); DartStats.unmapBytes.addAndGet(file.segment.byteSize())
             mappedFiles.remove(file.path)
             idleBytes -= file.segment.byteSize()
             idleCount--
@@ -267,7 +241,6 @@ class MemoryCache @JvmOverloads internal constructor(
 
             val file = mappedFiles[path]
             if (file != null) {
-                DartStats.serveMapped.incrementAndGet()
                 LOGGER.trace("FetchReq: $path already mapped - serving $pathSlice")
                 serve(file, pathSlice, listOf(res))
                 evictIdleFiles()
@@ -332,7 +305,6 @@ class MemoryCache @JvmOverloads internal constructor(
                     throw t
                 }
 
-                DartStats.maps.incrementAndGet()
                 mappedFiles[path] = file
                 mappedView[path] = file
 
@@ -408,13 +380,12 @@ class MemoryCache @JvmOverloads internal constructor(
         val pathSlice = PathSlice(key, slice)
 
         getOpenSlice(pathSlice)?.let {
-            DartStats.fastHits.incrementAndGet()
+            LOGGER.trace("get: Fast path cache hit for $pathSlice")
             return it
         }
 
         mappedView[key]?.let { file ->
             if (file.tryAcquire()) {
-                DartStats.callerServed.incrementAndGet()
                 return wrapAcquired(file, pathSlice, false)
             }
         }
@@ -422,11 +393,10 @@ class MemoryCache @JvmOverloads internal constructor(
         yieldIfSimulation() // interleave between cache check and fetch request
 
         val res = CompletableDeferred<ArrowBuf>()
-        val t0 = System.nanoTime()
 
         return try {
             fetchCh.send(FetchReq(pathSlice, fetch, res))
-            res.await().also { DartStats.actorGets.incrementAndGet(); DartStats.actorNanos.addAndGet(System.nanoTime() - t0) }
+            res.await()
         } catch (e: Throwable) {
             res.cancel()
             if (res.isCompleted && !res.isCancelled) {
@@ -460,7 +430,7 @@ class MemoryCache @JvmOverloads internal constructor(
         fun maxSizeRatio(maxSizeRatio: Double) = apply { this.maxSizeRatio = maxSizeRatio }
 
         fun open(al: BufferAllocator, meterRegistry: MeterRegistry? = null): MemoryCache {
-            val maxSizeBytes = System.getenv("DART_CACHE_MB")?.toLong()?.times(1048576) ?: maxSizeBytes ?: (maxDirectMemory * maxSizeRatio).toLong()
+            val maxSizeBytes = maxSizeBytes ?: (maxDirectMemory * maxSizeRatio).toLong()
             return MemoryCache(al, maxSizeBytes)
                 .also { meterRegistry?.registerMemoryCache(it) }
         }
