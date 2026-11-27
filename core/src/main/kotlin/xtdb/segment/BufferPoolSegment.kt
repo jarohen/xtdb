@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.ipc.message.ArrowFooter
 import org.apache.arrow.vector.types.pojo.Schema
+import xtdb.arrow.PageProjection
 import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
 import xtdb.metadata.MetadataPredicate
@@ -47,11 +48,28 @@ class BufferPoolSegment private constructor(
                 rel
             }.also { rel = it }
 
+        override suspend fun loadDataPage(al: BufferAllocator, cols: Set<String>): RelationReader =
+            rel ?: projectionFor(cols).let { proj ->
+                Relation(this@BufferPoolSegment.al, proj.schema).closeOnCatch { rel ->
+                    bp.getRecordBatch(dataFilePath, dataPageIndex, proj).use { rb -> rel.load(rb) }
+                    rel
+                }
+            }.also { rel = it }
+
         override fun close() {
             rel?.close()
             rel = null
         }
     }
+
+    @Volatile
+    private var projection: Pair<Set<String>, PageProjection>? = null
+
+    private fun projectionFor(cols: Set<String>): PageProjection =
+        projection?.takeIf { it.first == cols }?.second
+            ?: PageProjection(schema) { path ->
+                !(path.size == 3 && path[0] == "op" && path[1] == "put") || path[2] in cols
+            }.also { projection = cols to it }
 
     private val dataPages = List(footer.recordBatches.size) { DataPage(it) }
 

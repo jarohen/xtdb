@@ -55,6 +55,8 @@ class ScanCursor(
         return if (mask.cardinality == rowCount) this else select(mask)
     }
 
+    private val loadCols: Set<ColumnName> = (colNames + colPreds.keys).toSet()
+
     private val bufferedRels: Queue<RelationReader> = LinkedList()
 
     private fun bufferTask(task: MergeTask) {
@@ -64,7 +66,7 @@ class ScanCursor(
             val resolver = openResolver()
 
             // we're not in coroutine land here, so it's a good boundary for runBlocking
-            val loadedPages = runBlocking { task.pages.map { async { it.loadDataPage(al) } }.awaitAll() }
+            val loadedPages = runBlocking { task.pages.map { async { it.loadDataPage(al, loadCols) } }.awaitAll() }
 
             // rows physically read off the pages we loaded — the scan's throughput denominator,
             // before iid-selection and bitemporal resolution whittle them down to the emitted rows
