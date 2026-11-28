@@ -160,6 +160,7 @@ class BitBufferTest {
         val loadedBuf = al.buffer(1)
         val fillingAl = mockk<BufferAllocator> {
             every { buffer(any()) } returns heldBuf andThen loadedBuf andThenThrows OutOfMemoryError("Java heap space")
+            every { empty } returns al.empty
         }
 
         BitBuffer(fillingAl, 8).use { buf ->
@@ -167,6 +168,24 @@ class BitBufferTest {
 
             heldBuf.refCnt() shouldBe 0
             buf.buf.refCnt() shouldBe 1
+        }
+    }
+
+    @Test
+    fun `a closed buffer releases its memory and can be loaded again`(al: BufferAllocator) {
+        BitBuffer(al).use { buf ->
+            listOf(true, false, true).forEach { buf.writeBoolean(it) }
+            buf.close()
+
+            al.allocatedMemory shouldBe 0
+            buf.writerBitIndex shouldBe 0
+
+            BitBuffer(al).use { src ->
+                listOf(false, true).forEach { src.writeBoolean(it) }
+                buf.loadBuffer(mutableListOf<ArrowBuf>().also { src.unloadBuffer(it) }.single(), 2)
+            }
+
+            buf.asBooleans shouldBe booleanArrayOf(false, true)
         }
     }
 }

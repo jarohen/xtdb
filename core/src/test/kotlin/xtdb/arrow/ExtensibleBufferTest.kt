@@ -31,6 +31,24 @@ class ExtensibleBufferTest {
     }
 
     @Test
+    fun `a closed buffer releases its memory and can be loaded again`(al: BufferAllocator) {
+        ExtensibleBuffer(al).use { buf ->
+            buf.writeInt(42)
+            buf.close()
+
+            al.allocatedMemory shouldBe 0
+            buf.writerIndex shouldBe 0
+
+            ExtensibleBuffer(al).use { src ->
+                src.writeInt(43)
+                buf.loadBuffer(mutableListOf<ArrowBuf>().also { src.unloadBuffer(it) }.single())
+            }
+
+            buf.getInt(0) shouldBe 43
+        }
+    }
+
+    @Test
     fun `writing a ByteBuffer appends its remaining bytes and leaves its position alone`(al: BufferAllocator) {
         val bytes = ByteArray(300) { it.toByte() }
 

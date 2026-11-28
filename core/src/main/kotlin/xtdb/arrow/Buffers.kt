@@ -232,6 +232,7 @@ internal class ExtensibleBuffer private constructor(
 
     override fun close() {
         buf.close()
+        buf = allocator.empty
     }
 
     fun hashCode(hasher: ArrowBufHasher, start: Long, len: Long) = hasher.hashCode(buf, start, len)

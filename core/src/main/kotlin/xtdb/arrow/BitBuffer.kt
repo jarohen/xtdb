@@ -259,5 +259,7 @@ internal class BitBuffer private constructor(
 
     override fun close() {
         buf.close()
+        buf = allocator.empty
+        writerBitIndex = 0
     }
 }
