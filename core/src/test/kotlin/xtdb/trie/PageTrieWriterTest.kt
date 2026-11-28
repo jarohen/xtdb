@@ -239,13 +239,13 @@ internal class PageTrieWriterTest {
                             return Shape.Page(rows, (iids as? RunEndEncodedVector)?.runCount)
                         }
 
-                        fun walk(node: HashTrie.Node<ArrowHashTrie.Leaf>?): Shape? =
+                        fun walk(node: ArrowHashTrie.Node?): Shape? =
                             when (node) {
                                 null -> null
-                                is HashTrie.IidBranch -> Shape.Iid(node.hashChildren.map { walk(it) })
-                                is HashTrie.RecencyBranch -> Shape.Recency(node.buckets.map { it.maxRecency to walk(it.node)!! })
-                                is HashTrie.Leaf -> {
-                                    dataLoader.loadPage((node as ArrowHashTrie.Leaf).dataPageIndex, dataRel)
+                                is ArrowHashTrie.IidBranch -> Shape.Iid(node.children.map { walk(it) })
+                                is ArrowHashTrie.RecencyBranch -> Shape.Recency(node.buckets.map { it.maxRecency to walk(it.node)!! })
+                                is ArrowHashTrie.Leaf -> {
+                                    dataLoader.loadPage(node.dataPageIndex, dataRel)
                                     page()
                                 }
                             }

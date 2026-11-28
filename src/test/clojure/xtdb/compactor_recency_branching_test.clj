@@ -12,7 +12,7 @@
            (xtdb.arrow Relation Relation$Loader RunEndEncodedVector)
            (xtdb.metadata PageMetadata)
            (xtdb.storage LocalStorage)
-           (xtdb.trie ArrowHashTrie ArrowHashTrie$IidBranch ArrowHashTrie$Leaf ArrowHashTrie$RecencyBranch HashTrie$RecencyBranch$Bucket)))
+           (xtdb.trie ArrowHashTrie ArrowHashTrie$IidBranch ArrowHashTrie$Leaf ArrowHashTrie$RecencyBranch ArrowHashTrie$RecencyBranch$Bucket)))
 
 (defn- table-path ^Path [node table-name]
   (let [db (db/primary-db node)]
@@ -47,8 +47,8 @@
             (cond
               (nil? node) []
               (instance? ArrowHashTrie$Leaf node) [[(.getDataPageIndex ^ArrowHashTrie$Leaf node) bound]]
-              (instance? ArrowHashTrie$IidBranch node) (mapcat #(walk % bound) (.getHashChildren ^ArrowHashTrie$IidBranch node))
-              (instance? ArrowHashTrie$RecencyBranch node) (mapcat (fn [^HashTrie$RecencyBranch$Bucket bucket]
+              (instance? ArrowHashTrie$IidBranch node) (mapcat #(walk % bound) (.getChildren ^ArrowHashTrie$IidBranch node))
+              (instance? ArrowHashTrie$RecencyBranch node) (mapcat (fn [^ArrowHashTrie$RecencyBranch$Bucket bucket]
                                                                      (walk (.getNode bucket) (min bound (.getMaxRecency bucket))))
                                                                    (.getBuckets ^ArrowHashTrie$RecencyBranch node))))]
     (walk (.getRootNode trie) Long/MAX_VALUE)))

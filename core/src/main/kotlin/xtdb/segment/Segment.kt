@@ -56,7 +56,7 @@ interface Segment<L> : AutoCloseable {
 
     interface PageMeta<L> {
         /**
-         * The same page for the same leaf, for the lifetime of the segment —
+         * The same page for the same leaf, while its [Metadata] is open —
          * the merge planner closes a page after the last task that includes it.
          */
         val page: Page<L>

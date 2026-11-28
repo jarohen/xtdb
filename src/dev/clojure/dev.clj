@@ -23,7 +23,7 @@
            (xtdb.block.proto TableBlock)
            (xtdb.log.proto TrieDetails)
            (xtdb.table TableSlug)
-           (xtdb.trie ArrowHashTrie ArrowHashTrie$IidBranch ArrowHashTrie$Leaf ArrowHashTrie$Node ArrowHashTrie$RecencyBranch HashTrie$RecencyBranch$Bucket)
+           (xtdb.trie ArrowHashTrie ArrowHashTrie$IidBranch ArrowHashTrie$Leaf ArrowHashTrie$Node ArrowHashTrie$RecencyBranch ArrowHashTrie$RecencyBranch$Bucket)
            [xtdb.api.log SourceMessage]))
 
 #_{:clj-kondo/ignore [:unused-namespace :unused-referred-var]}
@@ -158,9 +158,9 @@
     (letfn [(render-trie [^ArrowHashTrie$Node node]
               (cond
                 (instance? ArrowHashTrie$Leaf node) (.getDataPageIndex ^ArrowHashTrie$Leaf node)
-                (instance? ArrowHashTrie$IidBranch node) (mapv render-trie (.getHashChildren ^ArrowHashTrie$IidBranch node))
+                (instance? ArrowHashTrie$IidBranch node) (mapv render-trie (.getChildren ^ArrowHashTrie$IidBranch node))
                 (instance? ArrowHashTrie$RecencyBranch node) (into (sorted-map)
-                                                                  (map (fn [^HashTrie$RecencyBranch$Bucket bucket]
+                                                                  (map (fn [^ArrowHashTrie$RecencyBranch$Bucket bucket]
                                                                          [(.getMaxRecency bucket) (render-trie (.getNode bucket))]))
                                                                   (.getBuckets ^ArrowHashTrie$RecencyBranch node))
                 :else node))]

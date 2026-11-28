@@ -111,4 +111,25 @@ class MergePlannerTest {
                 )
             )
     }
+
+    @Test
+    fun `a segment rooted below the root merges only under the path it is rooted at`() = runTest {
+        val t1 = seg("t1", b(l(0), null, null, null))
+        val cell = TestSegment("cell", TestTrie(b(l(0), l(1), null, null).build(listOf(1))))
+        val entity = TestSegment("entity", TestTrie(l(0).build(listOf(1, 1))))
+        val log = seg("log", l(0))
+
+        MergePlanner.plan(listOf(t1, cell, entity, log), null).render()
+            .shouldBe(
+                listOf(
+                    path(0).pages("t1" page 0, "log" page 0),
+                    path(1, 0).pages("cell" page 0, "log" page 0),
+                    path(1, 1).pages("cell" page 1, "entity" page 0, "log" page 0),
+                    path(1, 2).pages("log" page 0),
+                    path(1, 3).pages("log" page 0),
+                    path(2).pages("log" page 0),
+                    path(3).pages("log" page 0),
+                )
+            )
+    }
 }

@@ -275,7 +275,7 @@ internal class SegmentMerge(
  */
 
 private class LocalSegment(
-    private val al: BufferAllocator, slug: TableSlug, dir: Path, trieKey: TrieKey,
+    private val al: BufferAllocator, slug: TableSlug, dir: Path, trieKey: TrieKey, private val iidRoot: ArrowHashTrie.IidRoot,
 ) : Segment<ArrowHashTrie.Leaf>, AutoCloseable {
 
     private val dataFile = dir.resolve(slug.dataFilePath(trieKey))
@@ -285,7 +285,7 @@ private class LocalSegment(
 
     inner class Metadata : Segment.Metadata<ArrowHashTrie.Leaf> {
         private val pageMetadata = PageMetadata.open(al, metaFile)
-        override val trie get() = pageMetadata.trie
+        override val trie = pageMetadata.trie.iidTrie(iidRoot)
 
         // in the utility, we keep the Segments open throughout,
         // so can be excused for the dataLoader being used 'outside its lifetime'
@@ -322,7 +322,10 @@ internal fun main() {
         RootAllocator().use { al ->
             SegmentMerge(al, writesRecency = false).use { segMerge ->
                 trieKeys
-                    .safeMap { trieKey -> LocalSegment(al, slug, dir, trieKey) }
+                    .flatMap { trieKey ->
+                        PageMetadata.open(al, dir.resolve(slug.metaFilePath(trieKey))).use { it.trie.iidRoots }
+                            .map { LocalSegment(al, slug, dir, trieKey, it) }
+                    }
                     .useAll { segments ->
                         segMerge.mergeSegmentsSync(
                             segments, null, SegmentMerge.RecencyPartitioning.Partition

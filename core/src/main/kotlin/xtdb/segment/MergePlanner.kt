@@ -15,26 +15,26 @@ import java.util.function.Predicate
 object MergePlanner {
     private sealed interface SegmentNode<L> {
         val segMeta: Segment.Metadata<L>
+        val node: HashTrie.Node<L>
 
-        class Branch<L>(override val segMeta: Segment.Metadata<L>, val node: HashTrie.IidBranch<L>) : SegmentNode<L> {
-            val children: List<List<SegmentNode<L>>>
-                get() = node.hashChildren.map { child -> child?.let { segNodes(segMeta, it) }.orEmpty() }
+        class Branch<L>(override val segMeta: Segment.Metadata<L>, override val node: HashTrie.IidBranch<L>) : SegmentNode<L> {
+            val children: List<SegmentNode<L>?>
+                get() = node.hashChildren.map { child -> child?.let { segNode(segMeta, it) } }
         }
 
-        class Leaf<L>(override val segMeta: Segment.Metadata<L>, val node: HashTrie.Leaf<L>) : SegmentNode<L> {
+        class Leaf<L>(override val segMeta: Segment.Metadata<L>, override val node: HashTrie.Leaf<L>) : SegmentNode<L> {
             @Suppress("UNCHECKED_CAST")
             val page get() = segMeta.page(node as L)
         }
     }
 
-    private fun <L> segNodes(segMeta: Segment.Metadata<L>, node: HashTrie.Node<L>): List<SegmentNode<L>> =
+    private fun <L> segNode(segMeta: Segment.Metadata<L>, node: HashTrie.Node<L>): SegmentNode<L> =
         when (node) {
-            is HashTrie.IidBranch -> listOf(SegmentNode.Branch(segMeta, node))
-            is HashTrie.RecencyBranch -> node.buckets.flatMap { segNodes(segMeta, it.node) }
-            is HashTrie.Leaf -> listOf(SegmentNode.Leaf(segMeta, node))
+            is HashTrie.IidBranch -> SegmentNode.Branch(segMeta, node)
+            is HashTrie.Leaf -> SegmentNode.Leaf(segMeta, node)
         }
 
-    private fun <L> Segment.Metadata<L>.toSegmentNodes() = trie.rootNode?.let { segNodes(this, it) }.orEmpty()
+    private fun <L> Segment.Metadata<L>.toSegmentNode() = trie.rootNode?.let { segNode(this, it) }
 
     private class WorkTask(val segNodes: List<SegmentNode<*>>, val path: ByteArray)
 
@@ -64,7 +64,7 @@ object MergePlanner {
             .safeMap { it.openMetadata() }.useAll { segMetas ->
                 val result = mutableListOf<Pair<List<Segment.Page<*>>, ByteArray>>()
 
-                val initialSegNodes = segMetas.flatMap { it.toSegmentNodes() }
+                val initialSegNodes = segMetas.mapNotNull { it.toSegmentNode() }
                 if (initialSegNodes.isEmpty()) return emptyList()
 
                 val stack = ObjectStack<WorkTask>()
@@ -76,19 +76,26 @@ object MergePlanner {
                     val segNodes = workTask.segNodes
                     if (pathPred != null && !pathPred.test(workTask.path)) continue
 
+                    val depth = workTask.path.size
+
+                    // a segment can be rooted below the root - a recency bucket's IID trie -
+                    // so a node deeper than this task's path belongs only to the bucket its path names
+                    fun SegmentNode<*>.isBelow() = node.path.size > depth
+
                     val leaves = segNodes.filterIsInstance<SegmentNode.Leaf<*>>()
-                    if (leaves.size < segNodes.size) {
+                    if (leaves.size < segNodes.size || segNodes.any { it.isBelow() }) {
                         val nodeChildren = segNodes.map { segNode ->
-                            when (segNode) {
-                                is SegmentNode.Branch -> segNode.children
-                                is SegmentNode.Leaf -> null
-                            }
+                            if (segNode is SegmentNode.Branch && !segNode.isBelow()) segNode.children else null
                         }
 
                         // do these in reverse order so that they're on the stack in path-prefix order
                         for (bucketIdx in (0..<DEFAULT_LEVEL_WIDTH).reversed()) {
-                            val newSegNodes = segNodes.zip(nodeChildren).flatMap { (segNode, children) ->
-                                children?.get(bucketIdx) ?: listOf(segNode)
+                            val newSegNodes = segNodes.zip(nodeChildren).mapNotNull { (segNode, children) ->
+                                when {
+                                    segNode.isBelow() -> segNode.takeIf { it.node.path[depth].toInt() == bucketIdx }
+                                    children != null -> children[bucketIdx]
+                                    else -> segNode
+                                }
                             }
 
                             if (newSegNodes.isNotEmpty())

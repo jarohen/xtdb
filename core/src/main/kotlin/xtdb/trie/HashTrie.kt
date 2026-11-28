@@ -16,11 +16,13 @@ internal fun conjPath(path: ByteArray, idx: Byte): ByteArray {
 private fun <L> Node<L>.leafStream(): Stream<L> =
     when (this) {
         is HashTrie.IidBranch -> hashChildren.stream().flatMap { child -> child?.leafStream() }
-        is HashTrie.RecencyBranch -> buckets.stream().flatMap { bucket -> bucket.node.leafStream() }
         is HashTrie.Leaf -> Stream.of(this as L)
     }
 
 
+/**
+ * A trie that branches only on IID, so no two of its leaves overlap.
+ */
 interface HashTrie<L> {
     val rootNode: Node<L>?
 
@@ -34,21 +36,6 @@ interface HashTrie<L> {
 
     interface IidBranch<L> : Node<L> {
         val hashChildren: List<Node<L>?>
-    }
-
-    /**
-     * Every bucket's node sits at this branch's own IID [path].
-     */
-    interface RecencyBranch<L> : Node<L> {
-        /**
-         * @property maxRecency the inclusive upper bound of the recency of every row under [node]
-         */
-        class Bucket<L>(val maxRecency: RecencyMicros, val node: Node<L>)
-
-        /**
-         * in ascending order of [Bucket.maxRecency]
-         */
-        val buckets: List<Bucket<L>>
     }
 
     interface Leaf<L> : Node<L>

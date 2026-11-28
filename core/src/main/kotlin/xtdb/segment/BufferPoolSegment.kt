@@ -17,13 +17,15 @@ import xtdb.trie.Trie
 import xtdb.trie.RecencyMicros
 import xtdb.trie.TrieKey
 import xtdb.time.LocalDateTimeUtil.asMicros
-import xtdb.util.closeAll
 import xtdb.util.closeOnCatch
 
+/**
+ * One IID trie of a data file - see [ArrowHashTrie.iidRoots].
+ */
 class BufferPoolSegment private constructor(
     private val al: BufferAllocator, private val bp: BufferPool, private val mm: PageMetadata.Factory,
     val slug: TableSlug, val trieKey: TrieKey, val metadataPredicate: MetadataPredicate?,
-    private val footer: ArrowFooter,
+    private val footer: ArrowFooter, private val iidRoot: ArrowHashTrie.IidRoot,
 ) : Segment<ArrowHashTrie.Leaf> {
     val dataFilePath = slug.dataFilePath(trieKey)
     private val parsedTrieKey = Trie.parseKey(trieKey)
@@ -36,42 +38,53 @@ class BufferPoolSegment private constructor(
 
     override val schema: Schema = footer.schema
 
-    private inner class DataPage(private val dataPageIndex: Int) : Segment.Page<ArrowHashTrie.Leaf> {
-        private var rel: Relation? = null
+    private val rel = Relation(al, schema)
 
+    // an IID trie contributes at most one page to a merge task, and its pages' tasks run in path order,
+    // so each page is closed at its last use before the next one loads.
+    private var loadedPageIndex: Int? = null
+
+    private fun unloadPage() {
+        rel.close()
+        loadedPageIndex = null
+    }
+
+    private inner class DataPage(private val dataPageIndex: Int) : Segment.Page<ArrowHashTrie.Leaf> {
         override val sameSystemTimeResolved get() = this@BufferPoolSegment.sameSystemTimeResolved
 
-        override suspend fun loadDataPage(al: BufferAllocator): RelationReader =
-            rel ?: Relation(this@BufferPoolSegment.al, schema).closeOnCatch { rel ->
-                bp.getRecordBatch(dataFilePath, dataPageIndex).use { rb -> rel.load(rb) }
-                rel
-            }.also { rel = it }
+        override suspend fun loadDataPage(al: BufferAllocator): RelationReader {
+            if (loadedPageIndex != dataPageIndex) {
+                unloadPage()
+                bp.getRecordBatch(dataFilePath, dataPageIndex).use { rb -> rel.closeOnCatch { it.load(rb) } }
+                loadedPageIndex = dataPageIndex
+            }
+
+            return rel
+        }
 
         override fun close() {
-            rel?.close()
-            rel = null
+            if (loadedPageIndex == dataPageIndex) unloadPage()
         }
     }
 
-    private val dataPages = List(footer.recordBatches.size) { DataPage(it) }
-
     inner class Metadata(private val pageMetadata: PageMetadata) : Segment.Metadata<ArrowHashTrie.Leaf> {
 
-        override val trie get() = pageMetadata.trie
+        override val trie = pageMetadata.trie.iidTrie(iidRoot)
 
         private val pageIdxPredicate = metadataPredicate?.build(pageMetadata)
 
-        private val pages = arrayOfNulls<PageMeta<ArrowHashTrie.Leaf>>(pageMetadata.pageCount)
+        private val pages = HashMap<Int, PageMeta<ArrowHashTrie.Leaf>>()
 
         override fun page(leaf: ArrowHashTrie.Leaf): PageMeta<ArrowHashTrie.Leaf> {
             val dataPageIndex = leaf.dataPageIndex
 
-            return pages[dataPageIndex]
-                ?: pageMeta(
-                    dataPages[dataPageIndex], this, leaf,
+            return pages.getOrPut(dataPageIndex) {
+                pageMeta(
+                    DataPage(dataPageIndex), this, leaf,
                     pageMetadata.temporalMetadata(dataPageIndex),
                     minOf(recency, pageMetadata.maxRecency(dataPageIndex) ?: Long.MAX_VALUE)
-                ).also { pages[dataPageIndex] = it }
+                )
+            }
         }
 
         override fun testPage(leaf: ArrowHashTrie.Leaf) = pageIdxPredicate?.test(leaf.dataPageIndex) ?: true
@@ -81,15 +94,21 @@ class BufferPoolSegment private constructor(
 
     override suspend fun openMetadata(): Metadata = Metadata(mm.openPageMetadata(slug.metaFilePath(trieKey)))
 
-    override fun close() {
-        dataPages.closeAll()
-    }
+    override fun close() = unloadPage()
 
     companion object {
+        /**
+         * Opens a segment for each of the data file's IID tries.
+         */
         suspend fun open(
             al: BufferAllocator, bp: BufferPool, mm: PageMetadata.Factory,
             slug: TableSlug, trieKey: TrieKey, metadataPredicate: MetadataPredicate? = null,
-        ) = BufferPoolSegment(al, bp, mm, slug, trieKey, metadataPredicate, bp.getFooter(slug.dataFilePath(trieKey)))
+        ): List<BufferPoolSegment> {
+            val footer = bp.getFooter(slug.dataFilePath(trieKey))
+            val iidRoots = mm.openPageMetadata(slug.metaFilePath(trieKey)).use { it.trie.iidRoots }
+
+            return iidRoots.map { BufferPoolSegment(al, bp, mm, slug, trieKey, metadataPredicate, footer, it) }
+        }
 
         @JvmStatic
         fun openSync(
