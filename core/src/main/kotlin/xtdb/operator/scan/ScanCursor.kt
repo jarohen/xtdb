@@ -10,7 +10,13 @@ import xtdb.arrow.VectorIndirection.Mask
 import xtdb.operator.SelectionSpec
 import xtdb.segment.MergeTask
 import xtdb.segment.Segment
+import com.carrotsearch.hppc.IntArrayList
+import xtdb.arrow.LongLongVectorReader
+import xtdb.arrow.NullVector
+import xtdb.arrow.VectorReader
+import xtdb.time.TEMPORAL_COL_NAMES
 import xtdb.trie.ColumnName
+import xtdb.trie.EventOp
 import xtdb.trie.EventRowPointer
 import xtdb.trie.LeafPointer
 import xtdb.util.TemporalBounds
@@ -57,6 +63,74 @@ class ScanCursor(
 
     private val loadCols: Set<ColumnName> = (colNames + colPreds.keys).toSet()
 
+    private class Iid(val high: Long, val low: Long)
+
+    // predicates over a put event's own content columns: a necessary condition on any row the entity can emit,
+    // because a resolved row is always a put event, emitted with that event's content columns.
+    private val pagePreds = colPreds.filterKeys { it != "_iid" && it !in TEMPORAL_COL_NAMES }.values.toList()
+    private val predContentCols = (colPreds.keys.filterNot { it in TEMPORAL_COL_NAMES }).toList()
+
+    /**
+     * The sorted, distinct iids of entities with at least one put event in the task passing [pagePreds],
+     * or null where the full merge is the cheaper way (no page predicates, or too many rows pass).
+     */
+    private fun candidateIids(leafReaders: List<RelationReader>, pointers: List<LeafPointer>): List<Iid>? {
+        if (pagePreds.isEmpty()) return null
+
+        val found = ArrayList<Iid>()
+        var inRange = 0L
+        var passing = 0L
+
+        for (ptr in pointers) {
+            val rel = leafReaders[ptr.relIdx]
+            val evPtr = ptr.evPtr
+            val lo = evPtr.minIndex
+            val hi = evPtr.maxIndex
+            inRange += hi - lo
+
+            val opVec = rel["op"]
+            val putTypeId = opVec.legNames!!.indexOfFirst { EventOp.ofLegOrNull(it) == EventOp.PUT }
+            if (putTypeId < 0) continue
+
+            val putRows = IntArrayList()
+            for (row in lo until hi) if (opVec.getTypeId(row).toInt() == putTypeId) putRows.add(row)
+            val sel = putRows.toArray()
+
+            val putVec = opVec.vectorForOrNull("put")?.takeIf { !it.keyNames.isNullOrEmpty() }?.select(sel) ?: continue
+
+            val cols = linkedMapOf<String, VectorReader>()
+            for (c in predContentCols)
+                cols[c] = if (c == "_iid") rel["_iid"].select(sel) else putVec.vectorForOrNull(c) ?: NullVector(true, sel.size)
+            val predRel = RelationReader.from(cols, sel.size)
+
+            val mask = pagePreds.fold(Mask.all(sel.size)) { acc, pred -> if (acc.cardinality == 0) acc else pred.select(predRel, acc) }
+            passing += mask.cardinality
+            val hits = mask.toSelection().map { sel[it] }
+
+            val iidVec = rel["_iid"] as LongLongVectorReader
+            for (row in hits) found.add(Iid(iidVec.getLongLongHigh(row), iidVec.getLongLongLow(row)))
+        }
+
+        if (passing > inRange * MAX_CANDIDATE_FRACTION) return null
+
+        found.sortWith { l, r ->
+            if (l.high != r.high) java.lang.Long.compareUnsigned(l.high, r.high)
+            else java.lang.Long.compareUnsigned(l.low, r.low)
+        }
+
+        val distinct = ArrayList<Iid>(found.size)
+        for (iid in found) {
+            val last = distinct.lastOrNull()
+            if (last == null || last.high != iid.high || last.low != iid.low) distinct.add(iid)
+        }
+        return distinct
+    }
+
+    private companion object {
+        val TARGETED = (System.getenv("XTDB_SCAN_TARGETED") ?: "true") == "true"
+        val MAX_CANDIDATE_FRACTION = (System.getenv("XTDB_SCAN_MAXFRAC") ?: "0.05").toDouble()
+    }
+
     private val bufferedRels: Queue<RelationReader> = LinkedList()
 
     private fun bufferTask(task: MergeTask) {
@@ -79,10 +153,23 @@ class ScanCursor(
             }
 
             BitemporalConsumer.open(al, leafReaders, colNames).use { bitemporalConsumer ->
-                val merge = EntityMerge(pointers)
+                val candidates = if (TARGETED) candidateIids(leafReaders, pointers) else null
 
-                while (merge.nextEntity())
-                    resolver.resolveEntity(merge, bitemporalConsumer)
+                if (candidates != null) {
+                    val onEntity = ArrayList<LeafPointer>(pointers.size)
+                    for (iid in candidates) {
+                        onEntity.clear()
+                        for (ptr in pointers) if (ptr.evPtr.seekToIid(iid.high, iid.low)) onEntity.add(ptr)
+                        if (onEntity.isEmpty()) continue
+                        val merge = EntityMerge(onEntity)
+                        if (merge.nextEntity()) resolver.resolveEntity(merge, bitemporalConsumer)
+                    }
+                } else {
+                    val merge = EntityMerge(pointers)
+
+                    while (merge.nextEntity())
+                        resolver.resolveEntity(merge, bitemporalConsumer)
+                }
 
                 val colPreds = colPreds.entries
                     .filterNot { it.key == "_iid" }
