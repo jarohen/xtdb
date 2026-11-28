@@ -112,6 +112,23 @@
              (set (tu/query-ra '[:scan {:db-name "xtdb", :table #xt/table xt_docs, :columns [_id]}]
                                {:node node}))))))
 
+(t/deftest a-page-spanning-several-merge-tasks-arrives-in-one-batch
+  (util/with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:page-limit 16}}))]
+    (letfn [(uuid [n] (java.util.UUID. (Long/reverse n) 0))]
+      (let [shallow-ids (set (map uuid [1 2 3]))]
+        (xt/execute-tx node (for [id shallow-ids] [:put-docs :docs {:xt/id id}]))
+        (tu/flush-block! node)
+
+        (xt/execute-tx node (for [n (range 4 44)] [:put-docs :docs {:xt/id (uuid n)}]))
+        (tu/flush-block! node)
+
+        (t/is (= [shallow-ids]
+                 (->> (tu/query-ra '[:scan {:db-name "xtdb", :table #xt/table docs, :columns [_id]}]
+                                   {:node node, :preserve-pages? true})
+                      (map #(into #{} (comp (map :xt/id) (filter shallow-ids)) %))
+                      (remove empty?)))
+              "the shallow file's one page sits under every task path the deeper file splits into")))))
+
 (t/deftest test-metadata
   (util/with-open [node (xtn/start-node (merge tu/*node-opts* {:indexer {:rows-per-block 20}}))]
     (doseq [batch (->> (for [i (range 100)]

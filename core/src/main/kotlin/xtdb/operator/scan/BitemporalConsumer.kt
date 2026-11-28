@@ -9,14 +9,10 @@ import xtdb.trie.ColumnName
 import xtdb.arrow.VectorType
 import xtdb.arrow.VectorType.Companion.maybe
 import xtdb.arrow.VectorType.Companion.ofType
-import xtdb.util.closeAll
 import xtdb.util.closeAllOnCatch
-import xtdb.util.safeMap
 import kotlin.Long.Companion.MAX_VALUE as MAX_LONG
 
-class BitemporalConsumer private constructor(
-    private val rels: List<RelBuilder>, private val colNames: List<ColumnName>
-) : AutoCloseable {
+class BitemporalConsumer(private val rels: List<RelBuilder>) {
 
     class RelBuilder private constructor(
         private val rel: RelationReader, private val contentColNames: List<ColumnName>,
@@ -29,11 +25,7 @@ class BitemporalConsumer private constructor(
             private inline fun <R> unlessNot(condition: Boolean, block: () -> R): R? =
                 if (condition) block() else null
 
-            fun open(
-                al: BufferAllocator, rel: RelationReader, contentColNames: List<ColumnName>,
-                hasValidFrom: Boolean, hasValidTo: Boolean,
-                hasSystemFrom: Boolean, hasSystemTo: Boolean,
-            ): RelBuilder =
+            fun open(al: BufferAllocator, rel: RelationReader, colNames: List<ColumnName>): RelBuilder =
                 mutableListOf<VectorWriter>().closeAllOnCatch { temporalVecs ->
                     fun openTemporalVec(name: String, nullable: Boolean): VectorWriter {
                         val vec = al.openVector(maybe(VectorType.INSTANT, nullable))
@@ -42,11 +34,11 @@ class BitemporalConsumer private constructor(
                     }
 
                     RelBuilder(
-                        rel, contentColNames,
-                        validFromVec = unlessNot(hasValidFrom) { openTemporalVec("_valid_from", false) },
-                        validToVec = unlessNot(hasValidTo) { openTemporalVec("_valid_to", true) },
-                        systemFromVec = unlessNot(hasSystemFrom) { openTemporalVec("_system_from", false) },
-                        systemToVec = unlessNot(hasSystemTo) { openTemporalVec("_system_to", true) }
+                        rel, colNames.filterNot { it in TEMPORAL_COL_NAMES },
+                        validFromVec = unlessNot("_valid_from" in colNames) { openTemporalVec("_valid_from", false) },
+                        validToVec = unlessNot("_valid_to" in colNames) { openTemporalVec("_valid_to", true) },
+                        systemFromVec = unlessNot("_system_from" in colNames) { openTemporalVec("_system_from", false) },
+                        systemToVec = unlessNot("_system_to" in colNames) { openTemporalVec("_system_to", true) }
                     )
                 }
         }
@@ -99,40 +91,11 @@ class BitemporalConsumer private constructor(
         }
     }
 
-    companion object {
-        fun open(al: BufferAllocator, rels: List<RelationReader>, colNames: List<ColumnName>): BitemporalConsumer {
-            val hasValidFrom = "_valid_from" in colNames
-            val hasValidTo = "_valid_to" in colNames
-            val hasSystemFrom = "_system_from" in colNames
-            val hasSystemTo = "_system_to" in colNames
-
-            val contentColNames = colNames.filterNot { it in TEMPORAL_COL_NAMES }
-
-            return rels.safeMap { rel ->
-                RelBuilder.open(
-                    al, rel, contentColNames,
-                    hasValidFrom, hasValidTo,
-                    hasSystemFrom, hasSystemTo
-                )
-            }.closeAllOnCatch {
-                BitemporalConsumer(it, colNames)
-            }
-        }
-    }
-
-    private var rowCount = 0
-
     fun accept(
         relIdx: Int, rowIdx: Int,
         validFrom: Long, validTo: Long,
         systemFrom: Long, systemTo: Long
     ) {
         rels[relIdx].accept(rowIdx, validFrom, validTo, systemFrom, systemTo)
-        rowCount++
     }
-
-    fun build() = rels.map { it.build() }
-
-    override fun close() = rels.closeAll()
-
 }

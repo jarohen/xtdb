@@ -8,6 +8,7 @@ import xtdb.api.ICursor
 import xtdb.arrow.RelationReader
 import xtdb.arrow.VectorIndirection.Mask
 import xtdb.operator.SelectionSpec
+import xtdb.operator.scan.BitemporalConsumer.RelBuilder
 import xtdb.segment.MergeTask
 import xtdb.segment.Segment
 import xtdb.trie.ColumnName
@@ -15,7 +16,6 @@ import xtdb.trie.EventRowPointer
 import xtdb.trie.LeafPointer
 import xtdb.util.TemporalBounds
 import xtdb.util.closeAll
-import xtdb.util.safeMap
 import java.util.*
 import java.util.function.Consumer
 
@@ -40,10 +40,10 @@ class ScanCursor(
             AsOfResolver(temporalBounds, clampValidTime)
         else PolygonResolver(temporalBounds, clampValidTime)
 
-    private fun RelationReader.maybeSelect(iidPred: SelectionSpec?, path: ByteArray) =
+    private fun RelationReader.maybeSelect(iidPred: SelectionSpec?) =
         when (iidPred) {
             null -> this
-            is MultiIidSelector -> select(iidPred.select(al, this, path).toSelection())
+            is MultiIidSelector -> select(iidPred.select(al, this, ByteArray(0)).toSelection())
             else -> select(iidPred.select(this).toSelection())
         }
 
@@ -57,41 +57,56 @@ class ScanCursor(
 
     private val bufferedRels: Queue<RelationReader> = LinkedList()
 
+    private val contentColPreds = colPreds.entries.filterNot { it.key == "_iid" }.map { it.value }
+
+    private class OpenPage(val loadedRowCount: Int, val rel: RelationReader, val out: RelBuilder) : AutoCloseable {
+        override fun close() = out.close()
+    }
+
+    private val openPages = IdentityHashMap<Segment.Page<*>, OpenPage>()
+
+    private fun open(pages: List<Segment.Page<*>>): List<OpenPage> {
+        val unopened = pages.filterNot { it in openPages }
+
+        // we're not in coroutine land here, so it's a good boundary for runBlocking
+        val loaded = runBlocking { unopened.map { async { it.loadDataPage(al) } }.awaitAll() }
+
+        for ((page, rel) in unopened.zip(loaded)) {
+            val selected = rel.maybeSelect(colPreds["_iid"])
+            openPages[page] = OpenPage(rel.rowCount, selected, RelBuilder.open(al, selected, colNames))
+        }
+
+        return pages.map { openPages.getValue(it) }
+    }
+
+    private fun emitPage(page: OpenPage) {
+        page.out.build()
+            .selectMatching(contentColPreds)
+            .takeIf { it.rowCount > 0 }
+            ?.let { bufferedRels.add(it.openSlice(al)) }
+    }
+
     private fun bufferTask(task: MergeTask) {
         task.use {
-            val iidPred = colPreds["_iid"]
-            val taskPath = task.path
             val resolver = openResolver()
-
-            // we're not in coroutine land here, so it's a good boundary for runBlocking
-            val loadedPages = runBlocking { task.pages.map { async { it.loadDataPage(al) } }.awaitAll() }
+            val pages = open(task.pages)
 
             // rows physically read off the pages we loaded — the scan's throughput denominator,
             // before iid-selection and bitemporal resolution whittle them down to the emitted rows
-            metrics.addRowsRead(loadedPages.sumOf { it.rowCount.toLong() })
+            metrics.addRowsRead(pages.sumOf { it.loadedRowCount.toLong() })
 
-            val leafReaders = loadedPages.map { it.maybeSelect(iidPred, taskPath) }
-
-            val pointers = leafReaders.mapIndexedNotNull { idx, leafReader ->
-                EventRowPointer(leafReader, taskPath).takeIf { it.isValid() }?.let { LeafPointer(it, idx) }
+            val pointers = pages.mapIndexedNotNull { idx, page ->
+                EventRowPointer(page.rel, task.path).takeIf { it.isValid() }?.let { LeafPointer(it, idx) }
             }
 
-            BitemporalConsumer.open(al, leafReaders, colNames).use { bitemporalConsumer ->
-                val merge = EntityMerge(pointers)
+            val merge = EntityMerge(pointers)
+            val out = BitemporalConsumer(pages.map { it.out })
 
-                while (merge.nextEntity())
-                    resolver.resolveEntity(merge, bitemporalConsumer)
+            while (merge.nextEntity())
+                resolver.resolveEntity(merge, out)
 
-                val colPreds = colPreds.entries
-                    .filterNot { it.key == "_iid" }
-                    .map { it.value }
-
-                bitemporalConsumer.build()
-                    .map { childRel -> childRel.selectMatching(colPreds) }
-                    .filter { it.rowCount > 0 }
-                    .safeMap { it.openSlice(al) }
-                    .also { bufferedRels.addAll(it) }
-            }
+            for (page in task.lastUsedPages)
+                openPages.remove(page)!!.use { emitPage(it) }
         }
     }
 
@@ -114,7 +129,8 @@ class ScanCursor(
     }
 
     override fun close() {
-        (bufferedRels + ownedSegments + colPreds.values).closeAll()
+        (bufferedRels + openPages.values + ownedSegments + colPreds.values).closeAll()
         bufferedRels.clear()
+        openPages.clear()
     }
 }

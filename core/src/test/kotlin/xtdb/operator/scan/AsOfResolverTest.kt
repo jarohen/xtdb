@@ -21,12 +21,15 @@ import org.junit.jupiter.api.Test
 import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
 import xtdb.arrow.STRUCT_TYPE
+import xtdb.operator.scan.BitemporalConsumer.RelBuilder
 import xtdb.trie.EventRowPointer
 import xtdb.trie.LeafPointer
 import xtdb.trie.Trie
 import xtdb.util.TemporalBounds
 import xtdb.util.TemporalDimension
 import xtdb.util.closeAll
+import xtdb.util.safeMap
+import xtdb.util.useAll
 import java.nio.ByteBuffer
 import java.time.Instant
 import java.time.ZonedDateTime
@@ -99,10 +102,11 @@ class AsOfResolverTest {
 
         val merge = EntityMerge(pointers)
 
-        return BitemporalConsumer.open(al, readers, COL_NAMES).use { out ->
+        return readers.safeMap { RelBuilder.open(al, it, COL_NAMES) }.useAll { builders ->
+            val out = BitemporalConsumer(builders)
             while (merge.nextEntity()) resolver.resolveEntity(merge, out)
 
-            out.build().flatMapIndexed { pageIdx, rel ->
+            builders.map { it.build() }.flatMapIndexed { pageIdx, rel ->
                 // `_iid` arrives as a ByteArray, which compares by reference, so it's listified
                 rel.asMaps.map { row -> Row(pageIdx, row.mapValues { (_, v) -> if (v is ByteArray) v.toList() else v }) }
             }
