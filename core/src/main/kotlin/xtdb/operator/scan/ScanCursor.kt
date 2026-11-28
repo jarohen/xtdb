@@ -24,6 +24,7 @@ import xtdb.util.closeAll
 import xtdb.util.safeMap
 import java.util.*
 import java.util.function.Consumer
+import java.util.concurrent.*
 
 class ScanCursor(
     private val al: BufferAllocator,
@@ -129,14 +130,22 @@ class ScanCursor(
     }
 
     private companion object {
+        val WORKERS = (System.getenv("XTDB_SCAN_WORKERS") ?: "0").toInt()
+        val WINDOW = (System.getenv("XTDB_SCAN_WINDOW") ?: (WORKERS * 2).toString()).toInt()
+        val ORDERED = (System.getenv("XTDB_SCAN_ORDERED") ?: "true") == "true"
+        val POOL: ExecutorService by lazy {
+            Executors.newFixedThreadPool(WORKERS) { r -> Thread(r, "scan-worker").also { it.isDaemon = true } }
+        }
         val TARGETED = (System.getenv("XTDB_SCAN_TARGETED") ?: "true") == "true"
         val MAX_CANDIDATE_FRACTION = (System.getenv("XTDB_SCAN_MAXFRAC") ?: "0.05").toDouble()
     }
 
     private val bufferedRels: Queue<RelationReader> = LinkedList()
 
-    private fun bufferTask(task: MergeTask) {
-        task.use {
+    private class TaskResult(val rels: List<RelationReader>, val rowsRead: Long)
+
+    private fun bufferTask(task: MergeTask): TaskResult {
+        return task.use {
             val iidPred = colPreds["_iid"]
             val taskPath = task.path
             val resolver = openResolver()
@@ -146,7 +155,7 @@ class ScanCursor(
 
             // rows physically read off the pages we loaded — the scan's throughput denominator,
             // before iid-selection and bitemporal resolution whittle them down to the emitted rows
-            metrics.addRowsRead(loadedPages.sumOf { it.rowCount.toLong() })
+            val rowsRead = loadedPages.sumOf { it.rowCount.toLong() }
 
             val leafReaders = loadedPages.map { it.maybeSelect(iidPred, taskPath) }
 
@@ -181,19 +190,95 @@ class ScanCursor(
                     .map { childRel -> childRel.selectMatching(colPreds) }
                     .filter { it.rowCount > 0 }
                     .safeMap { it.openSlice(al) }
-                    .also { bufferedRels.addAll(it) }
+                    .let { TaskResult(it, rowsRead) }
             }
         }
     }
 
+    // --- parallel read-ahead (spike)
+
+    private class Job(val task: MergeTask) {
+        @Volatile var cancelled = false
+        val done = CompletableFuture<TaskResult?>()
+    }
+
+    private val taskList: List<MergeTask> = mergeTasks.asSequence().toList()
+
+    // a page shared between tasks has a plain-var cache and is closed by its last task in plan order,
+    // so concurrency is only sound where every page belongs to exactly one task
+    private val parallel: Boolean = WORKERS > 0 && run {
+        val seen = IdentityHashMap<Any, Boolean>()
+        taskList.all { t -> t.pages.all { seen.put(it, true) == null } }
+    }
+
+    private val taskIter = taskList.iterator()
+    private val inFlight = ArrayDeque<Job>()
+    private val completed = LinkedBlockingQueue<Job>()
+    private val executor get() = POOL
+
+    private fun submitMore() {
+        while (inFlight.size < WINDOW && taskIter.hasNext()) {
+            val job = Job(taskIter.next())
+            inFlight.add(job)
+            executor.execute {
+                try {
+                    if (job.cancelled) job.done.complete(null)
+                    else job.done.complete(bufferTask(job.task))
+                } catch (t: Throwable) {
+                    job.done.completeExceptionally(t)
+                } finally {
+                    completed.add(job)
+                }
+            }
+        }
+    }
+
+    private fun nextJob(): Job? {
+        submitMore()
+        if (inFlight.isEmpty()) return null
+        val job = if (ORDERED) inFlight.first() else completed.take()
+        if (ORDERED) job.done.join()
+        inFlight.remove(job)
+        if (ORDERED) completed.remove(job)
+        return job
+    }
+
+    private fun tryAdvanceParallel(c: Consumer<in RelationReader>): Boolean {
+        while (true) {
+            bufferedRels.poll()?.use {
+                c.accept(it)
+                return true
+            }
+
+            val job = nextJob() ?: return false
+            val res = try { job.done.get() } catch (e: java.util.concurrent.ExecutionException) { throw e.cause ?: e }
+            if (res != null) {
+                metrics.addRowsRead(res.rowsRead)
+                bufferedRels.addAll(res.rels)
+            }
+        }
+    }
+
+    private fun closeParallel() {
+        // quiesce every worker before anything the workers touch is closed
+        inFlight.forEach { it.cancelled = true }
+        inFlight.forEach { job ->
+            val res = try { job.done.get() } catch (e: Exception) { null }
+            res?.rels?.closeAll()
+        }
+        inFlight.clear()
+    }
+
     override fun tryAdvance(c: Consumer<in RelationReader>): Boolean {
+        if (parallel) return tryAdvanceParallel(c)
+
         bufferedRels.poll()?.use {
             c.accept(it)
             return true
         }
 
-        while (mergeTasks.hasNext()) {
-            bufferTask(mergeTasks.next())
+        while (taskIter.hasNext()) {
+            bufferTask(taskIter.next()).let { metrics.addRowsRead(it.rowsRead); bufferedRels.addAll(it.rels) }
 
             bufferedRels.poll()?.use {
                 c.accept(it)
@@ -205,6 +290,7 @@ class ScanCursor(
     }
 
     override fun close() {
+        if (parallel) closeParallel()
         (bufferedRels + ownedSegments + colPreds.values).closeAll()
         bufferedRels.clear()
     }

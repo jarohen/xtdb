@@ -19,7 +19,9 @@
         run-query (case query-language
                     :ra (let [q @q
                               args (tpch-ra/args q scale-factor)]
-                          #(tu/query-ra q {:node %, :args args, :key-fn :snake-case-keyword}))
+                          (if (System/getenv "DART_TOP")
+                            #(tu/query-ra '[:sort {:limit 5} [:scan {:db-name "xtdb", :table #xt/table lineitem, :columns [l_orderkey l_quantity]}]] {:node % :key-fn :snake-case-keyword})
+                            #(tu/query-ra q {:node %, :args args, :key-fn :snake-case-keyword})))
                     :sql (let [query+args (tpch/sql-query (inc i) scale-factor)]
                            #(xt/q % query+args {:key-fn :snake-case-keyword})))]
     (cond-> {:t :call, :stage stage-name, :summary-key summary-key
@@ -29,7 +31,7 @@
                     (catch Exception e
                       (.printStackTrace e)
                       (throw e))))}
-      expected (assoc :verify (fn [rows]
+      (and expected (not (System/getenv "DART_TOP"))) (assoc :verify (fn [rows]
                                 (when-let [mismatch (tpch/result-mismatch expected rows)]
                                   (throw (err/fault ::wrong-result (format "Q%02d doesn't match its pinned result: %s" (inc i) (pr-str mismatch)) mismatch))))))))
 
