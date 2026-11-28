@@ -105,6 +105,8 @@ class ScanCursor(
 
             val mask = pagePreds.fold(Mask.all(sel.size)) { acc, pred -> if (acc.cardinality == 0) acc else pred.select(predRel, acc) }
             passing += mask.cardinality
+            // pages are hash-ordered samples of the task, so a clearly unselective first page decides it
+            if (passing > 2 * MAX_CANDIDATE_FRACTION * inRange) return null
             val hits = mask.toSelection().map { sel[it] }
 
             val iidVec = rel["_iid"] as LongLongVectorReader
