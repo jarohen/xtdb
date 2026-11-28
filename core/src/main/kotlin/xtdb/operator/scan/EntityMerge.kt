@@ -1,56 +1,63 @@
 package xtdb.operator.scan
 
-import xtdb.trie.LeafHeap
-import xtdb.trie.LeafPointer
-
 /** One entity's events, newest system-time first. */
 internal interface EntityEvents {
-    fun nextEvent(): LeafPointer?
+    fun nextEvent(): EntityEvent?
 }
 
 /**
- * Merges one merge task's pages: an outer pass over entities in iid order, and within each entity
+ * Merges the scan's runs: an outer pass over entities in iid order, and within each entity
  * an inner pass over its events in reverse system-time order.
  */
-internal class EntityMerge(pointers: List<LeafPointer>) : EntityEvents {
-    private val heap = LeafHeap(pointers)
+internal class EntityMerge(runs: List<ScanRun>) : EntityEvents {
+    private val heap = RunHeap(runs)
 
     private var onEntity = false
     private var iidHigh = 0L
     private var iidLow = 0L
 
     // advanced on the next `nextEvent` rather than eagerly, so the caller can still read the row it's on.
-    private var current: LeafPointer? = null
+    private var current: ScanRun? = null
 
-    private fun topOnEntity() = heap.top()?.takeIf { it.evPtr.sameIidAs(iidHigh, iidLow) }
+    // A pending run's key is a lower bound, so once the top is loaded, no pending run can hold an earlier event.
+    private fun top(): ScanRun? {
+        while (true) {
+            val top = heap.top() ?: return null
+            if (top.isLoaded) return top
+            top.load()
+            heap.reseatTop()
+        }
+    }
 
-    /** Advances to the next entity, returning false once the task's pages are exhausted. */
+    private fun topOnEntity() = top()?.takeIf { it.sameIidAs(iidHigh, iidLow) }
+
+    /** Advances to the next entity, returning false once every run is exhausted. */
     fun nextEntity(): Boolean {
         if (onEntity) {
             current = null
 
             while (true) {
-                val leafPtr = topOnEntity() ?: break
-                leafPtr.evPtr.skipToNextIid()
+                val run = topOnEntity() ?: break
+                run.skipToNextIid()
                 heap.reseatTop()
             }
         }
 
-        val top = heap.top()
+        val top = top()
         onEntity = top != null
         if (top == null) return false
 
-        iidHigh = top.evPtr.iidHigh
-        iidLow = top.evPtr.iidLow
+        iidHigh = top.iidHigh
+        iidLow = top.iidLow
         return true
     }
 
-    override fun nextEvent(): LeafPointer? {
+    override fun nextEvent(): EntityEvent? {
         if (!onEntity) return null
 
-        current?.let { leafPtr ->
+        current?.let { run ->
             current = null
-            leafPtr.evPtr.nextIndex()
+            run.nextIndex()
             heap.reseatTop()
         }
 

@@ -9,130 +9,88 @@ import xtdb.trie.ColumnName
 import xtdb.arrow.VectorType
 import xtdb.arrow.VectorType.Companion.maybe
 import xtdb.arrow.VectorType.Companion.ofType
-import xtdb.util.closeAll
 import xtdb.util.closeAllOnCatch
-import xtdb.util.safeMap
 import kotlin.Long.Companion.MAX_VALUE as MAX_LONG
 
+/**
+ * Builds one page's output: the rows the resolver accepted from it, with the bitemporal coordinates it gave each.
+ */
 class BitemporalConsumer private constructor(
-    private val rels: List<RelBuilder>, private val colNames: List<ColumnName>
+    private val rel: RelationReader, private val contentColNames: List<ColumnName>,
+    private val validFromVec: VectorWriter?, private val validToVec: VectorWriter?,
+    private val systemFromVec: VectorWriter?, private val systemToVec: VectorWriter?
 ) : AutoCloseable {
-
-    class RelBuilder private constructor(
-        private val rel: RelationReader, private val contentColNames: List<ColumnName>,
-        private val validFromVec: VectorWriter?, private val validToVec: VectorWriter?,
-        private val systemFromVec: VectorWriter?, private val systemToVec: VectorWriter?
-    ) : AutoCloseable {
-        private val contentSel = IntArrayList()
-
-        companion object {
-            private inline fun <R> unlessNot(condition: Boolean, block: () -> R): R? =
-                if (condition) block() else null
-
-            fun open(
-                al: BufferAllocator, rel: RelationReader, contentColNames: List<ColumnName>,
-                hasValidFrom: Boolean, hasValidTo: Boolean,
-                hasSystemFrom: Boolean, hasSystemTo: Boolean,
-            ): RelBuilder =
-                mutableListOf<VectorWriter>().closeAllOnCatch { temporalVecs ->
-                    fun openTemporalVec(name: String, nullable: Boolean): VectorWriter {
-                        val vec = al.openVector(maybe(VectorType.INSTANT, nullable))
-                        temporalVecs.add(vec)
-                        return vec
-                    }
-
-                    RelBuilder(
-                        rel, contentColNames,
-                        validFromVec = unlessNot(hasValidFrom) { openTemporalVec("_valid_from", false) },
-                        validToVec = unlessNot(hasValidTo) { openTemporalVec("_valid_to", true) },
-                        systemFromVec = unlessNot(hasSystemFrom) { openTemporalVec("_system_from", false) },
-                        systemToVec = unlessNot(hasSystemTo) { openTemporalVec("_system_to", true) }
-                    )
-                }
-        }
-
-        fun accept(
-            idx: Int,
-            validFrom: Long, validTo: Long,
-            systemFrom: Long, systemTo: Long
-        ) {
-            contentSel.add(idx)
-
-            validFromVec?.writeLong(validFrom)
-            validToVec?.let { if (validTo == MAX_LONG) it.writeNull() else it.writeLong(validTo) }
-            systemFromVec?.writeLong(systemFrom)
-            systemToVec?.let { if (systemTo == MAX_LONG) it.writeNull() else it.writeLong(systemTo) }
-        }
-
-        fun build(): RelationReader {
-            val selArray = contentSel.toArray()
-
-            val putReader =
-                // an erase-only leaf writes `put` as an empty struct (see #4577) — treat that as
-                // "no puts here" rather than merging its absent columns in. Checked via the struct's
-                // children rather than `_id`-presence, matching SegmentMerge's emptiness test: not
-                // every table mandates an `_id`, and the two predicates agree for every one that does.
-                rel["op"].vectorForOrNull("put")
-                    ?.takeIf { putVec -> !putVec.keyNames.isNullOrEmpty() }
-                    ?.select(selArray)
-
-            val cols = linkedMapOf<String, VectorReader>()
-
-            for (colName in contentColNames)
-                cols[colName] =
-                    if (colName == "_iid") rel["_iid"].select(selArray)
-                    else putReader?.vectorForOrNull(colName) ?: NullVector(true, selArray.size)
-
-            validFromVec?.let { cols["_valid_from"] = it }
-            validToVec?.let { cols["_valid_to"] = it }
-            systemFromVec?.let { cols["_system_from"] = it }
-            systemToVec?.let { cols["_system_to"] = it }
-
-            return RelationReader.from(cols, selArray.size)
-        }
-
-        override fun close() {
-            validFromVec?.close()
-            validToVec?.close()
-            systemFromVec?.close()
-            systemToVec?.close()
-        }
-    }
+    private val contentSel = IntArrayList(rel.rowCount)
 
     companion object {
-        fun open(al: BufferAllocator, rels: List<RelationReader>, colNames: List<ColumnName>): BitemporalConsumer {
-            val hasValidFrom = "_valid_from" in colNames
-            val hasValidTo = "_valid_to" in colNames
-            val hasSystemFrom = "_system_from" in colNames
-            val hasSystemTo = "_system_to" in colNames
+        private inline fun <R> unlessNot(condition: Boolean, block: () -> R): R? =
+            if (condition) block() else null
 
+        fun open(al: BufferAllocator, rel: RelationReader, colNames: List<ColumnName>): BitemporalConsumer {
             val contentColNames = colNames.filterNot { it in TEMPORAL_COL_NAMES }
 
-            return rels.safeMap { rel ->
-                RelBuilder.open(
-                    al, rel, contentColNames,
-                    hasValidFrom, hasValidTo,
-                    hasSystemFrom, hasSystemTo
+            return mutableListOf<VectorWriter>().closeAllOnCatch { temporalVecs ->
+                fun openTemporalVec(name: String, nullable: Boolean): VectorWriter {
+                    val vec = al.openVector(maybe(VectorType.INSTANT, nullable))
+                    temporalVecs.add(vec)
+                    return vec
+                }
+
+                BitemporalConsumer(
+                    rel, contentColNames,
+                    validFromVec = unlessNot("_valid_from" in colNames) { openTemporalVec("_valid_from", false) },
+                    validToVec = unlessNot("_valid_to" in colNames) { openTemporalVec("_valid_to", true) },
+                    systemFromVec = unlessNot("_system_from" in colNames) { openTemporalVec("_system_from", false) },
+                    systemToVec = unlessNot("_system_to" in colNames) { openTemporalVec("_system_to", true) }
                 )
-            }.closeAllOnCatch {
-                BitemporalConsumer(it, colNames)
             }
         }
     }
 
-    private var rowCount = 0
-
     fun accept(
-        relIdx: Int, rowIdx: Int,
+        idx: Int,
         validFrom: Long, validTo: Long,
         systemFrom: Long, systemTo: Long
     ) {
-        rels[relIdx].accept(rowIdx, validFrom, validTo, systemFrom, systemTo)
-        rowCount++
+        contentSel.add(idx)
+
+        validFromVec?.writeLong(validFrom)
+        validToVec?.let { if (validTo == MAX_LONG) it.writeNull() else it.writeLong(validTo) }
+        systemFromVec?.writeLong(systemFrom)
+        systemToVec?.let { if (systemTo == MAX_LONG) it.writeNull() else it.writeLong(systemTo) }
     }
 
-    fun build() = rels.map { it.build() }
+    fun build(): RelationReader {
+        val selArray = contentSel.toArray()
 
-    override fun close() = rels.closeAll()
+        val putReader =
+            // an erase-only leaf writes `put` as an empty struct (see #4577) — treat that as
+            // "no puts here" rather than merging its absent columns in. Checked via the struct's
+            // children rather than `_id`-presence, matching SegmentMerge's emptiness test: not
+            // every table mandates an `_id`, and the two predicates agree for every one that does.
+            rel["op"].vectorForOrNull("put")
+                ?.takeIf { putVec -> !putVec.keyNames.isNullOrEmpty() }
+                ?.select(selArray)
 
+        val cols = linkedMapOf<String, VectorReader>()
+
+        for (colName in contentColNames)
+            cols[colName] =
+                if (colName == "_iid") rel["_iid"].select(selArray)
+                else putReader?.vectorForOrNull(colName) ?: NullVector(true, selArray.size)
+
+        validFromVec?.let { cols["_valid_from"] = it }
+        validToVec?.let { cols["_valid_to"] = it }
+        systemFromVec?.let { cols["_system_from"] = it }
+        systemToVec?.let { cols["_system_to"] = it }
+
+        return RelationReader.from(cols, selArray.size)
+    }
+
+    override fun close() {
+        validFromVec?.close()
+        validToVec?.close()
+        systemFromVec?.close()
+        systemToVec?.close()
+    }
 }

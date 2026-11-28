@@ -9,7 +9,7 @@ import kotlin.math.min
 
 /** Resolves one entity's events into the rows the query observes. */
 internal interface EntityResolver {
-    fun resolveEntity(events: EntityEvents, out: BitemporalConsumer)
+    fun resolveEntity(events: EntityEvents)
 }
 
 /**
@@ -29,13 +29,13 @@ internal class AsOfResolver(
     private val vtUpper = temporalBounds.validTime.upper
     private val stUpper = temporalBounds.systemTime.upper
 
-    override fun resolveEntity(events: EntityEvents, out: BitemporalConsumer) {
+    override fun resolveEntity(events: EntityEvents) {
         var leftBound = Long.MIN_VALUE
         var rightBound = Long.MAX_VALUE
 
         while (true) {
-            val leafPtr = events.nextEvent() ?: return
-            val evPtr = leafPtr.evPtr
+            val event = events.nextEvent() ?: return
+            val evPtr = event.evPtr
             val op = evPtr.op
 
             // an erase is exempt from the system-time bound, and suppresses only events older than
@@ -52,8 +52,7 @@ internal class AsOfResolver(
                     val outValidFrom = max(validFrom, leftBound)
                     val outValidTo = min(validTo, rightBound)
 
-                    out.accept(
-                        leafPtr.relIdx, evPtr.index,
+                    event.accept(
                         if (clampValidTime) max(outValidFrom, vtLower) else outValidFrom,
                         if (clampValidTime) min(outValidTo, vtUpper) else outValidTo,
                         evPtr.systemFrom, Long.MAX_VALUE
@@ -81,15 +80,14 @@ internal class PolygonResolver(
     private val vtLower = temporalBounds.validTime.lower
     private val vtUpper = temporalBounds.validTime.upper
 
-    override fun resolveEntity(events: EntityEvents, out: BitemporalConsumer) {
+    override fun resolveEntity(events: EntityEvents) {
         while (true) {
-            val leafPtr = events.nextEvent() ?: return
-            val evPtr = leafPtr.evPtr
+            val event = events.nextEvent() ?: return
+            val evPtr = event.evPtr
 
             val polygon = polygonCalculator.calculate(evPtr)?.takeIf { evPtr.op == PUT } ?: continue
 
             val sysFrom = evPtr.systemFrom
-            val idx = evPtr.index
 
             repeat(polygon.validTimeRangeCount) { i ->
                 val validFrom = polygon.getValidFrom(i)
@@ -100,8 +98,7 @@ internal class PolygonResolver(
                     temporalBounds.intersects(validFrom, validTo, sysFrom, sysTo)
                     && validFrom != validTo && sysFrom != sysTo
                 ) {
-                    out.accept(
-                        leafPtr.relIdx, idx,
+                    event.accept(
                         if (clampValidTime) max(validFrom, vtLower) else validFrom,
                         if (clampValidTime) min(validTo, vtUpper) else validTo,
                         sysFrom, sysTo

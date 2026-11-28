@@ -32,7 +32,7 @@
            (xtdb.operator SelectionSpec$Factory)
            (xtdb.operator.scan MultiIidSelector ScanCursor ScanMetrics SingleIidSelector)
            (xtdb.query IQuerySource$QueryDatabase)
-           (xtdb.segment BufferPoolSegment MergePlanner)
+           (xtdb.segment BufferPoolSegment RunPlanner)
            xtdb.api.TableRef
            (xtdb.trie Bucketer)
            (xtdb.util TemporalBounds TemporalDimension)))
@@ -236,11 +236,11 @@
                                          (long (- (count pages) (count survivors)))
                                          (long (count survivors)))
                               survivors))
-              merge-tasks (MergePlanner/planSync (into (vec !segments) live-segments) (->path-pred iid-set) count-pages)]
+              runs (RunPlanner/planSync (into (vec !segments) live-segments) (->path-pred iid-set) count-pages)]
 
           (ScanCursor. allocator (vec col-names) col-preds
                        temporal-bounds (boolean (:clamp-valid-time? scan-opts))
-                       !segments (.iterator ^Iterable merge-tasks)
+                       !segments runs
                        metrics))))))
 
 (defn scan-vec-types [snaps, scan-cols]
