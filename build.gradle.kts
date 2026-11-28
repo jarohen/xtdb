@@ -882,6 +882,9 @@ fun createBench(benchName: String, properties: Map<String, String>, defaultArgs:
                     "dumponexit=true,filename=${System.getProperty("user.home")}/Snapshots/xtdb-$benchName-%t.jfr"
             )
 
+        if (project.hasProperty("extraJvm"))
+            jvmArgs((project.property("extraJvm") as String).split(Regex("\\s+")).filter { it.isNotEmpty() })
+
         this.args = args
     }
 }

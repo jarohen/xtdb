@@ -60,6 +60,9 @@ Add a YourKit snapshot with `-Pyourkit` - you should see a snapshot appear in yo
 For a Java Flight Recorder profile, use `-Pjfr` - the recording is dumped to `~/Snapshots/xtdb-<bench>-<timestamp>.jfr` on shutdown.
 On top of JFR's `profile` settings it turns on `jdk.CPUTimeSample` (CPU-time sampling, Linux only), and records thread parks and monitor waits from 1ms, so time spent off-CPU shows up too.
 
+`-PextraJvm="<args>"` adds further JVM arguments, split on whitespace - e.g. `-PextraJvm="-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining"` or `-PextraJvm="-Dxtdb.vector.null-checks=false"`.
+They're added after the bench's own, so a flag given here overrides the bench's setting of it, such as `-Xmx` or `-XX:MaxDirectMemorySize`.
+
 Each stage's report carries `time-taken-ms` (wall clock), `thread-cpu-time-ms` (the CPU time of the thread that ran it) and `process-cpu-time-ms` (all threads, GC and JIT included).
 
 
