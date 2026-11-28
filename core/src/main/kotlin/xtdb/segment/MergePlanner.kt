@@ -13,6 +13,9 @@ import java.util.IdentityHashMap
 import java.util.function.Predicate
 
 object MergePlanner {
+    // a coarse task holding more pages than this descends further instead, slicing shallower leaves in by path
+    private val PAGE_BUDGET = (System.getenv("XTDB_SCAN_TASK_PAGES") ?: "64").toInt()
+
     private sealed interface SegmentNode<L> {
         val segMeta: Segment.Metadata<L>
 
@@ -69,9 +72,12 @@ object MergePlanner {
                 else pathPred.test(part)
             }
             .safeMap { it.openMetadata() }.useAll { segMetas ->
-                val result = mutableListOf<Pair<List<Segment.Page<*>>, ByteArray>>()
+                class Planned(val pages: List<Segment.Page<*>>, val path: ByteArray, val sliced: List<Boolean>)
+                val result = mutableListOf<Planned>()
 
                 val initialSegNodes = segMetas.flatMap { it.toSegmentNodes() }
+                if (System.getenv("PLAN_STATS") != null)
+                    System.err.println("PLAN_SEGS " + initialSegNodes.groupingBy { n -> n::class.simpleName + (if (n is SegmentNode.Leaf<*>) "" else "") }.eachCount() + " leavesPerSeg=" + initialSegNodes.map { it.leavesUnder().size }.sorted().take(8) + " shallow=" + initialSegNodes.count { it is SegmentNode.Leaf<*> })
                 if (initialSegNodes.isEmpty()) return emptyList()
 
                 val stack = ObjectStack<WorkTask>()
@@ -84,13 +90,27 @@ object MergePlanner {
                     if (pathPred != null && !pathPred.test(workTask.path)) continue
 
                     val leaves = segNodes.filterIsInstance<SegmentNode.Leaf<*>>()
-                    if (coarse && leaves.isNotEmpty()) {
-                        val allLeaves = segNodes.flatMap { it.leavesUnder() }
-                            .filter { pathPred == null || pathPred.test(it.node.path) }
-                        filterPages.filterPages(allLeaves.map { it.page })
+                    val depth = workTask.path.size
+
+                    // coarse: every leaf under this path, whole - except that a leaf above the path (carried down by a
+                    // descent) holds rows outside it, so it's sliced by path as the old planner did
+                    val coarseLeaves =
+                        if (coarse && leaves.isNotEmpty())
+                            segNodes.flatMap { it.leavesUnder() }
+                                .filter { it.node.path.size < depth || pathPred == null || pathPred.test(it.node.path) }
+                        else null
+
+                    val emit = coarseLeaves != null && (coarseLeaves.size <= PAGE_BUDGET || leaves.size == segNodes.size)
+
+                    if (emit || (!coarse && leaves.size == segNodes.size)) {
+                        val emitLeaves = if (emit) coarseLeaves!! else leaves
+                        val pages = emitLeaves.map { it.page }
+                        val slicedByPage = IdentityHashMap<Segment.PageMeta<*>, Boolean>()
+                        emitLeaves.zip(pages).forEach { (l, p) -> slicedByPage[p] = !coarse || l.node.path.size < depth }
+                        filterPages.filterPages(pages)
                             ?.takeIf { it.isNotEmpty() }
-                            ?.let { filteredPages -> result += filteredPages.map { it.page } to workTask.path }
-                    } else if (leaves.size < segNodes.size) {
+                            ?.let { filtered -> result += Planned(filtered.map { it.page }, workTask.path, filtered.map { slicedByPage[it] ?: true }) }
+                    } else if (leaves.size < segNodes.size || coarseLeaves != null) {
                         val nodeChildren = segNodes.map { segNode ->
                             when (segNode) {
                                 is SegmentNode.Branch -> segNode.children
@@ -107,20 +127,16 @@ object MergePlanner {
                             if (newSegNodes.isNotEmpty())
                                 stack.push(WorkTask(newSegNodes, conjPath(workTask.path, bucketIdx.toByte())))
                         }
-                    } else {
-                        filterPages.filterPages(leaves.map { it.page })
-                            ?.takeIf { it.isNotEmpty() }
-                            ?.let { filteredPages -> result += filteredPages.map { it.page } to workTask.path }
                     }
                 }
 
                 val laterPages = Collections.newSetFromMap(IdentityHashMap<Segment.Page<*>, Boolean>())
 
                 if (System.getenv("PLAN_STATS") != null)
-                    System.err.println("PLAN_STATS coarse=$coarse tasks=${result.size} pageRefs=${result.sumOf { it.first.size }} distinctPages=${result.flatMap { it.first }.toSet().size} paths=${result.map { it.second.size }.groupingBy { it }.eachCount().toSortedMap()}")
+                    System.err.println("PLAN_STATS coarse=$coarse tasks=${result.size} pageRefs=${result.sumOf { it.pages.size }} slicedRefs=${result.sumOf { t -> t.sliced.count { it } }} maxPages=${result.maxOfOrNull { it.pages.size }} distinctPages=${result.flatMap { it.pages }.toSet().size} paths=${result.map { it.path.size }.groupingBy { it }.eachCount().toSortedMap()}")
 
                 return result.asReversed()
-                    .map { (pages, path) -> MergeTask(pages, path, lastUsedPages = pages.filter { laterPages.add(it) }, wholePages = coarse) }
+                    .map { MergeTask(it.pages, it.path, lastUsedPages = it.pages.filter { p -> laterPages.add(p) }, sliced = it.sliced) }
                     .asReversed()
             }
     }

@@ -160,11 +160,13 @@ class ScanCursor(
             val leafReaders = loadedPages.map { it.maybeSelect(iidPred, taskPath) }
 
             val pointers = leafReaders.mapIndexedNotNull { idx, leafReader ->
-                EventRowPointer(leafReader, if (task.wholePages) null else taskPath).takeIf { it.isValid() }?.let { LeafPointer(it, idx) }
+                EventRowPointer(leafReader, if (task.sliced[idx]) taskPath else null).takeIf { it.isValid() }?.let { LeafPointer(it, idx) }
             }
 
             BitemporalConsumer.open(al, leafReaders, colNames).use { bitemporalConsumer ->
                 val candidates = if (TARGETED) candidateIids(leafReaders, pointers) else null
+                if (System.getenv("PLAN_STATS") != null && pointers.size > 1000)
+                    System.err.println("CAND pointers=${pointers.size} candidates=${candidates?.size}")
 
                 if (candidates != null) {
                     val onEntity = ArrayList<LeafPointer>(pointers.size)
@@ -209,6 +211,11 @@ class ScanCursor(
     private val parallel: Boolean = WORKERS > 0 && run {
         val seen = IdentityHashMap<Any, Boolean>()
         taskList.all { t -> t.pages.all { seen.put(it, true) == null } }
+    }
+
+    init {
+        if (WORKERS > 0 && System.getenv("PLAN_STATS") != null)
+            System.err.println("SCAN_PARALLEL workers=$WORKERS parallel=$parallel tasks=${taskList.size}")
     }
 
     private val taskIter = taskList.iterator()
