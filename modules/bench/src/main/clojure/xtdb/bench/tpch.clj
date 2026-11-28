@@ -31,7 +31,7 @@
                     (catch Exception e
                       (.printStackTrace e)
                       (throw e))))}
-      (and expected (not (System/getenv "DART_TOP"))) (assoc :verify (fn [rows]
+      (and expected (not (System/getenv "DART_TOP")) (not (System/getenv "DART_SHALLOW"))) (assoc :verify (fn [rows]
                                 (when-let [mismatch (tpch/result-mismatch expected rows)]
                                   (throw (err/fault ::wrong-result (format "Q%02d doesn't match its pinned result: %s" (inc i) (pr-str mismatch)) mismatch))))))))
 
@@ -92,6 +92,16 @@
                        :f (fn [{:keys [node]}] (b/compact! node))}
 
                       (b/settle-stage)]})
+
+           (when-let [n (some-> (System/getenv "DART_SHALLOW") parse-long)]
+             {:t :call, :stage :dart-shallow, :summary-key :ingest-time-ms
+              :f (fn [{:keys [node]}]
+                   (xt/execute-tx node [(into [:put-docs :lineitem]
+                                              (for [i (range n)]
+                                                {:xt/id (str "dart-" i), :l_orderkey (+ 900000000 i), :l_linenumber 1
+                                                 :l_quantity 10.0, :l_extendedprice 1000.0, :l_discount 0.06, :l_tax 0.0
+                                                 :l_shipdate (java.time.LocalDate/of 1994 6 1)}))])
+                   (when (System/getenv "DART_SHALLOW_FLUSH") (b/flush-block! node)))})
 
            (queries-stage :cold-queries :cold-query-time-ms query-language scale-factor (or queries *qs*))
 

@@ -236,7 +236,7 @@
                                          (long (- (count pages) (count survivors)))
                                          (long (count survivors)))
                               survivors))
-              merge-tasks (MergePlanner/planSync (into (vec !segments) live-segments) (->path-pred iid-set) count-pages true)]
+              merge-tasks (MergePlanner/planSync (into (vec !segments) live-segments) (->path-pred iid-set) count-pages (not= "false" (System/getenv "XTDB_SCAN_COARSE")))]
 
           (ScanCursor. allocator (vec col-names) col-preds
                        temporal-bounds (boolean (:clamp-valid-time? scan-opts))
